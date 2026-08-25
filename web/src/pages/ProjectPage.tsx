@@ -9,6 +9,7 @@ import { TicketDetail } from "@/components/ticket/TicketDetail"
 import { TicketFilters } from "@/components/ticket/TicketFilters"
 import { TicketTable } from "@/components/ticket/TicketTable"
 import { FloatingPanel } from "@/components/panel/FloatingPanel"
+import { OnboardingBackStrip } from "@/components/workspace/OnboardingBackStrip"
 import { useTicket, useTickets, useOpenTicket } from "@/hooks/useTickets"
 import { useTicketRealtime } from "@/hooks/useWebSocket"
 import { useProjects, useWorkspaces, useWorkspaceDetail } from "@/hooks/useWorkspaces"
@@ -133,6 +134,8 @@ export function ProjectPage() {
               <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-xs font-semibold text-primary">
                 {project.key}
               </span>
+              {/* Jalur pulang ke checklist bila masuk halaman ini dari onboarding */}
+              <OnboardingBackStrip backTo={`/w/${wsSlug}`} />
               <span className="font-medium">{project.name}</span>
               {/* Fase D8 + Fix #37: pilih Observability Stack & channel Notifikasi (admin) */}
               <div className="ml-auto flex items-center gap-2">

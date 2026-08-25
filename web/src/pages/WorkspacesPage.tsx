@@ -33,6 +33,9 @@ export function WorkspacesPage() {
   const { setActiveWorkspace } = useWorkspaceStore()
   const { user: me } = useAuth()
   const [createOpen, setCreateOpen] = useState(false)
+  // Sumber dialog create-project — menentukan redirect pasca-create:
+  // dari checklist → bawa from=onboarding agar strip "kembali" tampil di project page.
+  const [createViaChecklist, setCreateViaChecklist] = useState(false)
   const [renameTarget, setRenameTarget] = useState<Project | null>(null)
 
   const workspace = useMemo(
@@ -96,7 +99,10 @@ export function WorkspacesPage() {
       <OnboardingChecklist
         wsSlug={wsSlug ?? ""}
         workspaceId={workspace?.id ?? null}
-        onCreateProject={() => setCreateOpen(true)}
+        onCreateProject={() => {
+          setCreateViaChecklist(true)
+          setCreateOpen(true)
+        }}
       />
 
       {/* Grid project */}
@@ -170,7 +176,11 @@ export function WorkspacesPage() {
         workspaceId={workspace?.id ?? null}
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={(projSlug) => navigate(`/w/${wsSlug}/${projSlug}`)}
+        onCreated={(projSlug) =>
+          navigate(
+            `/w/${wsSlug}/${projSlug}${createViaChecklist ? "?from=onboarding" : ""}`,
+          )
+        }
       />
 
       <RenameProjectDialog
