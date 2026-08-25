@@ -142,6 +142,7 @@ Requirements: Python ≥3.9, MongoDB, Node.js (for the web UI). An observability
 
 ```bash
 python3 -m venv venv && source venv/bin/activate
+python -m pip install --upgrade pip    # editable install needs pip ≥ 21.3
 pip install -e ".[dev]"
 cp .env.example .env          # edit: MONGODB_URI, DATA_ENCRYPTION_KEY, JWT_SECRET
 cd web && npm install && cd ..
@@ -160,11 +161,6 @@ cd web
 npm run dev        # API + Web UI  ([API] green · [WEB] yellow)
 npm run dev:all    # API + Web UI + Watchdog worker ([WDT] red)
 ```
-
-When it's up:
-
-- Web UI → http://localhost:5173
-- API & docs → http://localhost:8000/docs
 
 ### Option B — Run each part separately
 
@@ -188,6 +184,11 @@ manual version of Option A — use whichever feels more comfortable.
 > - `make api` / `make watchdog` — Makefile wrappers for the commands above
 > - `npm run dev:watchdog` (from `web/`) or `python watchdog_worker.py` — runs the
 >   watchdog worker that polls your observability stack and auto-creates tickets.
+
+### When it's up (either option)
+
+- Web UI → http://localhost:5173
+- API & docs → http://localhost:8000/docs
 
 ### Do you need the watchdog worker?
 

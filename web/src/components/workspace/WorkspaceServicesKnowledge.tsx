@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { useTranslation } from "react-i18next"
 import { Boxes, Link2, Pencil, X } from "lucide-react"
 import { toast } from "sonner"
@@ -30,6 +31,7 @@ import type { Project } from "@/types/workspace"
  */
 export function WorkspaceServicesKnowledge({ wsId, isAdmin }: { wsId: string; isAdmin: boolean }) {
   const { t } = useTranslation("workspace")
+  const qc = useQueryClient()
   const { data: groups, isLoading } = useWorkspaceServiceGroups(wsId)
   const { data: myServices } = useMyServices()
   const link = useLinkServiceFlexible()
@@ -276,8 +278,23 @@ export function WorkspaceServicesKnowledge({ wsId, isAdmin }: { wsId: string; is
                       label: newLabel.trim(),
                     },
                     {
-                      onSuccess: (created) => {
-                        link.mutate(
+                    onSuccess: (created) => {
+                      // Auto-register the new service into the workspace registry
+                      // (mirror library → registry) so it also appears in the Services
+                      // tab hierarchy. Best-effort: a duplicate service_id is ignored.
+                      api
+                        .post(`/config/workspaces/${wsId}/service-registry`, {
+                          service_id: created.serviceId,
+                          label: created.label ?? newLabel.trim(),
+                        })
+                        .then(() =>
+                          qc.invalidateQueries({ queryKey: ["config", "ws-registry", wsId] }),
+                        )
+                        .catch(() => {
+                          // Already registered (or not permitted) — service still works
+                          // via its library entry, so this is non-fatal.
+                        })
+                      link.mutate(
                           { projectId: addOpenFor!, libraryServiceId: created.id },
                           {
                             onSuccess: () => {

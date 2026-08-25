@@ -13,6 +13,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# Test suite — dev-only, tidak dibutuhkan runtime produksi
+tests/
+
+
 # Frontend dev artifacts (dist di-build ulang di stage webbuilder)
 web/node_modules/
 web/dist/
