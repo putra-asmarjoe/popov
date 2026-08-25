@@ -1,133 +1,235 @@
-# Panduan Deployment Kubernetes — Popov Agent
+# Popov Agent — Kubernetes Deployment Guide
 
-Dokumen ini berisi petunjuk langkah demi langkah untuk melakukan build Docker image `popov-agent`, mengunggah (push) ke **Private Docker Hub**, serta mendeploy aplikasi ke cluster **Kubernetes (K8s)**.
+This guide walks you through building the Docker image and deploying
+**Popov - Incident Response Agent** to a Kubernetes cluster, step by step,
+in the exact order required.
 
----
-
-## 📂 Struktur File Deployment
-
-Seluruh manifest dan konfigurasi deployment berada di folder `deploy/`:
-
-- `deploy/Dockerfile` — Instruksi build container image berbasis `python:3.11-slim` (non-root user).
-- `deploy/secret.yaml` — Tempat menyimpan data rahasia (API Keys LLM, Telegram Token, Kredensial DB).
-- `deploy/configmap.yaml` — Tempat menyimpan konfigurasi non-sensitif (Model LLM, Provider, URL Observability).
-- `deploy/deployment.yaml` — Kubernetes Deployment manifest (`replicas: 1`, Resource Limits: `100m`-`500m` CPU, `256Mi`-`512Mi` RAM).
-- `deploy/service.yaml` — Kubernetes Service (`ClusterIP` port `8000`).
+Follow the steps **top to bottom** — later steps depend on earlier ones.
 
 ---
 
-## 🛠️ Langkah 1: Build & Push Docker Image ke Private Docker Hub
+## Architecture Overview
 
-Ganti `<USERNAME>` dengan username Docker Hub Anda.
+One container image (`popov-agent`) is used for everything: it contains the
+FastAPI backend, the built React frontend (served as SPA by Uvicorn), and can
+run either as the API server or the watchdog worker (via command override).
 
-### 1.1 Login ke Docker Hub
+Two deployment options are provided:
+
+| Option | File(s) | Pods | Use when |
+|---|---|---|---|
+| **A** (recommended) | `deployment.yaml` + `watchdog-deployment.yaml` | 2 | Default. API and watchdog restart/scale independently |
+| **B** | `single-pod.yaml` | 1 | Resource-constrained clusters. Both processes share one pod |
+
+> ⚠️ **Pick exactly ONE option.** Applying both will duplicate Telegram
+> polling and watchdog alerts.
+
+Singleton constraints (do NOT increase replicas):
+
+- The API runs a Telegram `getUpdates` long-polling loop — only one instance
+  may poll a bot at a time.
+- The watchdog polls observability targets with fingerprint-based anti-spam —
+  more than one instance means N× polling and duplicated alerts/tickets.
+- That is why the watchdog deployment uses `strategy: Recreate`.
+
+MongoDB is **not** included in this folder — you must provide a reachable
+MongoDB instance (managed service or your own deployment) before starting.
+
+---
+
+## Step 0 — Prerequisites
+
+- A running Kubernetes cluster + `kubectl` configured against it
+- Docker installed locally
+- A Docker Hub account (or any OCI registry)
+- A MongoDB instance reachable from the cluster (e.g. `mongodb://mongodb-service:27017`)
+- LLM provider API keys (OpenAI / OpenRouter / Google)
+
+Check connectivity first:
+
+```bash
+kubectl cluster-info
+docker --version
+```
+
+---
+
+## Step 1 — Configure the ConfigMap (non-secret settings)
+
+Open `deploy/configmap.yaml` and review:
+
+- `MONGODB_DB` — database name (default `popovagent_db`)
+- `LLM_PROVIDER` / `LLM_MODEL` — active LLM provider (`openai` | `openrouter` | `google`)
+- `PROMETHEUS_URL` / `TEMPO_URL` / `ALERTMANAGER_URL` — observability endpoints
+- `OBSERVABILITY_INTERVAL_MIN` — watchdog poll interval (minutes)
+- `TICKET_ALERT_DEDUP_HOURS` — window for linking repeated alerts to an open ticket
+
+No changes needed if the defaults match your environment.
+
+---
+
+## Step 2 — Configure the Secret (credentials)
+
+Open `deploy/secret.yaml` and replace every `CHANGE_ME_*` value:
+
+```yaml
+OPENAI_API_KEY / OPENROUTER_API_KEY / GOOGLE_API_KEY   # provider you use
+MONGODB_URI        # e.g. mongodb://mongodb-service:27017
+MYSQL_PASSWORD     # optional — only for MySQL log DB integrations
+JWT_SECRET         # generate: openssl rand -hex 32
+DATA_ENCRYPTION_KEY  # encrypts stored BYOK credentials
+```
+
+> ⚠️ Telegram bot tokens are **not** set here — they are configured
+> per workspace in the UI (*Workspace Settings → Notifications*) and are
+> encrypted at rest.
+
+Do **not** commit real values. If you prefer, create the Secret imperatively:
+
+```bash
+kubectl create secret generic popov-agent-secret \
+  --from-literal=OPENAI_API_KEY=sk-... \
+  --from-literal=MONGODB_URI=mongodb://mongodb-service:27017 \
+  --from-literal=JWT_SECRET=$(openssl rand -hex 32) \
+  --from-literal=DATA_ENCRYPTION_KEY=$(openssl rand -hex 16)
+```
+
+---
+
+## Step 3 — Build & Push the Docker Image
+
+Run from the **repository root** (the Dockerfile path is `deploy/Dockerfile`):
+
 ```bash
 docker login
-```
-*Masukkan Username dan Password / Personal Access Token Docker Hub Anda.*
 
-### 1.2 Build Image
-Jalankan perintah build dari **root direktori project**:
-```bash
-docker build -t <USERNAME>/popov-agent:v1.0.0 -t <USERNAME>/popov-agent:latest -f deploy/Dockerfile .
+# Frontend API base URL — keep `/api/v1` when serving SPA + API from one domain
+docker build \
+  --build-arg VITE_API_BASE_URL=/api/v1 \
+  -t <YOUR_DOCKERHUB_USERNAME>/popov-agent:0.2.0.24 \
+  -t <YOUR_DOCKERHUB_USERNAME>/popov-agent:latest \
+  -f deploy/Dockerfile .
+
+docker push <YOUR_DOCKERHUB_USERNAME>/popov-agent:0.2.0.24
+docker push <YOUR_DOCKERHUB_USERNAME>/popov-agent:latest
 ```
 
-### 1.3 Push Image ke Private Docker Hub
-```bash
-docker push <USERNAME>/popov-agent:v1.0.0
-docker push <USERNAME>/popov-agent:latest
-```
+Tips:
+
+- Replace `<YOUR_DOCKERHUB_USERNAME>` everywhere (manifests reference it).
+- Prefer version tags over `latest` in production so rollbacks are exact.
+- The frontend i18n locale files (`web/public/locales/`) are included in the
+  build automatically — nothing extra to configure.
 
 ---
 
-## 🔑 Langkah 2: Buat K8s ImagePullSecret untuk Private Docker Hub
+## Step 4 — Registry Pull Secret
 
-Karena repository Docker Hub Anda bersifat **Private**, Kubernetes memerlukan kredensial untuk dapat melakukan pull image dari Docker Hub.
-
-Jalankan perintah berikut pada terminal Anda yang terhubung ke cluster Kubernetes (`kubectl`):
+Only needed for a **private** registry:
 
 ```bash
 kubectl create secret docker-registry dockerhub-secret \
   --docker-server=https://index.docker.io/v1/ \
-  --docker-username=<USERNAME> \
-  --docker-password=<DOCKER_HUB_TOKEN_OR_PASSWORD> \
-  --docker-email=<YOUR_EMAIL> \
-  --namespace=default
+  --docker-username=<YOUR_DOCKERHUB_USERNAME> \
+  --docker-password=<DOCKER_HUB_TOKEN> \
+  --docker-email=<YOUR_EMAIL>
 ```
+
+Skip this step if your image is public (and remove `imagePullSecrets` from
+the manifests).
 
 ---
 
-## ⚙️ Langkah 3: Konfigurasi Manifest Kubernetes
+## Step 5 — Deploy (choose ONE option)
 
-Sebelum mengaplikasikan manifest ke Kubernetes, sesuaikan nilai berikut:
+### Option A — Two pods (recommended)
 
-### 3.1 Edit `deploy/secret.yaml`
-Isi kredensial riil Anda pada field `stringData`:
-- Telegram (Fix #39): TIDAK lagi lewat env/Secret — kelola bot per-workspace di
-  Workspace Settings → tab "Notifications". Untuk bot lama, jalankan sekali:
-  `python scripts/import_env_telegram.py --workspace-id <ObjectId>`
-- `OPENAI_API_KEY` / `GOOGLE_API_KEY` / `OPENROUTER_API_KEY`: Key LLM aktif Anda
-- `MONGODB_URI`: URI koneksi MongoDB (contoh: `mongodb://mongodb-service:27017`)
-- `MYSQL_PASSWORD`: Password database MySQL
-
-### 3.2 Edit `deploy/deployment.yaml`
-Ubah baris `image:` pada container spec agar sesuai dengan username Docker Hub Anda:
-```yaml
-spec:
-  containers:
-    - name: popov-agent
-      image: <USERNAME>/popov-agent:latest
-```
-
----
-
-## 🚀 Langkah 4: Apply Manifest ke Kubernetes Cluster
-
-Jalankan perintah berikut untuk mengaplikasikan seluruh manifest di direktori `deploy/`:
+API/web and watchdog run as independent deployments:
 
 ```bash
-kubectl apply -f deploy/secret.yaml
-kubectl apply -f deploy/configmap.yaml
-kubectl apply -f deploy/deployment.yaml
 kubectl apply -f deploy/service.yaml
+kubectl apply -f deploy/deployment.yaml
+kubectl apply -f deploy/watchdog-deployment.yaml
 ```
 
-Atau sekaligus:
+Keep the Service selector as-is: `app: popov-agent`.
+
+### Option B — Single pod (resource-constrained)
+
+Both processes share one pod as two containers:
+
 ```bash
-kubectl apply -f deploy/
+kubectl apply -f deploy/service.yaml
+# ⚠️ First edit deploy/service.yaml: change selector to `app: popov-agent-single`
+kubectl apply -f deploy/single-pod.yaml
 ```
+
+> ⚠️ Never apply Option A's deployments together with `single-pod.yaml`.
+> If you previously deployed Option A, remove it first:
+>
+> ```bash
+> kubectl delete -f deploy/deployment.yaml -f deploy/watchdog-deployment.yaml
+> ```
 
 ---
 
-## 🔍 Langkah 5: Verifikasi Deployment & Monitoring
+## Step 6 — Verify the Deployment
 
-### 5.1 Cek Status Pod
-```bash
-kubectl get pods -l app=popov-agent
-```
-*Pastikan status pod menjadi `Running` dan `READY 1/1`.*
+Run these in order and confirm each result:
 
-### 5.2 Cek Stream Log Application
 ```bash
-kubectl logs -f -l app=popov-agent
-```
+# 1. Pods ready? (watchdog has no probe — check it stays Running)
+kubectl get pods -l 'app in (popov-agent, popov-watchdog, popov-agent-single)'
 
-### 5.3 Cek Health Check Endpoint via Port Forwarding
-```bash
+# 2. Rollout finished?
+kubectl rollout status deployment/popov-agent            # Option A
+kubectl rollout status deployment/popov-watchdog         # Option A
+kubectl rollout status deployment/popov-agent-single     # Option B
+
+# 3. Health endpoint responds?
 kubectl port-forward svc/popov-agent-service 8000:8000
-```
-Buka browser atau jalankan di terminal lain:
-```bash
 curl http://localhost:8000/api/v1/health
+
+# 4. Open the app
+kubectl port-forward svc/popov-agent-service 8080:8000
+# → http://localhost:8080  (first registered user becomes admin)
 ```
-Output yang diharapkan: `{"status":"ok"}`
+
+Watch both process logs — both must be alive:
+
+```bash
+kubectl logs deployment/popov-agent          # Option A api / single-pod api container
+kubectl logs deployment/popov-watchdog       # Option A watchdog
+kubectl logs deployment/popov-agent-single -c watchdog   # Option B watchdog container
+```
 
 ---
 
-## 📊 Kebutuhan Resource (CPU & RAM Summary)
+## Step 7 — Upgrading
 
-| Parameter | Request | Limit | Rationale |
-|---|---|---|---|
-| **CPU** | `100m` (0.1 Core) | `500m` (0.5 Core) | Idle polling ~20m-50m; Peak multi-agent LLM analysis ~100m-300m. |
-| **Memory** | `256Mi` | `512Mi` | Baseline RAM Python FastAPI+LangGraph ~150MB; Peak fan-out & log batch ~300MB. |
-| **Replicas** | `1` | `1` | Ditetapkan ke `1` karena **Telegram Bot Long-Polling** (`getUpdates`) mensyaratkan instance tunggal. |
+```bash
+# Build & push the new tag (Step 3), then:
+kubectl set image deployment/popov-agent \
+  popov-agent=<YOUR_DOCKERHUB_USERNAME>/popov-agent:<NEW_VERSION>
+
+kubectl rollout status deployment/popov-agent
+# Rollback if needed:
+kubectl rollout undo deployment/popov-agent
+```
+
+For the watchdog remember: it loads code at startup — after every backend
+change, restart it too (`kubectl rollout restart deployment/popov-watchdog`,
+or just re-apply the option manifests).
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Pod `CrashLoopBackOff`, logs show Mongo timeout | MongoDB unreachable | Check `MONGODB_URI` in the Secret; verify NetworkPolicy/DNS |
+| Duplicate alerts / tickets | Two watchdog instances running | `kubectl get pods -l component=watchdog-worker` — must be exactly 1; delete extras |
+| Image pull errors on private registry | Missing/wrong `dockerhub-secret` | Re-run Step 4; confirm secret name matches manifests |
+| UI loads but no data | API base URL mismatch | Rebuild image with `--build-arg VITE_API_BASE_URL=/api/v1` |
+| Login fails with 401 right after install | `JWT_SECRET` changed or missing | Set a stable `JWT_SECRET` in the Secret, then restart pods |
+| Watchdog silent (no alerts) | Observability URLs wrong | Test endpoints via *Workspace Settings → Stacks → Test* button |

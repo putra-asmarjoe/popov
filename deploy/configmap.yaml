@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: popov-agent-configmap
+  namespace: default
+data:
+  # Database Non-Sensitive Defaults
+  MONGODB_DB: "popovagent_db"
+  MYSQL_HOST: "mysql-service"
+  MYSQL_PORT: "3306"
+  MYSQL_USER: "root"
+  MYSQL_DB: "popovagent_db"
+  SERVICE_DB_CONFIGS_FILE: "config/service_db_configs.json"
+
+  # LLM Provider Configuration
+  # Options: openai | openrouter | google
+  LLM_PROVIDER: "google"
+  LLM_MODEL: "gemini-3.5-flash"
+
+  # Observability Configuration
+  PROMETHEUS_URL: "http://prometheus-k8s.monitoring.svc.cluster.local:9090"
+  TEMPO_URL: "http://tempo.monitoring.svc.cluster.local:3200"
+  ALERTMANAGER_URL: "http://alertmanager.monitoring.svc.cluster.local:9093"
+  OBSERVABILITY_TIMEOUT_MS: "5000"
+  OBSERVABILITY_ENABLED: "true"
+  OBSERVABILITY_INTERVAL_MIN: "5"
+  OBSERVABILITY_IGNORE_ALERTNAMES: "Watchdog"
+  OBSERVABILITY_IGNORE_SEVERITIES: "none"
+
+  # Embedding / Second Brain
+  EMBEDDING_PROVIDER: "local"
+  EMBEDDING_MODEL: ""
+  EMBEDDING_DIM: ""
+  EMBEDDING_TIMEOUT_MS: "10000"
+
+  # Ticket alert dedup window (hours) — 1 ticket : N alerts (see CHANGELOG Fix #86)
+  TICKET_ALERT_DEDUP_HOURS: "12"
+
+  # Application Configuration
+  APP_DEBUG: "false"

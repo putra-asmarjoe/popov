@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: popov-watchdog
+  namespace: default
+  labels:
+    app: popov-watchdog
+    component: watchdog-worker
+spec:
+  # ⚠️ WAJIB replicas: 1 — JANGAN dinaikkan.
+  # WatchdogScheduler melakukan polling observability + anti-spam fingerprint.
+  # Lebih dari 1 instance = duplikasi polling N×, alert dobel, tiket dobel.
+  # Scale hanya pod popov-agent (web/API), bukan ini. (SCALE_ESCALATION_PLAN.md L1)
+  replicas: 1
+  strategy:
+    type: Recreate   # hindari 2 instance overlap saat rolling update
+  selector:
+    matchLabels:
+      app: popov-watchdog
+  template:
+    metadata:
+      labels:
+        app: popov-watchdog
+        component: watchdog-worker
+    spec:
+      imagePullSecrets:
+        - name: dockerhub-secret
+      containers:
+        - name: watchdog-worker
+          image: <YOUR_DOCKERHUB_USERNAME>/popov-agent:latest
+          imagePullPolicy: Always
+          command: ["python", "watchdog_worker.py"]
+          envFrom:
+            - configMapRef:
+                name: popov-agent-configmap
+            - secretRef:
+                name: popov-agent-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

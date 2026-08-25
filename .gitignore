@@ -1,18 +1,44 @@
-.env
-venv/
-venv/*
-.venv/
-.venv/*
-__pycache__/
-*.pyc
-*.pyo
-*.yaml
-services-docs-tmp/
-services-docs-tmp/*
-pf-logs/*
+# Popov Agent — release repository
 
-# FE-6+: jangan commit secret/artefak runtime
-acc
-logs/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+venv/
+.venv/
+.pytest_cache/
+.mypy_cache/
+
+# Node / frontend
+node_modules/
+web/dist/
+*.tsbuildinfo
+
+
 .zcode/
-config/uploaded_docs.json
+.agents/
+debugss/
+docsknow-tmp/
+samplelogo-tmp/
+
+# IDE & OS
+.idea/
+.vscode/
+*.code-workspace
+.DS_Store
+Thumbs.db
+
+# Build / cache
+dist/
+build/
+coverage/
+htmlcov/

@@ -1,0 +1,94 @@
+# ── OPTION B: SINGLE-POD deployment (API + Watchdog in one pod) ──────────────
+#
+# ⚠️  Choose EXACTLY ONE deployment option — never apply both:
+#   • Option A (recommended): deployment.yaml + watchdog-deployment.yaml → 2 pods
+#   • Option B (this file):   single-pod.yaml                            → 1 pod
+#
+# This pod runs TWO containers:
+#   • api      — Uvicorn: REST API + WebSocket/SSE + SPA frontend + Telegram
+#                long-polling (getUpdates). Singleton by design.
+#   • watchdog — Separate process polling observability targets, triage and
+#                auto-ticketing. Singleton by design (>1 instance = duplicate
+#                alerts & tickets).
+#
+# NOTE: this Deployment uses label `app: popov-agent-single` so it can NEVER be
+# picked up accidentally by popov-agent-service while Option A is also applied.
+# If you deploy THIS option, change the Service selector to
+# `app: popov-agent-single` (see service.yaml comment).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: popov-agent-single
+  namespace: default
+  labels:
+    app: popov-agent-single
+spec:
+  # ⚠️ WAJIB replicas: 1 — Telegram getUpdates + watchdog polling are singletons.
+  strategy:
+    type: Recreate   # avoid two overlapping instances during rolling updates
+  selector:
+    matchLabels:
+      app: popov-agent-single
+  template:
+    metadata:
+      labels:
+        app: popov-agent-single
+    spec:
+      # Kubernetes secret for Private Docker Hub registry auth
+      imagePullSecrets:
+        - name: dockerhub-secret
+
+      # ── Container 1: API server (+ SPA + Telegram polling) ────────────────
+      containers:
+        - name: api
+          image: <YOUR_DOCKERHUB_USERNAME>/popov-agent:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: popov-agent-configmap
+            - secretRef:
+                name: popov-agent-secret
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+        # ── Container 2: Watchdog worker (sidecar in the same pod) ──────────
+        - name: watchdog
+          image: <YOUR_DOCKERHUB_USERNAME>/popov-agent:latest
+          imagePullPolicy: Always
+          command: ["python", "watchdog_worker.py"]
+          envFrom:
+            - configMapRef:
+                name: popov-agent-configmap
+            - secretRef:
+                name: popov-agent-secret
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

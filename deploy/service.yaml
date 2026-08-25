@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: popov-agent-service
+  namespace: default
+  labels:
+    app: popov-agent
+spec:
+  type: ClusterIP
+  selector:
+    app: popov-agent
+    # ⚠️ Deployment option switch:
+    #   • Option A (2 pods):  keep `app: popov-agent` (default)
+    #   • Option B (1 pod):   change to `app: popov-agent-single`
+    # The selector must match EXACTLY ONE deployment option — if both options
+    # are applied with matching selectors, traffic is split across both.
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: http

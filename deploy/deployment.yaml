@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: popov-agent
+  namespace: default
+  labels:
+    app: popov-agent
+spec:
+  # Note: Tetapkan replicas: 1 karena Telegram long-polling (getUpdates) mensyaratkan 1 instance.
+  #       Watchdog sudah pindah ke proses terpisah (deploy/watchdog-deployment.yaml, replicas: 1 WAJIB).
+  replicas: 1
+  selector:
+    matchLabels:
+      app: popov-agent
+  template:
+    metadata:
+      labels:
+        app: popov-agent
+    spec:
+      # Kubernetes secret untuk autentikasi Private Docker Hub Registry
+      imagePullSecrets:
+        - name: dockerhub-secret
+      containers:
+        - name: popov-agent
+          # Ganti <YOUR_DOCKERHUB_USERNAME> dengan username Docker Hub Anda
+          image: <YOUR_DOCKERHUB_USERNAME>/popov-agent:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: popov-agent-configmap
+            - secretRef:
+                name: popov-agent-secret
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
