@@ -1,0 +1,96 @@
+/* ============================================================
+   PRIMITIVE TOKENS — jangan dipakai langsung di komponen.
+   Di-import pertama oleh globals.css. oklch color space.
+   ============================================================ */
+
+:root {
+  /* ── Zinc scale (netral, low chroma) ── */
+  --zinc-50:  oklch(98.5% 0.003 264);
+  --zinc-100: oklch(96.5% 0.004 264);
+  --zinc-200: oklch(92.0% 0.005 264);
+  --zinc-300: oklch(85.0% 0.007 264);
+  --zinc-400: oklch(68.0% 0.010 264);
+  --zinc-500: oklch(52.0% 0.013 264);
+  --zinc-600: oklch(40.5% 0.012 264);
+  --zinc-700: oklch(32.0% 0.010 264);
+  --zinc-800: oklch(23.5% 0.008 264);
+  --zinc-900: oklch(17.0% 0.006 264);
+  --zinc-950: oklch(12.0% 0.004 264);
+
+  /* ── Slate scale (dark surfaces fancy/calm) ── */
+  --slate-800: oklch(26.0% 0.018 258);
+  --slate-850: oklch(22.0% 0.018 258);
+  --slate-900: oklch(17.5% 0.015 258);
+  --slate-950: oklch(12.5% 0.012 258);
+
+  /* ── Brand scale (biru kerang — primary app, selaras halaman login) ── */
+  --brand-300: oklch(80.0% 0.085 230); /* ≈ #7ec8f0 rim-light kerang */
+  --brand-400: oklch(73.0% 0.105 235);
+  --brand-500: oklch(64.0% 0.11 238);
+  --brand-600: oklch(55.0% 0.105 242); /* ≈ ujung gradient tombol login */
+  --brand-700: oklch(47.0% 0.10 245);
+
+  /* ── Violet scale (legacy — tidak dipakai lagi sejak brand pindah ke biru) ── */
+  --violet-300: oklch(80.0% 0.16 290);
+  --violet-400: oklch(72.0% 0.20 288);
+  --violet-500: oklch(63.0% 0.24 285);
+  --violet-600: oklch(54.0% 0.24 282);
+  --violet-700: oklch(46.0% 0.22 280);
+
+  /* ── Signal saturasi diturunkan ~15% dari plan (lebih lembut) ── */
+  --red-400:    oklch(68.0% 0.18 25);
+  --red-500:    oklch(60.5% 0.22 25);
+  --red-600:    oklch(53.0% 0.22 25);
+  --green-500:  oklch(60.0% 0.16 145);
+  --green-600:  oklch(50.0% 0.16 145);
+  --amber-500:  oklch(72.0% 0.16 70);
+  --amber-600:  oklch(60.0% 0.15 70);
+  --blue-500:   oklch(58.0% 0.18 250);
+  --blue-600:   oklch(48.0% 0.18 250);
+  --sky-500:    oklch(68.0% 0.13 230);
+  --sky-600:    oklch(58.0% 0.12 228);
+  --purple-500: oklch(60.0% 0.20 290);
+  --purple-600: oklch(50.0% 0.20 290);
+
+  /* ── Semantic: severity badge (solid, kontras tinggi) ── */
+  --severity-critical-bg: var(--red-500);
+  --severity-critical-fg: oklch(99% 0 0);
+  --severity-high-bg:     var(--red-400);
+  --severity-high-fg:     oklch(99% 0 0);
+  --severity-medium-bg:   var(--amber-500);
+  --severity-medium-fg:   oklch(20% 0 0);
+  --severity-low-bg:      var(--zinc-400);
+  --severity-low-fg:      oklch(99% 0 0);
+
+  /* ── Semantic: status badge (solid, kontras tinggi) ── */
+  --status-new-bg:          var(--sky-500);
+  --status-new-fg:          oklch(99% 0 0);
+  --status-open-bg:        var(--blue-500);
+  --status-open-fg:        oklch(99% 0 0);
+  --status-in-progress-bg: var(--amber-500);
+  --status-in-progress-fg: oklch(20% 0 0);
+  --status-needs-review-bg: var(--purple-500);
+  --status-needs-review-fg: oklch(99% 0 0);
+  --status-resolved-bg:    var(--green-500);
+  --status-resolved-fg:    oklch(99% 0 0);
+  --status-closed-bg:      var(--zinc-500);
+  --status-closed-fg:      oklch(99% 0 0);
+
+  /* ── Semantic: markdown code block ── */
+  --code-block-bg:     var(--zinc-100);
+  --code-block-fg:     var(--zinc-800);
+  --code-block-border: var(--zinc-200);
+
+  /* ── Semantic: notification dot ── */
+  --notif-dot:    var(--red-500);
+  --notif-dot-fg: oklch(99% 0 0);
+
+  /* ── Fancy-only (fallback transparent di tema lain) ── */
+  --glow-primary:       transparent;
+  --glow-primary-hover: transparent;
+  --gradient-hero:      none;
+  --noise-opacity:      0;
+  --glass-bg:     transparent;
+  --glass-border: transparent;
+  --glass-blur:   0px;
+}

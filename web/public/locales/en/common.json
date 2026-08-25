@@ -1,0 +1,51 @@
+{
+  "nav": {
+    "workspaces": "Workspaces",
+    "management": "Management",
+    "settings": "Settings",
+    "logout": "Logout",
+    "all_projects": "All projects",
+    "pick_project": "Pick a project…",
+    "role": "Role"
+  },
+  "action": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirm": "Confirm",
+    "edit": "Edit",
+    "create": "Create",
+    "back": "Back",
+    "retry": "Retry"
+  },
+  "status": {
+    "loading": "Loading...",
+    "saving": "Saving...",
+    "error": "Something went wrong",
+    "empty": "No data found",
+    "success": "Saved successfully"
+  },
+  "locale": {
+    "switch_language": "Switch language"
+  },
+  "sidebar": {
+    "workspace_label": "Workspace",
+    "new_workspace": "New workspace",
+    "projects": "Projects",
+    "new_project": "New project",
+    "empty_projects": "No projects yet — create one with the + button above.",
+    "workspace_settings": "Workspace settings",
+    "phase_hint": "Available in phase {{phase}}"
+  },
+  "notif": {
+    "title": "Notifications",
+    "mark_all": "Mark all read",
+    "empty": "No notifications yet",
+    "see_all": "See all"
+  },
+  "panel": {
+    "minimize": "Minimize panel",
+    "maximize": "Maximize panel",
+    "close": "Close panel"
+  }
+}

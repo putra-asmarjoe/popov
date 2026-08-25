@@ -1,0 +1,83 @@
+/* ============================================================
+   THEME: fancy (Nova) — eye-friendly variant
+   Karakter slate-violet, TANPA glow pulsatif, TANPA noise overlay.
+   Glass + gradient border dipertahankan sebagai utility opt-in.
+   ============================================================ */
+[data-theme="fancy"] {
+  color-scheme: dark;
+
+  --background:        var(--slate-950);
+  --foreground:        oklch(93% 0.006 280);
+  --card:              var(--slate-900);
+  --card-foreground:   oklch(93% 0.006 280);
+  --popover:           var(--slate-850);
+  --popover-foreground: oklch(93% 0.006 280);
+  --primary:           var(--brand-400);
+  --primary-foreground: oklch(10% 0.02 280);
+  --secondary:         var(--slate-800);
+  --secondary-foreground: oklch(93% 0.006 280);
+  --muted:             var(--slate-800);
+  --muted-foreground:  oklch(65% 0.025 280);
+  --accent:            oklch(24% 0.04 280);
+  --accent-foreground: oklch(93% 0.006 280);
+  --destructive:       var(--red-500);
+  --destructive-foreground: oklch(99% 0 0);
+  --border:            oklch(27% 0.035 280);
+  --input:             oklch(22% 0.03 280);
+  --ring:              var(--brand-400);
+  --code-block-bg:     oklch(18% 0.025 280);
+  --code-block-fg:     oklch(93% 0.006 280);
+  --code-block-border: oklch(30% 0.04 280);
+
+  --sidebar:                   var(--slate-950);
+  --sidebar-foreground:        oklch(93% 0.006 280);
+  --sidebar-primary:           var(--brand-400);
+  --sidebar-primary-foreground: oklch(10% 0.02 280);
+  --sidebar-accent:            oklch(24% 0.04 280);
+  --sidebar-accent-foreground: oklch(93% 0.006 280);
+  --sidebar-border:            oklch(27% 0.035 280);
+  --sidebar-ring:              var(--brand-400);
+
+  --chart-1: oklch(0.7 0.22 285);
+  --chart-2: oklch(0.7 0.18 162);
+  --chart-3: oklch(0.7 0.18 70);
+  --chart-4: oklch(0.65 0.20 320);
+  --chart-5: oklch(0.65 0.18 30);
+
+  --radius: 0.625rem;
+
+  /* Glass tokens — opt-in via class .card-glass */
+  --glass-bg:     oklch(20% 0.03 280 / 55%);
+  --glass-border: oklch(40% 0.08 280 / 20%);
+  --glass-blur:   12px;
+}
+
+/* ──────────────────────────────────────────────────────────
+   Fancy-specific utilities (zero impact di tema lain)
+   Hapus glow pulsatif & noise overlay dari plan asli.
+   ────────────────────────────────────────────────────────── */
+
+[data-theme="fancy"] .card-glass {
+  background: var(--glass-bg);
+  border-color: var(--glass-border);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+}
+
+[data-theme="fancy"] .border-gradient {
+  position: relative;
+  border: none;
+}
+[data-theme="fancy"] .border-gradient::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--brand-400), oklch(40% 0.06 220));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+          mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+}

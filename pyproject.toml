@@ -1,0 +1,42 @@
+[project]
+name = "popov-incident-response-agent"
+version = "0.1.0"
+description = "Popov - Incident Response Agent: LangGraph multi-agent monitoring, triage & RCA (MongoDB + Telegram)"
+requires-python = ">=3.9"
+
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "langgraph>=0.2.0",
+    "langchain>=0.2.0",
+    "langchain-openai>=0.1.0",
+    "motor>=3.4.0",           # async MongoDB driver
+    "aiomysql>=0.2.0",        # async MySQL driver
+    "pymysql>=1.1.0",         # MySQL driver dependency
+    "httpx>=0.27.0",          # async HTTP untuk Telegram
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "python-dotenv>=1.0.0",
+    "hdbscan>=0.8.0",         # Fase 5: clustering (primary)
+    "scikit-learn>=1.3.0",    # Fase 5: KMeans fallback
+    "numpy>=1.24.0",
+    "pyjwt>=2.8.0",           # FE-1: auth JWT
+    "passlib[bcrypt]>=1.7.4", # FE-1: hash password
+    "bcrypt>=4.0.0,<4.1.0",   # pin: 4.1+ tidak kompatibel dgn passlib 1.7.4
+    "cryptography>=42.0.0",   # BYOK (Fix #54): Fernet encrypt/decrypt key LLM/embedding di DB
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "mongomock-motor>=0.0.21",   # mock MongoDB untuk testing
+    "httpx>=0.27.0",             # test client FastAPI
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["api", "graph", "state", "agents", "config", "services"]

@@ -1,0 +1,18 @@
+.env
+venv/
+venv/*
+.venv/
+.venv/*
+__pycache__/
+*.pyc
+*.pyo
+*.yaml
+services-docs-tmp/
+services-docs-tmp/*
+pf-logs/*
+
+# FE-6+: jangan commit secret/artefak runtime
+acc
+logs/
+.zcode/
+config/uploaded_docs.json

@@ -1,0 +1,75 @@
+/* ============================================================
+   THEME: calm — deep night-ops (Popov signature)
+   Warm dark gray (bukan biru pekat → kurangi blue-light feel).
+   Foreground kontras ~7.8:1 (AAA, lebih lembut dari dark).
+   Saturasi warna diturunkan 30-50% — tidak "menyala" di mata lelah.
+   TANPA utility class fancy, tanpa noise, tanpa glow, tanpa glass.
+   ============================================================ */
+[data-theme="calm"] {
+  color-scheme: dark;
+
+  --background:        oklch(20% 0.008 260);
+  --foreground:        oklch(85% 0.008 260);
+  --card:              oklch(24% 0.010 260);
+  --card-foreground:   oklch(85% 0.008 260);
+  --popover:           oklch(26% 0.010 260);
+  --popover-foreground: oklch(85% 0.008 260);
+  --primary:           oklch(65% 0.095 240);
+  --primary-foreground: oklch(15% 0.01 260);
+  --secondary:         oklch(26% 0.010 260);
+  --secondary-foreground: oklch(85% 0.008 260);
+  --muted:             oklch(26% 0.010 260);
+  --muted-foreground:  oklch(60% 0.012 260);
+  --accent:            oklch(30% 0.015 285);
+  --accent-foreground: oklch(85% 0.008 260);
+  --destructive:       oklch(58% 0.16 25);
+  --destructive-foreground: oklch(96% 0.005 260);
+  --border:            oklch(32% 0.012 260);
+  --input:             oklch(28% 0.010 260);
+  --ring:              oklch(65% 0.095 240);
+  --code-block-bg:     oklch(22% 0.008 260);
+  --code-block-fg:     oklch(85% 0.008 260);
+  --code-block-border: oklch(32% 0.012 260);
+
+  --sidebar:                   oklch(20% 0.008 260);
+  --sidebar-foreground:        oklch(85% 0.008 260);
+  --sidebar-primary:           oklch(65% 0.095 240);
+  --sidebar-primary-foreground: oklch(15% 0.01 260);
+  --sidebar-accent:            oklch(26% 0.010 260);
+  --sidebar-accent-foreground: oklch(85% 0.008 260);
+  --sidebar-border:            oklch(32% 0.012 260);
+  --sidebar-ring:              oklch(65% 0.095 240);
+
+  --chart-1: oklch(0.55 0.10 285);
+  --chart-2: oklch(0.55 0.08 162);
+  --chart-3: oklch(0.55 0.10 70);
+  --chart-4: oklch(0.50 0.10 320);
+  --chart-5: oklch(0.50 0.10 30);
+
+  --radius: 0.5rem;
+
+  /* Override severity/status dengan versi desaturated */
+  --severity-critical-bg: oklch(55% 0.15 25);
+  --severity-critical-fg: oklch(96% 0.005 260);
+  --severity-high-bg:     oklch(62% 0.13 30);
+  --severity-high-fg:     oklch(15% 0.01 260);
+  --severity-medium-bg:   oklch(65% 0.12 70);
+  --severity-medium-fg:   oklch(15% 0.01 260);
+  --severity-low-bg:      oklch(50% 0.010 260);
+  --severity-low-fg:      oklch(96% 0.005 260);
+
+  --status-open-bg:        oklch(52% 0.12 250);
+  --status-open-fg:        oklch(96% 0.005 260);
+  --status-in-progress-bg: oklch(60% 0.11 70);
+  --status-in-progress-fg: oklch(15% 0.01 260);
+  --status-needs-review-bg: oklch(55% 0.13 290);
+  --status-needs-review-fg: oklch(96% 0.005 260);
+  --status-resolved-bg:    oklch(55% 0.12 145);
+  --status-resolved-fg:    oklch(96% 0.005 260);
+  --status-closed-bg:      oklch(45% 0.010 260);
+  --status-closed-fg:      oklch(85% 0.008 260);
+
+  /* Notif dot juga desaturated */
+  --notif-dot:    oklch(55% 0.15 25);
+  --notif-dot-fg: oklch(96% 0.005 260);
+}

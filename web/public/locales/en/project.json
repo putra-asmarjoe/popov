@@ -1,0 +1,102 @@
+{
+  "page": {
+    "new_ticket_title": "New ticket",
+    "back": "Back",
+    "create_ticket": "Create ticket",
+    "workspace_not_found": "Workspace not found",
+    "project_not_found": "Project not found",
+    "go_home": "Go home",
+    "panel_title": "Ticket detail & chat"
+  },
+  "table": {
+    "header_title": "Title",
+    "header_updated": "Updated",
+    "watchdog_badge": "Created automatically by watchdog",
+    "empty_title": "No tickets",
+    "empty_hint": "Try changing the filters, or create a ticket with the New ticket button.",
+    "pagination": "{{total}} tickets · page {{page}}/{{pages}}"
+  },
+  "filter": {
+    "search_placeholder": "Search title / description…",
+    "all_environments": "All envs",
+    "all_assignees": "All assignees",
+    "reset": "Reset ({{count}})"
+  },
+  "form": {
+    "title_label": "Title",
+    "title_placeholder": "NPE during checkout",
+    "description_label": "Description",
+    "description_placeholder": "Describe symptoms, impact, and incident context…",
+    "trace_label": "Trace ID (optional)",
+    "tags_label": "Tags (optional, comma-separated)",
+    "save": "Save",
+    "saving": "Saving…",
+    "cancel": "Cancel",
+    "validation": {
+      "title_min": "Title must be at least 5 characters",
+      "description_min": "Description must be at least 10 characters",
+      "trace_hex": "Trace ID must be 16-64 hex characters"
+    }
+  },
+  "detail": {
+    "created_by": "Created {{name}} · {{date}}",
+    "resolved_by": "Resolved by {{name}}",
+    "auto_badge": "Auto",
+    "open_in_tempo": "Open in Grafana Tempo",
+    "no_assignees": "No assignees yet",
+    "assign_button": "Assign…",
+    "members_empty": "No workspace members yet — add members in Workspace settings.",
+    "reopen": "Reopen",
+    "edit": "Edit",
+    "edit_dialog_title": "Edit {{number}}",
+    "edit_dialog_description": "Changes apply immediately to this ticket.",
+    "save_changes": "Save changes",
+    "loading_alerts": "Loading…",
+    "section_description": "Description",
+    "section_tags": "Tags",
+    "section_progress": "Progress Log",
+    "section_alerts": "Linked Alerts"
+  },
+  "progress": {
+    "empty": "No progress notes yet.",
+    "anonymous": "Someone",
+    "add_placeholder": "Add a progress note…"
+  },
+  "alerts": {
+    "empty": "No linked alerts."
+  },
+  "ticket": {
+    "status": {
+      "new": "New",
+      "open": "Open",
+      "in_progress": "In Progress",
+      "needs_review": "Needs Review",
+      "resolved": "Resolved",
+      "closed": "Closed"
+    },
+    "severity": {
+      "critical": "Critical",
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low"
+    },
+    "kind": {
+      "business_logic": "Business Logic",
+      "infrastructure": "Infrastructure"
+    }
+  },
+  "chat": {
+    "input_placeholder": "Ask anything… (Enter to send, Shift+Enter for new line)",
+    "stop_stream": "Stop streaming",
+    "empty_title": "Ask Popov Agent",
+    "empty_hint": "This chat is bound to the open ticket — your questions automatically carry the ticket context.",
+    "ticket_header": "Ticket chat {{number}}",
+    "generic_header": "Chat",
+    "preparing_session": "Preparing ticket chat session…",
+    "history_fallback": "Chat history",
+    "sessions_label": "Chat sessions",
+    "no_other_sessions": "No other sessions yet",
+    "new_chat": "New chat",
+    "new_button": "New"
+  }
+}

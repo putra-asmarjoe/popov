@@ -1,0 +1,8 @@
+{
+  "order_service": "logs_order_service",
+  "notification_service": "logs_notification_service",
+  "user_service": "logs_user_service",
+  "payment_gateway": "logs_payment_gateway",
+  "audit_log_service": "logs_audit_log_service",
+  "inventory_service": "logs_inventory_service"
+}

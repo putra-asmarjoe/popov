@@ -1,0 +1,323 @@
+/* ============================================================
+   LOGIN SCENE — koreografi sinematik halaman login
+   "mati lampu → kerang terbuka → lampu menyala"
+
+   Semua transisi hanya transform/opacity/filter (GPU-friendly).
+   State dikendalikan atribut [data-stage="dark" | "lit"] pada
+   elemen .login-scene dari LoginPage.tsx.
+   ============================================================ */
+
+/* ---------- Scene root & layer ---------- */
+.login-scene {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+/* Blackout — menutup seluruh halaman apa pun tema aktifnya;
+   "lampu menyala" = layer ini memudar, latar bertema tersingkap. */
+.login-scene__blackout {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  opacity: 1;
+  background:
+    radial-gradient(120% 120% at 50% 42%, #10131a 0%, #070809 62%, #030304 100%);
+}
+[data-stage="lit"] .login-scene__blackout {
+  opacity: 0;
+  transition: opacity 2000ms cubic-bezier(0.4, 0, 0.2, 1) 550ms;
+}
+
+/* Dekorasi ambient pasca-lampu nyala (fade-in lambat) */
+.login-scene__blob {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(72px);
+  opacity: 0;
+  transition: opacity 1600ms ease 900ms;
+}
+.login-scene__blob--a {
+  top: -12%;
+  left: -10%;
+  width: 44vw;
+  height: 44vw;
+  background: radial-gradient(
+    closest-side,
+    color-mix(in oklab, var(--primary) 16%, transparent),
+    transparent
+  );
+}
+.login-scene__blob--b {
+  bottom: -18%;
+  right: -8%;
+  width: 38vw;
+  height: 38vw;
+  background: radial-gradient(closest-side, rgba(126, 200, 240, 0.13), transparent);
+}
+[data-stage="lit"] .login-scene__blob { opacity: 1; }
+
+.login-scene__content {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  min-height: 100vh; /* fallback */
+  min-height: 100dvh;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  transition: transform 1000ms cubic-bezier(0.22, 1, 0.36, 1) 200ms;
+}
+
+/* Saat gelap kartu masih transparan tapi tetap memakan ruang —
+   geser kolom ke atas agar kerang tepat di tengah layar. */
+[data-stage="dark"] .login-scene__content {
+  transform: translateY(clamp(-170px, -22vh, -90px));
+}
+
+/* ---------- Kartu login (muncul dari mulut kerang) ---------- */
+.login-scene__card {
+  /* Nempel ke mulut kerang saat settle */
+  margin-bottom: clamp(-2.25rem, -4vw, -1.25rem);
+  z-index: 2;
+}
+[data-stage="dark"] .login-scene__card {
+  opacity: 0;
+  transform: translateY(84px) scale(0.7);
+  filter: blur(8px);
+  pointer-events: none;
+}
+[data-stage="lit"] .login-scene__card {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+}
+[data-stage="dark"] .login-scene__card,
+[data-stage="lit"] .login-scene__card {
+  transition:
+    opacity 800ms ease 650ms,
+    transform 900ms cubic-bezier(0.22, 1, 0.36, 1) 650ms,
+    filter 800ms ease 650ms;
+}
+
+/* ---------- Kartu login bernuansa kerang ----------
+   Gradasi nacre (putih mutiara → biru langit → hint violet) yang
+   dicampur dengan var(--card) sehingga tetap serasi di 4 tema,
+   plus rim-light biru langit seperti tepi cangkang. */
+.login-scene__card [data-slot="card"] {
+  border-color: transparent;
+  border-radius: 1.15rem;
+  background: linear-gradient(
+    168deg,
+    color-mix(in oklab, var(--card) 84%, #7ec8f0) 0%,
+    var(--card) 46%,
+    color-mix(in oklab, var(--card) 89%, #8b7fd4) 100%
+  );
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 0 0 1px color-mix(in oklab, #7ec8f0 38%, transparent),
+    0 24px 60px -16px rgba(96, 150, 196, 0.4);
+}
+
+/* ---------- Kerang ---------- */
+.login-scene__clam {
+  position: relative;
+  z-index: 1;
+  width: clamp(190px, 46vw, 300px);
+  border-radius: 24px; /* area klik/outline fokus rapi */
+}
+
+/* Saat gelap kerang meredup sendiri (siluet tetap terbaca),
+   lalu "menyala" bersama lampu halaman. */
+.login-scene__clam svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  transition: filter 1800ms ease 400ms;
+}
+[data-stage="dark"] .login-scene__clam svg {
+  filter: brightness(0.48) saturate(0.75);
+}
+[data-stage="lit"] .login-scene__clam svg {
+  filter: brightness(1) saturate(1);
+}
+
+/* Denyut napas mengundang klik — hanya saat gelap */
+[data-stage="dark"] .login-scene__clam {
+  animation: clam-breathe 3s ease-in-out infinite alternate;
+}
+[data-stage="lit"] .login-scene__clam {
+  animation: none;
+}
+
+@keyframes clam-breathe {
+  from { transform: scale(1); }
+  to   { transform: scale(1.03); }
+}
+
+/* Halo tipis di belakang kerang saat gelap (petunjuk interaktif) */
+.login-scene__halo {
+  position: absolute;
+  inset: -22%;
+  z-index: -1;
+  border-radius: 9999px;
+  pointer-events: none;
+  background: radial-gradient(closest-side, rgba(126, 200, 240, 0.22), transparent 72%);
+  transition: opacity 800ms ease;
+}
+[data-stage="dark"] .login-scene__halo {
+  animation: halo-pulse 2.8s ease-in-out infinite alternate;
+}
+[data-stage="lit"] .login-scene__halo {
+  animation: none;
+  opacity: 0;
+}
+
+@keyframes halo-pulse {
+  from { opacity: 0.35; }
+  to   { opacity: 0.9; }
+}
+
+/* Bloom cahaya biru-putih dari mulut kerang */
+.login-scene__bloom {
+  position: absolute;
+  left: 50%;
+  top: 34%;
+  width: 340px;
+  aspect-ratio: 1;
+  max-width: 120vw;
+  pointer-events: none;
+  border-radius: 9999px;
+  transform: translate(-50%, -50%) scale(0.3);
+  opacity: 0;
+  background: radial-gradient(
+    closest-side,
+    rgba(226, 243, 255, 0.95),
+    rgba(160, 208, 245, 0.35) 45%,
+    transparent 72%
+  );
+}
+[data-stage="lit"] .login-scene__bloom {
+  opacity: 0.95;
+  transform: translate(-50%, -50%) scale(2.6);
+  transition:
+    opacity 700ms ease 300ms,
+    transform 1100ms cubic-bezier(0.22, 1, 0.36, 1) 300ms;
+}
+
+/* ---------- Katup cangkang (buka di engsel belakang) ---------- */
+.clam-valve {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+[data-stage] .clam-valve--top,
+[data-stage] .clam-valve--bottom {
+  transition: transform 900ms cubic-bezier(0.34, 1.56, 0.64, 1) 150ms;
+}
+[data-stage="lit"] .clam-valve--top {
+  transform: perspective(900px) translateY(-14%) rotateX(-72deg);
+}
+[data-stage="lit"] .clam-valve--bottom {
+  transform: perspective(900px) rotateX(9deg) translateY(2%);
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Glow interior + kilau mutiara */
+.clam-nacre-glow {
+  opacity: 0;
+  transition: opacity 600ms ease 350ms;
+}
+[data-stage="lit"] .clam-nacre-glow { opacity: 1; }
+
+/* Interior nacre & mutiara diredupkan saat gelap — kerang tertutup
+   terlihat solid, bukan "bercelah terang". */
+.clam-nacre {
+  transition: opacity 700ms ease 400ms;
+}
+[data-stage="dark"] .clam-nacre {
+  opacity: 0.18;
+}
+
+.clam-pearl-shine {
+  opacity: 0.85;
+}
+[data-stage="lit"] .clam-pearl-shine {
+  animation: pearl-shimmer 3.2s ease-in-out infinite alternate;
+}
+
+@keyframes pearl-shimmer {
+  from { opacity: 0.5; }
+  to   { opacity: 1; }
+}
+
+/* ---------- Aksen biru kerang pada kontrol form ----------
+   Tombol submit, link toggle, dan fokus input diselaraskan dengan
+   palet cangkang (biru langit) agar menyatu dengan scene & logo. */
+.login-scene__card [data-slot="button"] {
+  border: none;
+  background: linear-gradient(180deg, #4da3d9 0%, #2b7cb8 100%);
+  color: #ffffff;
+  box-shadow: 0 6px 18px -6px rgba(43, 124, 184, 0.55);
+}
+.login-scene__card [data-slot="button"]:hover:not(:disabled) {
+  background: linear-gradient(180deg, #4597cc 0%, #25709f 100%);
+}
+.login-scene__card [data-slot="button"]:disabled {
+  opacity: 0.65;
+}
+
+.login-scene__link {
+  color: #1e6fa8;
+}
+.login-scene__link:hover {
+  color: #175a89;
+}
+[data-theme="dark"] .login-scene__link,
+[data-theme="fancy"] .login-scene__link,
+[data-theme="calm"] .login-scene__link {
+  color: #8fd2f7;
+}
+[data-theme="dark"] .login-scene__link:hover,
+[data-theme="fancy"] .login-scene__link:hover,
+[data-theme="calm"] .login-scene__link:hover {
+  color: #b3e2fa;
+}
+
+.login-scene__card [data-slot="input"]:focus-visible {
+  border-color: #7ec8f0;
+  box-shadow: 0 0 0 3px color-mix(in oklab, #7ec8f0 40%, transparent);
+}
+
+/* ---------- Teks petunjuk ("Sentuh kerang…") ---------- */
+.login-scene__hint {
+  margin-top: 0.75rem;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+  color: rgba(214, 233, 246, 0.85); /* terbaca di atas blackout */
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.8);
+  opacity: 0;
+  animation: hint-in 900ms ease 1400ms forwards;
+}
+[data-stage="lit"] .login-scene__hint {
+  animation: none;
+  opacity: 0;
+  transition: opacity 350ms ease;
+}
+
+@keyframes hint-in {
+  to { opacity: 1; }
+}
+
+/* ---------- Reduced motion: lewati sinematik sepenuhnya ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .login-scene *,
+  .login-scene *::before,
+  .login-scene *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "nav": {
+    "workspaces": "Workspaces",
+    "management": "Management",
+    "settings": "Pengaturan",
+    "logout": "Keluar",
+    "all_projects": "Semua project",
+    "pick_project": "Pilih project…",
+    "role": "Role"
+  },
+  "action": {
+    "save": "Simpan",
+    "cancel": "Batal",
+    "delete": "Hapus",
+    "confirm": "Konfirmasi",
+    "edit": "Edit",
+    "create": "Buat",
+    "back": "Kembali",
+    "retry": "Coba Lagi"
+  },
+  "status": {
+    "loading": "Memuat...",
+    "saving": "Menyimpan...",
+    "error": "Terjadi kesalahan",
+    "empty": "Tidak ada data",
+    "success": "Berhasil disimpan"
+  },
+  "locale": {
+    "switch_language": "Ganti bahasa"
+  },
+  "sidebar": {
+    "workspace_label": "Workspace",
+    "new_workspace": "Workspace baru",
+    "projects": "Projects",
+    "new_project": "Project baru",
+    "empty_projects": "Belum ada project — buat dengan tombol + di atas.",
+    "workspace_settings": "Pengaturan workspace",
+    "phase_hint": "Tersedia di fase {{phase}}"
+  },
+  "notif": {
+    "title": "Notifikasi",
+    "mark_all": "Tandai semua",
+    "empty": "Belum ada notifikasi",
+    "see_all": "Lihat semua"
+  },
+  "panel": {
+    "minimize": "Minimize panel",
+    "maximize": "Maximize panel",
+    "close": "Tutup panel"
+  }
+}

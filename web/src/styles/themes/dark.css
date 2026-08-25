@@ -1,0 +1,49 @@
+/* ============================================================
+   THEME: dark
+   Target kontras body text: ~10:1
+   foreground zinc-100 (L=96.5%) di atas zinc-900 (L=17%) → ~9.8:1
+   (bukan zinc-950 — kurangi "void" feel agar lebih nyaman)
+   ============================================================ */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --background:        var(--zinc-900);
+  --foreground:        var(--zinc-100);
+  --card:              var(--zinc-800);
+  --card-foreground:   var(--zinc-100);
+  --popover:           var(--zinc-800);
+  --popover-foreground: var(--zinc-100);
+  --primary:           var(--brand-400);
+  --primary-foreground: oklch(12% 0 0);
+  --secondary:         var(--zinc-800);
+  --secondary-foreground: var(--zinc-100);
+  --muted:             var(--zinc-800);
+  --muted-foreground:  var(--zinc-300);
+  --accent:            var(--zinc-700);
+  --accent-foreground: var(--zinc-100);
+  --destructive:       var(--red-500);
+  --destructive-foreground: oklch(99% 0 0);
+  --border:            var(--zinc-700);
+  --input:             var(--zinc-700);
+  --ring:              var(--brand-400);
+  --code-block-bg:     oklch(20% 0.005 264);
+  --code-block-fg:     var(--zinc-100);
+  --code-block-border: var(--zinc-700);
+
+  --sidebar:                   var(--zinc-900);
+  --sidebar-foreground:        var(--zinc-100);
+  --sidebar-primary:           var(--brand-400);
+  --sidebar-primary-foreground: oklch(12% 0 0);
+  --sidebar-accent:            var(--zinc-800);
+  --sidebar-accent-foreground: var(--zinc-100);
+  --sidebar-border:            var(--zinc-700);
+  --sidebar-ring:              var(--brand-400);
+
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17  162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+
+  --radius: 0.5rem;
+}

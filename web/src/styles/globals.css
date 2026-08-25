@@ -1,0 +1,138 @@
+/* ============================================================
+   GLOBALS — entry point untuk Vite
+   Import order: tokens → themes → tailwind base
+   ============================================================ */
+@import "./tokens.css";
+@import "./themes/light.css";
+@import "./themes/dark.css";
+@import "./themes/fancy.css";
+@import "./themes/calm.css";
+@import "./login-scene.css";
+
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+/* Aktifkan dark: variant untuk 3 tema gelap */
+@custom-variant dark (&:is(.dark *, [data-theme="dark"] *, [data-theme="fancy"] *, [data-theme="calm"] *));
+
+/* Fallback sebelum JS set data-theme (cocok dengan anti-FOUC script) */
+:root {
+  color-scheme: light;
+}
+
+/* ============================================================
+   @theme inline — maps semantic alias → Tailwind utility class
+   Update ini setiap menambah semantic token baru.
+   ============================================================ */
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: 'Geist Variable', sans-serif;
+
+  /* Surfaces */
+  --color-background:          var(--background);
+  --color-foreground:          var(--foreground);
+  --color-card:                var(--card);
+  --color-card-foreground:     var(--card-foreground);
+  --color-popover:             var(--popover);
+  --color-popover-foreground:  var(--popover-foreground);
+
+  /* Brand */
+  --color-primary:             var(--primary);
+  --color-primary-foreground:  var(--primary-foreground);
+  --color-secondary:           var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  /* Muted & accent */
+  --color-muted:               var(--muted);
+  --color-muted-foreground:    var(--muted-foreground);
+  --color-accent:              var(--accent);
+  --color-accent-foreground:   var(--accent-foreground);
+
+  /* Semantic */
+  --color-destructive:            var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  /* Form & line */
+  --color-border:              var(--border);
+  --color-input:               var(--input);
+  --color-ring:                var(--ring);
+
+  /* Sidebar */
+  --color-sidebar:                   var(--sidebar);
+  --color-sidebar-foreground:        var(--sidebar-foreground);
+  --color-sidebar-primary:           var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent:            var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border:            var(--sidebar-border);
+  --color-sidebar-ring:              var(--sidebar-ring);
+
+  /* Charts */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  /* Severity badge (solid, tema-aware) */
+  --color-severity-critical:     var(--severity-critical-bg);
+  --color-severity-critical-fg:  var(--severity-critical-fg);
+  --color-severity-high:         var(--severity-high-bg);
+  --color-severity-high-fg:      var(--severity-high-fg);
+  --color-severity-medium:       var(--severity-medium-bg);
+  --color-severity-medium-fg:    var(--severity-medium-fg);
+  --color-severity-low:          var(--severity-low-bg);
+  --color-severity-low-fg:       var(--severity-low-fg);
+
+  /* Status badge (solid, tema-aware) */
+  --color-status-new:            var(--status-new-bg);
+  --color-status-new-fg:         var(--status-new-fg);
+  --color-status-open:           var(--status-open-bg);
+  --color-status-open-fg:        var(--status-open-fg);
+  --color-status-in-progress:    var(--status-in-progress-bg);
+  --color-status-in-progress-fg: var(--status-in-progress-fg);
+  --color-status-needs-review:   var(--status-needs-review-bg);
+  --color-status-needs-review-fg: var(--status-needs-review-fg);
+  --color-status-resolved:       var(--status-resolved-bg);
+  --color-status-resolved-fg:    var(--status-resolved-fg);
+  --color-status-closed:         var(--status-closed-bg);
+  --color-status-closed-fg:      var(--status-closed-fg);
+
+  /* Markdown code block */
+  --color-code-block:        var(--code-block-bg);
+  --color-code-block-fg:     var(--code-block-fg);
+  --color-code-block-border: var(--code-block-border);
+
+  /* Notification dot */
+  --color-notif-dot:    var(--notif-dot);
+  --color-notif-dot-fg: var(--notif-dot-fg);
+
+  /* Radius scale */
+  --radius-sm:   calc(var(--radius) * 0.6);
+  --radius-md:   calc(var(--radius) * 0.8);
+  --radius-lg:   var(--radius);
+  --radius-xl:   calc(var(--radius) * 1.4);
+  --radius-2xl:  calc(var(--radius) * 1.8);
+  --radius-3xl:  calc(var(--radius) * 2.2);
+  --radius-4xl:  calc(var(--radius) * 2.6);
+}
+
+/* Base reset — semua warna via semantic */
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklch, var(--ring) 50%, transparent);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  html {
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}

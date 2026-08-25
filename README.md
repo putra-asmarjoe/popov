@@ -138,24 +138,90 @@ Two processes run from the same image: `uvicorn main:app` (API + Telegram listen
 
 Requirements: Python ≥3.9, MongoDB, Node.js (for the web UI). An observability stack (Prometheus/Tempo/Loki/Alertmanager) is optional — Popov degrades gracefully without it.
 
+**One-time setup** (run from the repo root):
+
 ```bash
-# 1. Backend
 python3 -m venv venv && source venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env          # edit: MONGODB_URI, DATA_ENCRYPTION_KEY, JWT_SECRET
-
-# 2. Run the two backend processes (separate terminals)
-make api                      # uvicorn main:app --reload --port 8000
-make watchdog                 # python watchdog_worker.py
-
-# 3. Web UI (dev mode)
-cd web && npm install && npm run dev
-# For production, `npm run build` output (web/dist) is served by FastAPI itself
+cd web && npm install && cd ..
 ```
+
+After setup, pick **one** of the two ways below to run the app.
+
+### Option A — Run together in one terminal (easiest)
+
+`concurrently` starts the backend API and the web UI side by side in a single
+terminal, with colored, prefixed logs (`[API]` green, `[WEB]` yellow) so you can
+tell them apart. Pressing `Ctrl+C` stops both at once — no orphaned processes.
+
+```bash
+cd web
+npm run dev        # API + Web UI  ([API] green · [WEB] yellow)
+npm run dev:all    # API + Web UI + Watchdog worker ([WDT] red)
+```
+
+When it's up:
+
+- Web UI → http://localhost:5173
+- API & docs → http://localhost:8000/docs
+
+### Option B — Run each part separately
+
+Prefer to see each process in its own terminal (easier to read individual logs,
+restart one part without touching the others)? Open **two terminals** and run:
+
+```bash
+# Terminal 1 — Backend API (from the repo root).
+# Serves /api/v1, the Telegram listener, and the built web UI on port 8000.
+./venv/bin/uvicorn main:app --port 8000        # add --reload for auto-restart on code changes
+
+# Terminal 2 — Frontend dev server (from the web/ folder).
+# Vite serves the React app on port 5173 and proxies API calls to :8000.
+cd web && npm run dev
+```
+
+Stop each part independently with `Ctrl+C` in its own terminal. This is just the
+manual version of Option A — use whichever feels more comfortable.
+
+> Optional extras, same idea:
+> - `make api` / `make watchdog` — Makefile wrappers for the commands above
+> - `npm run dev:watchdog` (from `web/`) or `python watchdog_worker.py` — runs the
+>   watchdog worker that polls your observability stack and auto-creates tickets.
+
+### Do you need the watchdog worker?
+
+`watchdog_worker.py` is a **separate process** — starting the API (`uvicorn main:app`)
+does *not* start it automatically.
+
+| Without it (still works)             | Only with it                          |
+|---|---|
+| API & web UI                         | Proactive alert polling (30s cycle)   |
+| Ticketing, progress log, Linked Alerts | Auto-create tickets from alerts     |
+| In-app agent chat                    | Telegram alert broadcasts             |
+| Telegram listener (mentions/buttons) | Second Brain auto-feedback (30 min)   |
+| Alertmanager webhook push (<5s)      |                                       |
+
+Run it only if you want Popov to *detect* incidents on its own:
+
+```bash
+npm run dev:all          # from web/ — together with everything else
+# or standalone:
+python watchdog_worker.py
+```
+
+⚠️ Exactly **one instance** — running two copies duplicates alerts and tickets.
+If your stack uses Alertmanager webhook mode, you can skip polling entirely.
+
+For production, `npm run build` output (`web/dist`) is served by FastAPI itself —
+no separate frontend process needed.
 
 Then:
 
-1. Open the web UI and create an account/workspace.
+1. **Open the web UI and register an account.** The **first user to register
+   automatically becomes the workspace admin** — every account after that is a
+   regular member (an admin can promote members later from
+   *Workspace Settings → Users*).
 2. In **Management**, add your LLM provider key (BYOK, encrypted at rest) and optionally an embedding model (or keep the free local TF mode).
 3. In **Workspace Settings → Stacks / Notifications**, register your Prometheus/Tempo endpoints and a Telegram bot channel.
 4. Trigger a test investigation:

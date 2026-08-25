@@ -1,0 +1,102 @@
+{
+  "page": {
+    "new_ticket_title": "Tiket baru",
+    "back": "Kembali",
+    "create_ticket": "Buat tiket",
+    "workspace_not_found": "Workspace tidak ditemukan",
+    "project_not_found": "Project tidak ditemukan",
+    "go_home": "Ke beranda",
+    "panel_title": "Detail & Chat tiket"
+  },
+  "table": {
+    "header_title": "Judul",
+    "header_updated": "Diperbarui",
+    "watchdog_badge": "Dibuat otomatis oleh watchdog",
+    "empty_title": "Tidak ada tiket",
+    "empty_hint": "Coba ubah filter, atau buat tiket baru dengan tombol Ticket baru.",
+    "pagination": "{{total}} tiket · hal. {{page}}/{{pages}}"
+  },
+  "filter": {
+    "search_placeholder": "Cari judul / deskripsi…",
+    "all_environments": "Semua env",
+    "all_assignees": "Semua assignee",
+    "reset": "Reset ({{count}})"
+  },
+  "form": {
+    "title_label": "Judul",
+    "title_placeholder": "NPE saat checkout",
+    "description_label": "Deskripsi",
+    "description_placeholder": "Jelaskan gejala, dampak, dan konteks insiden…",
+    "trace_label": "Trace ID (opsional)",
+    "tags_label": "Tags (opsional, koma)",
+    "save": "Simpan",
+    "saving": "Menyimpan…",
+    "cancel": "Batal",
+    "validation": {
+      "title_min": "Judul minimal 5 karakter",
+      "description_min": "Deskripsi minimal 10 karakter",
+      "trace_hex": "TraceId harus hex 16-64 karakter"
+    }
+  },
+  "detail": {
+    "created_by": "Dibuat {{name}} · {{date}}",
+    "resolved_by": "Resolved oleh {{name}}",
+    "auto_badge": "Auto",
+    "open_in_tempo": "Buka di Grafana Tempo",
+    "no_assignees": "Belum ada assignee",
+    "assign_button": "Assign…",
+    "members_empty": "Belum ada member workspace — tambahkan member di Pengaturan workspace.",
+    "reopen": "Reopen",
+    "edit": "Edit",
+    "edit_dialog_title": "Edit {{number}}",
+    "edit_dialog_description": "Perubahan langsung berlaku pada tiket ini.",
+    "save_changes": "Simpan perubahan",
+    "loading_alerts": "Memuat…",
+    "section_description": "Deskripsi",
+    "section_tags": "Tags",
+    "section_progress": "Progress Log",
+    "section_alerts": "Linked Alerts"
+  },
+  "progress": {
+    "empty": "Belum ada catatan progress.",
+    "anonymous": "Seseorang",
+    "add_placeholder": "Tambah catatan progress…"
+  },
+  "alerts": {
+    "empty": "Belum ada alert ter-link."
+  },
+  "ticket": {
+    "status": {
+      "new": "Baru",
+      "open": "Open",
+      "in_progress": "Dikerjakan",
+      "needs_review": "Perlu Review",
+      "resolved": "Resolved",
+      "closed": "Closed"
+    },
+    "severity": {
+      "critical": "Critical",
+      "high": "High",
+      "medium": "Medium",
+      "low": "Low"
+    },
+    "kind": {
+      "business_logic": "Business Logic",
+      "infrastructure": "Infrastructure"
+    }
+  },
+  "chat": {
+    "input_placeholder": "Tanya apa saja… (Enter kirim, Shift+Enter baris baru)",
+    "stop_stream": "Hentikan stream",
+    "empty_title": "Tanya Popov Agent",
+    "empty_hint": "Chat ini terikat ke tiket yang sedang dibuka — pertanyaanmu otomatis membawa konteks tiket.",
+    "ticket_header": "Chat tiket {{number}}",
+    "generic_header": "Chat",
+    "preparing_session": "Menyiapkan sesi chat tiket…",
+    "history_fallback": "Riwayat chat",
+    "sessions_label": "Sesi chat",
+    "no_other_sessions": "Belum ada sesi lain",
+    "new_chat": "Chat baru",
+    "new_button": "Baru"
+  }
+}

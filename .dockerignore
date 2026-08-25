@@ -1,0 +1,22 @@
+# FE-6: jangan bawa secret & artefak build ke dalam image (COPY . .)
+.env
+.env.*
+*.env.tmp
+
+# VCS & tooling
+.git
+.gitignore
+
+# Python
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Frontend dev artifacts (dist di-build ulang di stage webbuilder)
+web/node_modules/
+web/dist/
+web/.env.example
+
+# Runtime logs
+logs/
