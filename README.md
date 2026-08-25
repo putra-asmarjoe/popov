@@ -190,6 +190,25 @@ manual version of Option A — use whichever feels more comfortable.
 - Web UI → http://localhost:5173
 - API & docs → http://localhost:8000/docs
 
+### Then:
+
+1. **Open the web UI and register an account.** The **first user to register
+   automatically becomes the workspace admin** — every account after that is a
+   regular member (an admin can promote members later from
+   *Workspace Settings → Users*).
+2. In **Management**, add your LLM provider key (BYOK, encrypted at rest) and optionally an embedding model (or keep the free local TF mode).
+3. In **Workspace Settings → Stacks / Notifications**, register your Prometheus/Tempo endpoints and a Telegram bot channel.
+4. Trigger a test investigation:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/trigger \
+  -H "Content-Type: application/json" \
+  -d '{"intent": "check errors on my-service"}'
+
+# Interactive API docs
+open http://localhost:8000/docs
+```
+
 ### Do you need the watchdog worker?
 
 `watchdog_worker.py` is a **separate process** — starting the API (`uvicorn main:app`)
@@ -217,24 +236,6 @@ If your stack uses Alertmanager webhook mode, you can skip polling entirely.
 For production, `npm run build` output (`web/dist`) is served by FastAPI itself —
 no separate frontend process needed.
 
-Then:
-
-1. **Open the web UI and register an account.** The **first user to register
-   automatically becomes the workspace admin** — every account after that is a
-   regular member (an admin can promote members later from
-   *Workspace Settings → Users*).
-2. In **Management**, add your LLM provider key (BYOK, encrypted at rest) and optionally an embedding model (or keep the free local TF mode).
-3. In **Workspace Settings → Stacks / Notifications**, register your Prometheus/Tempo endpoints and a Telegram bot channel.
-4. Trigger a test investigation:
-
-```bash
-curl -X POST http://localhost:8000/api/v1/trigger \
-  -H "Content-Type: application/json" \
-  -d '{"intent": "check errors on my-service"}'
-
-# Interactive API docs
-open http://localhost:8000/docs
-```
 
 ## Configuration
 
