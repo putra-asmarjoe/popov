@@ -310,10 +310,63 @@ Implemented plans live in `devdocs/`; near-term directions visible in the codeba
 - Additional notification channels (schema-ready: Slack, Discord, WhatsApp)
 - Restore flow for soft-deleted projects (currently archive-only)
 
-## Contributing
+## 💡 Motivation
 
-The project is early-stage; issues and PRs are welcome. Before large changes, please open an issue to discuss. Useful internal references: `SUMMARYBE.md` (backend), `SUMMARYFE.md` (frontend), `CHANGELOG_FIXES.md` (fix history).
+As a programmer and DevOps engineer, I deal with production incidents regularly —
+chasing alerts across multiple tools, correlating logs, and managing follow-ups 
+manually. I needed something that could bring AI-assisted triage, ticketing, and 
+observability together in one self-hosted platform. Everything I found was either 
+too complex, too expensive, or required sending data to third-party clouds.
+
+So I built Popov — drawing from years of hands-on experience managing 
+infrastructure and responding to incidents. It reflects the workflow I actually 
+wanted: fast, observable, and yours to own completely.
+
+This is my contribution to the community. I hope it saves you the same headaches 
+it saved me.
+
+If you find Popov useful, please consider giving it a ⭐ — it means a lot and 
+helps others discover the project.
+
+
+## 🗣️ Discussion & Support
+
+For questions, bug reports, or feature requests, please use:
+
+- **[GitHub Issues](https://github.com/aptana/popov/issues)** — bug reports & feature requests  
+- **[GitHub Discussions](https://github.com/aptana/popov/discussions)** — general questions & ideas
+
+> Please do not send support requests via email.
 
 ## License
 
-No license has been published yet — see [Project Status](#project-status). Until one is added, all rights are reserved by the authors.
+Copyright © 2026 Putra Asmar Joe. Licensed under the
+[Functional Source License, Version 1.1 (FSL-1.1-ALv2)](./LICENSE).
+
+Free to self-host for personal and internal commercial use.
+Offering Popov as a managed service to third parties is not permitted.
+
+---
+
+### ✅ Permitted Use (Free)
+
+| Use Case | Status |
+|---|---|
+| Download, run, modify, fork | ✅ Free |
+| Self-host for personal use | ✅ Free |
+| Internal use at your company | ✅ Free |
+| Commercial internal use | ✅ Free |
+| Deploy for your own organization | ✅ Free |
+| Build integrations on top of Popov | ✅ Free |
+
+---
+
+### ❌ Not Permitted
+
+| Use Case | Status |
+|---|---|
+| Sell Popov itself | ❌ Not allowed |
+| White-label Popov | ❌ Not allowed |
+| Offer Popov as a hosted/managed service | ❌ Not allowed |
+| Build a competing SaaS based on Popov | ❌ Not allowed |
+| Remove Popov branding or license notices | ❌ Not allowed |

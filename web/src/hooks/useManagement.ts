@@ -75,10 +75,11 @@ export function useServiceMutations() {
 
 // ── LLM ───────────────────────────────────────────────────────────────────────
 
-export function useLlmConfig() {
+export function useLlmConfig(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["config", "llm"],
     queryFn: async () => (await api.get("/config/llm")).data as LlmConfig,
+    enabled: options?.enabled,
   })
 }
 
@@ -172,13 +173,14 @@ export interface ObservabilityTargetCreateInput {
   poll_interval_seconds?: number
 }
 
-export function useObservabilityTargets() {
+export function useObservabilityTargets(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["config", "observability-targets"],
     queryFn: async () => {
       const { data } = await api.get("/config/observability-targets")
       return data.targets as ObservabilityTarget[]
     },
+    enabled: options?.enabled,
   })
 }
 

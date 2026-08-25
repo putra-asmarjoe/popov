@@ -1,0 +1,42 @@
+{
+  "title": "Selesaikan persiapan workspace",
+  "subtitle": "Beberapa langkah lagi sebelum Popov siap memantau service-mu.",
+  "progress": "{{done}}/{{total}} selesai",
+  "dismiss": "Lewati checklist ini",
+  "success_title": "Semua siap!",
+  "success_hint": "Workspace sudah lengkap. Selamat memonitoring!",
+  "close": "Tutup",
+  "optional_badge": "Opsional",
+  "back_plain": "Kembali ke checklist persiapan",
+  "back_progress": "Kembali ke checklist persiapan — {{done}}/{{total}} selesai",
+  "items": {
+    "project": {
+      "label": "Buat project pertama",
+      "hint": "Wadah tiket dan service yang dipantau"
+    },
+    "services": {
+      "label": "Tambahkan service",
+      "hint": "Daftarkan service yang ingin dimonitor"
+    },
+    "knowledge": {
+      "label": "Tambahkan knowledge",
+      "hint": "Dokumen panduan analisis insiden oleh AI"
+    },
+    "stacks": {
+      "label": "Hubungkan stack observability",
+      "hint": "Prometheus, Tempo, Loki, atau Alertmanager"
+    },
+    "notifications": {
+      "label": "Atur notifikasi",
+      "hint": "Ke mana laporan insiden dikirim"
+    },
+    "llm_keys": {
+      "label": "Pasang LLM API key",
+      "hint": "Dibutuhkan untuk fitur analisis AI"
+    },
+    "embedding": {
+      "label": "Atur Embedding (Second Brain)",
+      "hint": "Opsional — membantu mengenali insiden serupa di masa lalu"
+    }
+  }
+}

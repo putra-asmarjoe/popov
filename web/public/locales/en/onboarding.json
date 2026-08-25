@@ -1,0 +1,42 @@
+{
+  "title": "Finish setting up your workspace",
+  "subtitle": "A few steps left before Popov can watch your services.",
+  "progress": "{{done}}/{{total}} completed",
+  "dismiss": "Skip this checklist",
+  "success_title": "You're all set!",
+  "success_hint": "Your workspace is complete. Happy monitoring!",
+  "close": "Close",
+  "optional_badge": "Optional",
+  "back_plain": "Back to setup checklist",
+  "back_progress": "Back to setup checklist — {{done}}/{{total}} done",
+  "items": {
+    "project": {
+      "label": "Create your first project",
+      "hint": "A home for tickets and monitored services"
+    },
+    "services": {
+      "label": "Add a service",
+      "hint": "Register the services you want to monitor"
+    },
+    "knowledge": {
+      "label": "Add knowledge",
+      "hint": "Grounding docs that guide AI incident analysis"
+    },
+    "stacks": {
+      "label": "Connect observability stacks",
+      "hint": "Prometheus, Tempo, Loki, or Alertmanager"
+    },
+    "notifications": {
+      "label": "Set up notifications",
+      "hint": "Where incident reports should be delivered"
+    },
+    "llm_keys": {
+      "label": "Install an LLM API key",
+      "hint": "Required for the AI analysis features"
+    },
+    "embedding": {
+      "label": "Set up Embedding (Second Brain)",
+      "hint": "Optional — helps recall similar past incidents"
+    }
+  }
+}

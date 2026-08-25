@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
 import { CreateProjectDialog } from "@/components/workspace/CreateProjectDialog"
+import { OnboardingChecklist } from "@/components/workspace/OnboardingChecklist"
 import { RenameProjectDialog } from "@/components/workspace/RenameProjectDialog"
 import type { Project } from "@/types/workspace"
 import { useAuth } from "@/hooks/useAuth"
@@ -90,6 +91,13 @@ export function WorkspacesPage() {
           </Button>
         </div>
       </div>
+
+      {/* Onboarding checklist — auto-centang dari data nyata, dismiss per-user */}
+      <OnboardingChecklist
+        wsSlug={wsSlug ?? ""}
+        workspaceId={workspace?.id ?? null}
+        onCreateProject={() => setCreateOpen(true)}
+      />
 
       {/* Grid project */}
       <div className="mt-6">

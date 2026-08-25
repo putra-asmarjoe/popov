@@ -21,6 +21,7 @@ import { cn, formatDate } from "@/lib/utils"
 import { WorkspaceKnowledge } from "@/components/workspace/WorkspaceKnowledge"
 import { WorkspaceServicesKnowledge } from "@/components/workspace/WorkspaceServicesKnowledge"
 import { WorkspaceServiceHierarchy } from "@/components/workspace/WorkspaceServiceHierarchy"
+import { OnboardingBackStrip } from "@/components/workspace/OnboardingBackStrip"
 import { ObservabilityTargets } from "@/components/workspace/ObservabilityTargets"
 import { NotificationChannels } from "@/components/workspace/NotificationChannels"
 import type { WorkspaceMember } from "@/types/workspace"
@@ -105,6 +106,9 @@ export function WorkspaceSettingsPage() {
           <ArrowLeft className="size-4" /> {t("back")}
         </Link>
       </Button>
+
+      {/* Jalur pulang bila datang dari onboarding checklist */}
+      <OnboardingBackStrip backTo={`/w/${wsSlug}`} />
 
       <h1 className="text-xl font-semibold tracking-tight">{t("title")}</h1>
       <p className="mt-1 text-sm text-muted-foreground">

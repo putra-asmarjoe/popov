@@ -7,6 +7,7 @@ import { ApiKeyForm } from "@/components/management/ApiKeyForm"
 import { KnowledgeManager } from "@/components/management/KnowledgeManager"
 import { MemoryViewer } from "@/components/management/MemoryViewer"
 import { ObservabilityTargets } from "@/components/workspace/ObservabilityTargets"
+import { OnboardingBackStrip } from "@/components/workspace/OnboardingBackStrip"
 import { useAuth } from "@/hooks/useAuth"
 import { cn } from "@/lib/utils"
 
@@ -54,6 +55,9 @@ export function ManagementPage() {
 
   return (
     <div className="mx-auto max-w-5xl p-6 md:p-8">
+      {/* Jalur pulang bila datang dari onboarding checklist */}
+      <OnboardingBackStrip backTo="/" />
+
       <h1 className="text-xl font-semibold tracking-tight">{t("page.title")}</h1>
       <p className="mt-1 text-sm text-muted-foreground">{t("page.subtitle")}</p>
 
