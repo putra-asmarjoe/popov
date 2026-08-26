@@ -14,7 +14,6 @@ export function useTickets(projectId: string | null, filters: TicketFilters, pag
         params: {
           status: filters.status.length ? filters.status.join(",") : undefined,
           severity: filters.severity.length ? filters.severity.join(",") : undefined,
-          environment: filters.environment ?? undefined,
           assignee: filters.assignee ?? undefined,
           search: filters.search || undefined,
           page,
@@ -75,7 +74,6 @@ export function useCreateTicket(projectId: string | null) {
       description: string
       kind: string
       severity: string
-      environment: string
       traceId?: string
       tags?: string[]
     }) => {
@@ -100,7 +98,6 @@ export function useUpdateTicket() {
       severity?: string
       tags?: string[]
       kind?: string
-      environment?: string
       traceId?: string
     }) => {
       const { data } = await api.patch(`/tickets/${id}`, input)

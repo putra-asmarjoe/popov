@@ -24,7 +24,6 @@ const makeSchema = (t: TFunction) =>
     description: z.string().min(10, t("form.validation.description_min")),
     kind: z.enum(["business_logic", "infrastructure"]),
     severity: z.enum(["critical", "high", "medium", "low"]),
-    environment: z.enum(["production", "staging", "development"]),
     traceId: z
       .string()
       .regex(/^[0-9a-fA-F]{16,64}$/, t("form.validation.trace_hex"))
@@ -40,7 +39,6 @@ export interface TicketFormValues {
   description: string
   kind: "business_logic" | "infrastructure"
   severity: "critical" | "high" | "medium" | "low"
-  environment: "production" | "staging" | "development"
   traceId?: string
   tags?: string[]
 }
@@ -74,7 +72,6 @@ export function TicketForm({
       description: initial?.description ?? "",
       kind: initial?.kind ?? "business_logic",
       severity: initial?.severity ?? "medium",
-      environment: initial?.environment ?? "production",
       traceId: initial?.traceId ?? "",
       tagsInput: (initial?.tags ?? []).join(", "),
     },
@@ -86,7 +83,6 @@ export function TicketForm({
     setValue("description", initial?.description ?? "")
     setValue("kind", initial?.kind ?? "business_logic")
     setValue("severity", initial?.severity ?? "medium")
-    setValue("environment", initial?.environment ?? "production")
     setValue("traceId", initial?.traceId ?? "")
     setValue("tagsInput", (initial?.tags ?? []).join(", "))
   }, [initial, setValue])
@@ -141,17 +137,6 @@ export function TicketForm({
               <SelectItem value="high">{t("ticket.severity.high")}</SelectItem>
               <SelectItem value="medium">{t("ticket.severity.medium")}</SelectItem>
               <SelectItem value="low">{t("ticket.severity.low")}</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1.5">
-          <Label>Environment</Label>
-          <Select value={watch("environment")} onValueChange={(v) => setValue("environment", v as FormValues["environment"])}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="production">Production</SelectItem>
-              <SelectItem value="staging">Staging</SelectItem>
-              <SelectItem value="development">Development</SelectItem>
             </SelectContent>
           </Select>
         </div>

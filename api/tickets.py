@@ -251,6 +251,7 @@ async def edit_ticket(
             kind=body.kind,
             environment=body.environment,
             trace_id=body.traceId,
+            actor=current_user,
         )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))

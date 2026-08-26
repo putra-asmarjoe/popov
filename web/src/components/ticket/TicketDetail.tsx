@@ -101,7 +101,6 @@ export function TicketDetail({
         {/* Meta grid */}
         <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
           <Meta label="Kind" value={t(`ticket.kind.${ticket.kind}`)} />
-          <Meta label="Environment" value={ticket.environment} />
           <div className="col-span-2">
             <p className="text-muted-foreground">Trace ID</p>
             {ticket.traceId ? (
@@ -286,7 +285,6 @@ export function TicketDetail({
                   description: values.description,
                   severity: values.severity,
                   kind: values.kind,
-                  environment: values.environment,
                   traceId: values.traceId ?? "",
                   tags: values.tags,
                 },

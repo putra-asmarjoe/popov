@@ -151,7 +151,7 @@ async def _execute_action(
             target = "closed" if status_now == "resolved" else "resolved"
             if status_now == "closed":
                 return await _reply(state, agents_visited, f"ℹ️ Tiket {display} sudah *closed*.")
-            updated, cerr = await change_status(ticket, target, user)
+            updated, cerr = await change_status(ticket, target, user, via="agent")
             if cerr:
                 return await _reply(state, agents_visited, f"⚠️ {cerr}")
             verb = "ditutup (resolved)" if target == "resolved" else "ditutup (closed)"
@@ -161,12 +161,12 @@ async def _execute_action(
             if not can_reopen(status_now):
                 return await _reply(state, agents_visited,
                                     f"⚠️ Hanya tiket resolved/closed yang bisa dibuka kembali. Status saat ini: *{status_now}*.")
-            updated = await reopen_ticket(ticket, user)
+            updated = await reopen_ticket(ticket, user, via="agent")
             msg = f"🔄 Tiket {display} dibuka kembali (status *open*)."
 
         elif action == "change_status":
             target = params["status"]
-            updated, cerr = await change_status(ticket, target, user)
+            updated, cerr = await change_status(ticket, target, user, via="agent")
             if cerr:
                 return await _reply(state, agents_visited, f"⚠️ {cerr}")
             msg = f"✅ Status tiket {display} diubah: *{status_now}* → *{target}*."
@@ -175,7 +175,7 @@ async def _execute_action(
             severity = params["severity"]
             if severity not in VALID_SEVERITIES:
                 return await _reply(state, agents_visited, f"⚠️ Severity tidak valid: {severity}")
-            updated = await update_ticket(str(ticket["_id"]), severity=severity)
+            updated = await update_ticket(str(ticket["_id"]), severity=severity, actor=user, via="agent")
             msg = f"✅ Severity tiket {display}: *{ticket.get('severity')}* → *{severity}*."
 
         elif action == "add_label":

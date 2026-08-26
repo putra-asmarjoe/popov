@@ -109,7 +109,6 @@ export function ProjectPage() {
       ticketNumber: `${project?.key ?? ""}-${detailTicket.ticketNumber}`,
       title: detailTicket.title,
       traceId: detailTicket.traceId,
-      environment: detailTicket.environment,
       serviceName: detailTicket.serviceName ?? null, // Fix #49
     }
   }, [detailTicket, project?.key])

@@ -26,7 +26,6 @@ export function NewTicketPage() {
       description: values.description,
       kind: values.kind,
       severity: values.severity,
-      environment: values.environment,
       traceId: values.traceId,
       tags: values.tags,
     })

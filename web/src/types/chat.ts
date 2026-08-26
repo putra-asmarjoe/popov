@@ -23,6 +23,5 @@ export interface TicketContext {
   ticketNumber: string // display "CORE-4"
   title: string
   traceId: string | null
-  environment: string
   serviceName: string | null // Fix #49: subject service tiket (utk routing + prefix)
 }

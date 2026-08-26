@@ -326,8 +326,12 @@ async def update_ticket(
     kind: Optional[str] = None,
     environment: Optional[str] = None,
     trace_id: Optional[str] = None,
+    actor: Optional[Dict[str, Any]] = None,
+    via: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Edit field tiket. None = tidak diubah. trace_id="" berarti hapus."""
+    """Edit field tiket. None = tidak diubah. trace_id="" berarti hapus.
+    Perubahan severity tercatat di progressLog bila `actor` diberikan
+    (siapa & kapan; via="agent" menandai eksekusi AI agent)."""
     set_doc: Dict[str, Any] = {"updatedAt": _now_iso()}
     if title is not None:
         set_doc["title"] = title.strip()
@@ -353,9 +357,29 @@ async def update_ticket(
             raise ValueError("TraceId harus hex 16-64 karakter")
         set_doc["traceId"] = trace_id or None
 
+    # Progress entry utk perubahan severity — butuh nilai lama dari dokumen saat ini
+    severity_entry = None
+    if severity is not None and actor is not None:
+        current = await get_ticket(ticket_id)
+        old_severity = (current or {}).get("severity")
+        if current is not None and old_severity != severity:
+            severity_entry = {
+                "id": uuid.uuid4().hex[:8],
+                "note": (
+                    f"Severity changed: {old_severity} → {severity}"
+                    + (" via Popov Agent" if via == "agent" else "")
+                ),
+                "by": str(actor["_id"]),
+                "byName": actor.get("name", ""),
+                "at": _now_iso(),
+            }
+
     db = get_db()
+    update_ops: Dict[str, Any] = {"$set": set_doc}
+    if severity_entry is not None:
+        update_ops["$push"] = {"progressLog": severity_entry}
     doc = await db[TICKETS_COLLECTION].find_one_and_update(
-        {"_id": ObjectId(ticket_id)}, {"$set": set_doc}, return_document=True
+        {"_id": ObjectId(ticket_id)}, update_ops, return_document=True
     )
     if doc is not None:
         _emit_ticket_event("ticket:updated", doc, status=doc.get("status", "open"))
@@ -388,30 +412,49 @@ async def remove_assignee(ticket_id: str, user_id: str) -> Optional[Dict[str, An
 
 
 async def change_status(
-    ticket: Dict[str, Any], target: str, user: Dict[str, Any]
+    ticket: Dict[str, Any], target: str, user: Dict[str, Any],
+    *, via: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """Forward-only transition. Return (doc, error)."""
-    if not valid_transition(ticket.get("status", "open"), target):
-        return None, f"Transisi {ticket.get('status')} → {target} tidak valid"
-    set_doc: Dict[str, Any] = {"status": target, "updatedAt": _now_iso()}
+    """Forward-only transition. Setiap perubahan status tercatat di progressLog
+    (siapa & kapan) — termasuk auto-open new→open. via="agent" menandai aksi
+    yang dieksekusi AI agent atas nama user. Return (doc, error)."""
+    old = ticket.get("status", "open")
+    if not valid_transition(old, target):
+        return None, f"Transisi {old} → {target} tidak valid"
+    now = _now_iso()
+    set_doc: Dict[str, Any] = {"status": target, "updatedAt": now}
     if target == "resolved":
-        set_doc["resolvedAt"] = _now_iso()
+        set_doc["resolvedAt"] = now
         set_doc["resolvedBy"] = str(user["_id"])
         set_doc["resolvedByName"] = user.get("name", "")
+    entry = {
+        "id": uuid.uuid4().hex[:8],
+        "note": (
+            f"Status changed: {old} → {target}"
+            + (" via Popov Agent" if via == "agent" else "")
+        ),
+        "by": str(user["_id"]),
+        "byName": user.get("name", ""),
+        "at": now,
+    }
     db = get_db()
     doc = await db[TICKETS_COLLECTION].find_one_and_update(
-        {"_id": ticket["_id"]}, {"$set": set_doc}, return_document=True
+        {"_id": ticket["_id"]},
+        {"$set": set_doc, "$push": {"progressLog": entry}},
+        return_document=True,
     )
     if doc is not None:
         _emit_ticket_event("ticket:status_changed", doc, status=target)
     return doc, None
 
 
-async def reopen_ticket(ticket: Dict[str, Any], user: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def reopen_ticket(
+    ticket: Dict[str, Any], user: Dict[str, Any], *, via: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """resolved|closed → open + progress entry otomatis."""
     entry = {
         "id": uuid.uuid4().hex[:8],
-        "note": "Tiket dibuka kembali",
+        "note": "Ticket reopened" + (" via Popov Agent" if via == "agent" else ""),
         "by": str(user["_id"]),
         "byName": user.get("name", ""),
         "at": _now_iso(),

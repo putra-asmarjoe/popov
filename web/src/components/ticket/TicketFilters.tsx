@@ -15,7 +15,7 @@ import type { TicketSeverity, TicketStatus } from "@/types/ticket"
 const ALL_STATUSES: TicketStatus[] = ["new", "open", "in_progress", "needs_review", "resolved", "closed"]
 const ALL_SEVERITIES: TicketSeverity[] = ["critical", "high", "medium", "low"]
 
-/** Filter bar tiket: status & severity multi, environment & assignee select, search debounce. */
+/** Filter bar tiket: status & severity multi, assignee select, search debounce. */
 export function TicketFilters({ members }: { members: WorkspaceMember[] }) {
   const { t } = useTranslation("project")
   const { filters, setFilters, resetFilters } = useTicketStore()
@@ -33,7 +33,6 @@ export function TicketFilters({ members }: { members: WorkspaceMember[] }) {
   const activeCount =
     filters.status.length +
     filters.severity.length +
-    (filters.environment ? 1 : 0) +
     (filters.assignee ? 1 : 0) +
     (filters.search ? 1 : 0)
 
@@ -86,22 +85,6 @@ export function TicketFilters({ members }: { members: WorkspaceMember[] }) {
           onToggle: () => toggleSeverity(s),
         }))}
       />
-
-      {/* Environment */}
-      <Select
-        value={filters.environment ?? "all"}
-        onValueChange={(v) => setFilters({ environment: v === "all" ? null : v })}
-      >
-        <SelectTrigger className="h-8 w-36 text-sm">
-          <SelectValue placeholder="Environment" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="all">{t("filter.all_environments")}</SelectItem>
-          <SelectItem value="production">Production</SelectItem>
-          <SelectItem value="staging">Staging</SelectItem>
-          <SelectItem value="development">Development</SelectItem>
-        </SelectContent>
-      </Select>
 
       {/* Assignee */}
       <Select

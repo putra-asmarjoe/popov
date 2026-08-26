@@ -4,7 +4,6 @@ import type { Ticket, TicketStatus } from "@/types/ticket"
 export interface TicketFilters {
   status: TicketStatus[]
   severity: string[]
-  environment: string | null
   assignee: string | null
   search: string
 }
@@ -21,7 +20,6 @@ interface TicketStore {
 const DEFAULT_FILTERS: TicketFilters = {
   status: [],
   severity: [],
-  environment: null,
   assignee: null,
   search: "",
 }
