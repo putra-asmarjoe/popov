@@ -128,6 +128,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.getLogger(__name__).warning(f"Doc loader warm-up gagal (fallback file): {e}")
     polling_task = asyncio.create_task(start_polling())
+    # Fix #107: event tap — relay realtime lintas-proses. Watchdog worker menulis
+    # event ke `realtime_events` (MongoDB); task ini mem-publish-nya ke bus proses
+    # API agar sampai ke koneksi WS browser (tiket baru, alert ter-link, notifikasi).
+    from services.event_tap import start_event_tap
+    tap_task = start_event_tap()
     # SCALE plan Layer 1 (Fix B3): watchdog + auto_feedback TIDAK lagi berjalan
     # di proses FastAPI — jalankan `python watchdog_worker.py` terpisah
     # (WAJIB tepat 1 instance; lihat deploy/watchdog-deployment.yaml).
@@ -137,7 +142,7 @@ async def lifespan(app: FastAPI):
     #    listener dipindah ke worker terpisah (lihat README bagian Scaling).
     yield
     # Shutdown
-    for task in (polling_task,):
+    for task in (polling_task, tap_task):
         if task is None:
             continue
         task.cancel()

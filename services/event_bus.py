@@ -61,4 +61,14 @@ def emit(channel: str, event: Dict) -> None:
         loop.create_task(bus.publish(channel, event))
     except RuntimeError:
         # tidak ada event loop (mis. sync context) — lewati
-        pass
+        return
+    # Fix #107: proses non-API (watchdog worker) tidak punya koneksi WS —
+    # teruskan event via MongoDB (collection realtime_events) agar di-tap
+    # dan dipublish oleh proses API sampai ke browser.
+    try:
+        from services.event_relay import is_enabled, forward_event
+
+        if is_enabled():
+            loop.create_task(forward_event(channel, event))
+    except Exception as e:
+        logger.warning(f"[event-bus] relay skip (non-fatal): {e}")

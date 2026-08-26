@@ -36,6 +36,11 @@ logger = logging.getLogger("watchdog_worker")
 async def main() -> None:
     logger.info("[WatchdogWorker] starting dedicated watchdog process")
 
+    # Fix #107: proses ini TIDAK memegang koneksi WS browser — enable relay agar
+    # event tiket/notifikasi yang lahir di sini diteruskan ke bus proses API.
+    from services.event_relay import enable_event_relay
+    enable_event_relay()
+
     # Ensure indexes exist (idempotent) before the scheduler starts writing alerts
     try:
         await ensure_indexes()
