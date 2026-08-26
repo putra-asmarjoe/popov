@@ -353,3 +353,20 @@ async def get_watchdog_alert(alert_id: str) -> Optional[dict]:
     except Exception as e:
         logger.error(f"Failed to get watchdog alert '{alert_id}': {e}")
         return None
+
+
+async def update_watchdog_alert_message(alert_id: str, message: str) -> bool:
+    """
+    Patch pesan alert tersimpan (Fix #105) — nomor tiket baru diketahui SETELAH
+    dokumen alert dibuat, jadi pesan di-update sebelum broadcast agar tombol
+    "Cek Detail" menampilkan teks yang sama dgn broadcast.
+    """
+    try:
+        db = get_db()
+        result = await db[WATCHDOG_ALERT_COLLECTION].update_one(
+            {"alert_id": alert_id}, {"$set": {"message": message}}
+        )
+        return result.matched_count > 0
+    except Exception as e:
+        logger.error(f"Failed to update watchdog alert message '{alert_id}': {e}")
+        return False

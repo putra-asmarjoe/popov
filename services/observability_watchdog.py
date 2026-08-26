@@ -178,7 +178,12 @@ class WatchdogScheduler:
         key = self.target_key(target)
         logger.info(f"[Scheduler] checking stack '{key}' (webhook_mode={bool(target.get('webhook_mode'))})")
         try:
-            if target.get("webhook_mode"):
+            if target.get("kind") == "otel":
+                # Central Log (OTel): bukan sumber alert — health = ping DB log (Fix #108)
+                from services.observability_store import record_health_status, test_otel_connection
+                r = await test_otel_connection(target, timeout_s=4.0)
+                await record_health_status(target["observ_id"], "ok" if r["overall"] == "ok" else str(r["overall"]))
+            elif target.get("webhook_mode"):
                 await self._health_check_only(target)
             else:
                 await self._full_check(target)
@@ -232,6 +237,23 @@ class WatchdogScheduler:
             prometheus_url=target.get("prometheus_url"),
             tempo_url=target.get("tempo_url"),
         )
+
+        # Health status stack mode polling: verdict hanya atas sumber yang
+        # terisi di target ini (Fix #108 — kolom Health sebelumnya tak pernah
+        # terisi utk mode poll karena hanya webhook_mode yg menulis).
+        try:
+            from services.observability_store import record_health_status
+            url_fields = {"alertmanager": "alertmanager_url", "prometheus": "prometheus_url", "tempo": "tempo_url"}
+            st = aggregate.get("sources_status") or {}
+            bad = [
+                name for name, s in st.items()
+                if (target.get(url_fields[name]) or "").strip() and s != "ok"
+            ]
+            await record_health_status(
+                target["observ_id"], "ok" if not bad else f"degraded:{','.join(bad)}"
+            )
+        except Exception:
+            pass
 
         services = aggregate.get("services", {})
         if not services:
@@ -296,8 +318,43 @@ def _extract_trace_ids(alerts: list) -> list:
     return trace_ids
 
 
-def _format_service_message(service: str, alerts: list) -> str:
-    lines = [f"🚨 *Observability Alert — {service}*", ""]
+# ── Teks pesan alert multi-bahasa (Fix #105) ────────────────────────────────
+# Bahasa di-resolve dari preferensi OWNER workspace (services/locale_pref.py).
+# Hanya pesan broadcast Telegram yang ikut locale — teks tersimpan di DB tetap
+# English (konvensi Fix #104). Fallback "en" untuk locale tak dikenal.
+
+ALERT_TEXTS: dict[str, dict[str, str]] = {
+    "en": {
+        "header": "🚨 *Observability Alert — {service}*",
+        "trace_5xx": "• Trace 5xx (duration {ms} ms, {n} spans)",
+        "source_traceid": "   Source: tempo · TraceID: `{tid}`",
+        "operation": "   Operation: {op}",
+        "services_involved": "   Services involved: {list}",
+        "error_spans": "   ⚠️ Error spans ({n}):",
+        "active_since": "   Source: {source} · Active since: {at}",
+        "new_tickets": "🎟️ New ticket(s): {list}",
+        "linked_tickets": "♻️ Alert linked to existing ticket(s): {list}",
+    },
+    "id": {
+        "header": "🚨 *Alert Observabilitas — {service}*",
+        "trace_5xx": "• Trace 5xx (durasi {ms} ms, {n} span)",
+        "source_traceid": "   Sumber: tempo · TraceID: `{tid}`",
+        "operation": "   Operasi: {op}",
+        "services_involved": "   Service terlibat: {list}",
+        "error_spans": "   ⚠️ Span error ({n}):",
+        "active_since": "   Sumber: {source} · Aktif sejak: {at}",
+        "new_tickets": "🎟️ Tiket baru: {list}",
+        "linked_tickets": "♻️ Alert ter-link ke tiket yang sudah ada: {list}",
+    },
+}
+
+
+def _texts(locale: str) -> dict[str, str]:
+    return ALERT_TEXTS.get(locale) or ALERT_TEXTS["en"]
+
+
+def _format_service_message(service: str, alerts: list, t: dict[str, str]) -> str:
+    lines = [t["header"].format(service=service), ""]
     for alert in alerts:
         source = alert.get("source", "unknown")
 
@@ -311,14 +368,16 @@ def _format_service_message(service: str, alerts: list) -> str:
             services_involved = alert.get("services_involved") or []
             error_spans = alert.get("error_spans") or []
 
-            lines.append(f"• Trace 5xx (durasi {duration_ms} ms, {span_count_str} span)")
-            lines.append(f"   Sumber: tempo · TraceID: `{trace_id}`")
+            lines.append(t["trace_5xx"].format(ms=duration_ms, n=span_count_str))
+            lines.append(t["source_traceid"].format(tid=trace_id))
             if root_trace:
-                lines.append(f"   Operasi: {root_trace}")
+                lines.append(t["operation"].format(op=root_trace))
             if services_involved:
-                lines.append(f"   Service terlibat: {', '.join(services_involved[:5])}")
+                lines.append(
+                    t["services_involved"].format(list=", ".join(services_involved[:5]))
+                )
             if error_spans:
-                lines.append(f"   ⚠️ Span error ({len(error_spans)}):")
+                lines.append(t["error_spans"].format(n=len(error_spans)))
                 for es in error_spans[:5]:
                     lines.append(f"      • {es.get('name')} ({es.get('service', 'unknown')})")
             lines.append("")
@@ -329,7 +388,7 @@ def _format_service_message(service: str, alerts: list) -> str:
         active_at = alert.get("active_at") or "—"
         desc = alert.get("description") or ""
         lines.append(f"• [{severity}] {name}")
-        lines.append(f"   Sumber: {source} · Aktif sejak: {active_at}")
+        lines.append(t["active_since"].format(source=source, at=active_at))
         if desc:
             lines.append(f"   {desc[:300]}")
         lines.append("")
@@ -398,7 +457,12 @@ async def process_service_alerts(
         logger.info(f"[Dedup] {service}: konten sama sudah di-broadcast <{DEDUP_WINDOW_MINUTES}m — skip")
         return 0
 
-    text = _format_service_message(service, alerts)
+    # Fix #105: bahasa pesan ikut preferensi owner workspace (fallback en)
+    from services.locale_pref import get_workspace_locale
+
+    t = _texts(await get_workspace_locale(workspace_id))
+
+    text = _format_service_message(service, alerts, t)
     if tr:
         hyp = tr.get("hypothesis")
         dep = tr.get("deploy_detected")
@@ -423,9 +487,11 @@ async def process_service_alerts(
 
     # FE-4 auto-ticket (Fix #40): SATU alert → tiket di SEMUA project yang memakai
     # service ini (incident_router), masing-masing dengan fingerprint ber-suffix project.
+    # Fix #105: label nomor tiket (baru & ter-link) dicantumkan di pesan broadcast.
+    ticket_refs: dict[str, list] = {"new": [], "linked": []}
     try:
         from services.auto_ticket import maybe_create_watchdog_ticket
-        tickets = await maybe_create_watchdog_ticket(
+        tickets, ticket_refs = await maybe_create_watchdog_ticket(
             service,
             alerts,
             alert_id,
@@ -434,6 +500,22 @@ async def process_service_alerts(
         )
         if len(tickets) > 1:
             logger.info(f"Auto-ticket: {len(tickets)} tiket dibuat untuk '{service}' (multi-project)")
+        ticket_lines = []
+        if ticket_refs.get("new"):
+            ticket_lines.append(t["new_tickets"].format(list=", ".join(ticket_refs["new"])))
+        if ticket_refs.get("linked"):
+            ticket_lines.append(
+                t["linked_tickets"].format(list=", ".join(ticket_refs["linked"]))
+            )
+        if ticket_lines:
+            text += "\n\n" + "\n".join(ticket_lines)
+            # Sinkronkan dokumen yang dibaca tombol "Cek Detail" (Fix #105)
+            if alert_id:
+                try:
+                    from services.request_log import update_watchdog_alert_message
+                    await update_watchdog_alert_message(alert_id, text)
+                except Exception as e:
+                    logger.warning(f"Gagal sinkron pesan alert '{alert_id}' (non-fatal): {e}")
     except Exception as e:
         logger.warning(f"Auto-ticket hook failed untuk '{service}': {e}")
 

@@ -227,7 +227,7 @@ async def aggregate_observability(
     Override URL per-stack (SCALE plan multi-target); None = settings global.
     Return struktur {checked_at, sources, services}.
     """
-    results = await _fetch_all_sources(alertmanager_url, prometheus_url, tempo_url)
+    results, sources_status = await _fetch_all_sources(alertmanager_url, prometheus_url, tempo_url)
     filtered_results = {}
     for source_name, alerts in results.items():
         filtered_results[source_name] = [
@@ -246,6 +246,7 @@ async def aggregate_observability(
     return {
         "checked_at": datetime.now(timezone.utc).isoformat(),
         "sources": filtered_results,
+        "sources_status": sources_status,
         "services": services,
     }
 
@@ -254,26 +255,38 @@ async def _fetch_all_sources(
     alertmanager_url: Optional[str] = None,
     prometheus_url: Optional[str] = None,
     tempo_url: Optional[str] = None,
-) -> Dict[str, List[Dict[str, Any]]]:
-    """Jalankan ketiga sumber secara paralel; setiap kegagalan menghasilkan daftar kosong."""
-    alertmanager_task = get_alertmanager_active(alertmanager_url)
-    prometheus_task = get_prometheus_firing(prometheus_url)
-    tempo_task = get_tempo_5xx(limit=5, tempo_url_override=tempo_url)
+) -> tuple[Dict[str, List[Dict[str, Any]]], Dict[str, str]]:
+    """Jalankan ketiga sumber secara paralel; setiap kegagalan menghasilkan daftar kosong.
+    Return (data_per_sumber, status_per_sumber): status ∈ ok | error:<Exc> | disabled
+    (URL kosong / observability off = disabled — bukan bagian stack ini).
+    Status dipakai watchdog utk menulis health_status stack."""
+    tasks: Dict[str, Any] = {
+        "alertmanager": get_alertmanager_active(alertmanager_url),
+        "prometheus": get_prometheus_firing(prometheus_url),
+        "tempo": get_tempo_5xx(limit=5, tempo_url_override=tempo_url),
+    }
+    urls = {"alertmanager": alertmanager_url, "prometheus": prometheus_url, "tempo": tempo_url}
+    names = list(tasks)
 
     try:
-        alertmanager, prometheus, tempo = await asyncio.gather(
-            alertmanager_task, prometheus_task, tempo_task,
-            return_exceptions=True,
-        )
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
     except Exception as e:  # sangat defensif; gather dengan return_exceptions jarang raise
         logger.error(f"Observability gather failed: {e}")
-        alertmanager, prometheus, tempo = [], [], []
+        results = [Exception(e)] * len(names)
 
-    return {
-        "alertmanager": alertmanager if isinstance(alertmanager, list) else [],
-        "prometheus": prometheus if isinstance(prometheus, list) else [],
-        "tempo": tempo if isinstance(tempo, list) else [],
-    }
+    data: Dict[str, List[Dict[str, Any]]] = {}
+    status: Dict[str, str] = {}
+    for name, res in zip(names, results):
+        if not (urls.get(name) or "").strip() or not settings.observability_enabled:
+            status[name] = "disabled"
+            data[name] = []
+        elif isinstance(res, BaseException):
+            status[name] = f"error:{type(res).__name__}"
+            data[name] = []
+        else:
+            status[name] = "ok"
+            data[name] = res
+    return data, status
 
 
 def _stable_alert_identity(alert: Dict[str, Any]) -> str:

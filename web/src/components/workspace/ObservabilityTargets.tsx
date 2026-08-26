@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Copy, KeyRound, PlugZap, Plus, Trash2, X } from "lucide-react"
-import { apiErrorMessage } from "@/lib/api"
+import { Copy, KeyRound, Pencil, PlugZap, Plus, Trash2, X } from "lucide-react"
+import { api, apiErrorMessage } from "@/lib/api"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -30,9 +30,11 @@ import {
   useObservabilityTargetMutations,
   useObservabilityTargets,
   useTestTargetUrl,
-  type ObservabilityTarget,
+  useTestCentralLog,
   useTestTargetConnection,
   useStackProjectLinks,
+  type ObservabilityTarget,
+  type ObservabilityTargetCreateInput,
 } from "@/hooks/useManagement"
 import { useAuth } from "@/hooks/useAuth"
 import { useProjects } from "@/hooks/useWorkspaces"
@@ -43,6 +45,7 @@ const OBS_KINDS = [
   { id: "alertmanager", label: "Alertmanager", placeholder: "http://alertmanager:9093" },
   { id: "tempo", label: "Tempo", placeholder: "http://tempo:3200" },
   { id: "loki", label: "Loki", placeholder: "http://loki:3100" },
+  { id: "otel", label: "Central Log (OTel)", placeholder: "" },
 ] as const
 
 type ObsKind = (typeof OBS_KINDS)[number]["id"]
@@ -120,6 +123,7 @@ export function ObservabilityTargets({ workspaceId }: { workspaceId?: string }) 
   const { create, remove, rotateToken } = useObservabilityTargetMutations()
   const testUrl = useTestTargetConnection()
   const [createOpen, setCreateOpen] = useState(false)
+  const [editing, setEditing] = useState<ObservabilityTarget | null>(null)
   const [snippetView, setSnippetView] = useState<{ name: string; snippet: string; token: string } | null>(null)
   // FE-UX: ganti confirm() native dengan modal — rotate | delete
   const [confirmAct, setConfirmAct] = useState<
@@ -185,7 +189,13 @@ export function ObservabilityTargets({ workspaceId }: { workspaceId?: string }) 
                 <TableRow key={tg.observ_id}>
                   <TableCell>
                     <div className="font-medium">{tg.name}</div>
-                    <div className="font-mono text-xs text-muted-foreground">{tg.observ_id}</div>
+                    {tg.kind === "otel" && tg.log_db_uri_masked ? (
+                      <div className="font-mono text-xs text-muted-foreground">
+                        {tg.log_db_uri_masked} · {tg.log_db_name}
+                      </div>
+                    ) : (
+                      <div className="font-mono text-xs text-muted-foreground">{tg.observ_id}</div>
+                    )}
                   </TableCell>
                   {!workspaceId && (
                     <TableCell className="hidden text-xs sm:table-cell">
@@ -231,7 +241,22 @@ export function ObservabilityTargets({ workspaceId }: { workspaceId?: string }) 
                           await testUrl.mutateAsync(tg.observ_id)
                         }}
                       >
-                        {testUrl.isPending ? "…" : "Test"}
+                        {testUrl.isPending ? (
+                          "…"
+                        ) : (
+                          <>
+                            <PlugZap className="mr-1 size-3" /> Test
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-7"
+                        title={t("action.edit", { ns: "common" })}
+                        onClick={() => { setEditing(tg); setCreateOpen(true) }}
+                      >
+                        <Pencil className="size-3.5" />
                       </Button>
                       <Button
                         variant="ghost"
@@ -260,10 +285,12 @@ export function ObservabilityTargets({ workspaceId }: { workspaceId?: string }) 
       </div>
 
       <CreateStackDialog
+        key={editing?.observ_id ?? "new"}
         open={createOpen}
-        onOpenChange={setCreateOpen}
+        onOpenChange={(o) => { setCreateOpen(o); if (!o) setEditing(null) }}
         submitting={create.isPending}
         fixedWorkspaceId={workspaceId}
+        editing={editing}
         onCreated={(r) => {
           if (r.target.webhook_mode) {
             setSnippetView({ name: r.target.name, snippet: r.alertmanager_snippet, token: r.webhook_token })
@@ -323,35 +350,84 @@ function CreateStackDialog({
   submitting,
   onCreated,
   fixedWorkspaceId,
+  editing,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   submitting: boolean
-  onCreated: (r: { target: ObservabilityTarget; webhook_token: string; alertmanager_snippet: string }) => void
+  onCreated?: (r: { target: ObservabilityTarget; webhook_token: string; alertmanager_snippet: string }) => void
   fixedWorkspaceId?: string
+  /** Mode edit: prefill form dari target ini; kind terkunci; URI otel blank = tetap */
+  editing?: ObservabilityTarget | null
 }) {
   const { t } = useTranslation("settings")
-  const { create } = useObservabilityTargetMutations()
+  const { create, update } = useObservabilityTargetMutations()
   const testUrl = useTestTargetUrl()
-  const [name, setName] = useState("")
+  const testCentralLog = useTestCentralLog()
+  const isEdit = !!editing
+  const [name, setName] = useState(editing?.name ?? "")
   const [workspaceId, setWorkspaceId] = useState("")
-  const [kind, setKind] = useState<ObsKind>("prometheus")
-  const [urls, setUrls] = useState<Record<ObsKind, string>>({ prometheus: "", alertmanager: "", tempo: "", loki: "" })
-  const [webhookMode, setWebhookMode] = useState(false)
+  const [kind, setKind] = useState<ObsKind>((editing?.kind as ObsKind) ?? "prometheus")
+  const [urls, setUrls] = useState<Record<Exclude<ObsKind, "otel">, string>>({
+    prometheus: editing?.prometheus_url ?? "",
+    alertmanager: editing?.alertmanager_url ?? "",
+    tempo: editing?.tempo_url ?? "",
+    loki: editing?.loki_url ?? "",
+  })
+  // kind="otel" — Central Log OTel (DB log span_logs/http_logs)
+  const [logDbType, setLogDbType] = useState<string>(editing?.log_db_type ?? "mongodb")
+  const [logDbUri, setLogDbUri] = useState("") // edit: kosong = pertahankan URI lama (write-only)
+  const [logDbName, setLogDbName] = useState(editing?.log_db_name ?? "")
+  const [spanCollection, setSpanCollection] = useState(editing?.span_collection || "span_logs")
+  const [httpCollection, setHttpCollection] = useState(editing?.http_collection || "http_logs")
+  const [webhookMode, setWebhookMode] = useState(editing?.webhook_mode ?? false)
   // Hasil cek koneksi terakhir, terikat ke kind yang dicek
   const [check, setCheck] = useState<{ kind: ObsKind; status: "pending" | "ok" | "fail"; msg?: string } | null>(null)
 
+  const isOtel = kind === "otel"
   const currentMeta = OBS_KINDS.find((k) => k.id === kind)!
   const hasUrl = Object.values(urls).some((v) => v.trim().startsWith("http"))
-  const valid = name.trim().length >= 3 && hasUrl
+  const otelValid =
+    (isEdit || logDbUri.trim().length > 0) &&
+    logDbName.trim().length > 0
+  const valid =
+    name.trim().length >= 3 && (isOtel ? otelValid : hasUrl)
 
-  const setUrl = (k: ObsKind, v: string) => {
+  const setUrl = (k: Exclude<ObsKind, "otel">, v: string) => {
     setUrls((prev) => ({ ...prev, [k]: v }))
     setCheck(null)
   }
 
   const runCheck = async () => {
-    const url = urls[kind].trim()
+    if (isOtel) {
+      // Mode edit tanpa URI baru → test pakai URI tersimpan di target (backend baca raw dari DB)
+      if (isEdit && editing && !logDbUri.trim()) {
+        setCheck({ kind, status: "pending" })
+        try {
+          const { data: r } = await api.post(`/config/observability-targets/${editing.observ_id}/test-connection`)
+          const src = r.sources?.central_log
+          if (r.overall === "ok") setCheck({ kind, status: "ok", msg: t("observability.otel_check_ok") })
+          else if (src?.status === "db_not_found") setCheck({ kind, status: "fail", msg: t("observability.otel_check_db_missing", { db: logDbName.trim() }) })
+          else setCheck({ kind, status: "fail", msg: t("observability.check_fail", { status: src?.status ?? r.overall }) })
+        } catch (e) {
+          setCheck({ kind, status: "fail", msg: apiErrorMessage(e, t("observability.check_failed_fallback")) })
+        }
+        return
+      }
+      if (!logDbUri.trim() || !logDbName.trim()) return
+      setCheck({ kind, status: "pending" })
+      try {
+        const r = await testCentralLog.mutateAsync({ log_db_uri: logDbUri.trim(), log_db_name: logDbName.trim() })
+        const src = r.sources?.central_log
+        if (r.overall === "ok") setCheck({ kind, status: "ok", msg: t("observability.otel_check_ok") })
+        else if (src?.status === "db_not_found") setCheck({ kind, status: "fail", msg: t("observability.otel_check_db_missing", { db: logDbName.trim() }) })
+        else setCheck({ kind, status: "fail", msg: t("observability.check_fail", { status: src?.status ?? r.overall }) })
+      } catch (e) {
+        setCheck({ kind, status: "fail", msg: apiErrorMessage(e, t("observability.check_failed_fallback")) })
+      }
+      return
+    }
+    const url = urls[kind as Exclude<ObsKind, "otel">].trim()
     if (!/^https?:\/\//.test(url)) {
       setCheck({ kind, status: "fail", msg: t("observability.url_prefix_hint") })
       return
@@ -366,14 +442,16 @@ function CreateStackDialog({
     }
   }
 
-  const configuredKinds = OBS_KINDS.filter((k) => urls[k.id].trim() !== "")
+  const configuredKinds = OBS_KINDS.filter(
+    (k) => k.id !== "otel" && urls[k.id as Exclude<ObsKind, "otel">].trim() !== "",
+  )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{t("observability.create_title")}</DialogTitle>
-          <DialogDescription>{t("observability.create_description")}</DialogDescription>
+          <DialogTitle>{isEdit ? t("observability.edit_title") : t("observability.create_title")}</DialogTitle>
+          <DialogDescription>{isEdit ? t("observability.edit_description") : t("observability.create_description")}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-1.5">
@@ -394,90 +472,207 @@ function CreateStackDialog({
           )}
           <div className="space-y-1.5">
             <Label htmlFor="obs-url">{t("observability.endpoint_label")}</Label>
-            <div className="flex gap-2">
-              <Select
-                value={kind}
-                onValueChange={(v) => { setKind(v as ObsKind); setCheck(null) }}
-              >
-                <SelectTrigger id="obs-kind" className="w-40 shrink-0">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {OBS_KINDS.map((k) => (
-                    <SelectItem key={k.id} value={k.id}>{k.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input
-                id="obs-url"
-                value={urls[kind]}
-                onChange={(e) => setUrl(kind, e.target.value)}
-                placeholder={currentMeta.placeholder}
-                className="min-w-0 flex-1 font-mono text-xs"
-              />
-              <Button
-                type="button"
-                variant="outline"
-                disabled={!urls[kind].trim() || check?.status === "pending" || testUrl.isPending}
-                onClick={runCheck}
-                className="shrink-0"
-              >
-                <PlugZap className={`size-3.5 ${check?.status === "pending" ? "animate-pulse" : ""}`} />
-                {check?.status === "pending" ? t("observability.checking") : t("observability.check_connection")}
-              </Button>
-            </div>
-            {check?.kind === kind && check.status !== "pending" && (
-              <p className={`text-xs ${check.status === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>
-                {check.msg}
-              </p>
-            )}
-            {configuredKinds.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 pt-0.5">
-                {configuredKinds.map((k) => (
-                  <Badge key={k.id} variant="secondary" className="gap-1 py-0.5 pr-1 font-normal">
-                    <span className="font-medium">{k.label}</span>
-                    <span className="max-w-36 truncate font-mono text-[10px] opacity-70">{urls[k.id]}</span>
-                    <button
-                      type="button"
-                      aria-label={t("action.delete", { ns: "common" })}
-                      className="rounded-full p-0.5 hover:bg-foreground/10"
-                      onClick={() => setUrl(k.id, "")}
-                    >
-                      <X className="size-3" />
-                    </button>
-                  </Badge>
+            <Select
+              value={kind}
+              disabled={isEdit}
+              onValueChange={(v) => { setKind(v as ObsKind); setCheck(null) }}
+            >
+              <SelectTrigger id="obs-kind" className="w-full sm:w-52">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {OBS_KINDS.map((k) => (
+                  <SelectItem key={k.id} value={k.id}>{k.label}</SelectItem>
                 ))}
+              </SelectContent>
+            </Select>
+
+            {isOtel ? (
+              <div className="space-y-3 rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">{t("observability.otel_intro")}</p>
+                <div className="grid grid-cols-[110px_1fr] items-center gap-2">
+                  <Label htmlFor="otel-type" className="text-xs">{t("observability.otel_db_type")}</Label>
+                  <Select value={logDbType} onValueChange={setLogDbType}>
+                    <SelectTrigger id="otel-type" className="h-8 w-fit">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="mongodb">MongoDB</SelectItem>
+                      <SelectItem value="postgresql" disabled>PostgreSQL</SelectItem>
+                      <SelectItem value="mysql" disabled>MySQL</SelectItem>
+                      <SelectItem value="sqlite" disabled>SQLite</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-[110px_1fr] items-center gap-2">
+                  <Label htmlFor="otel-uri" className="text-xs">{t("observability.otel_uri")}</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="otel-uri"
+                      value={logDbUri}
+                      onChange={(e) => { setLogDbUri(e.target.value); setCheck(null) }}
+                      placeholder={
+                        isEdit && editing?.log_db_uri_masked
+                          ? `${editing.log_db_uri_masked} — ${t("observability.uri_keep_hint")}`
+                          : "mongodb://user:pass@host:27017"
+                      }
+                      className="h-8 min-w-0 flex-1 font-mono text-xs"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 shrink-0"
+                      disabled={!logDbName.trim() || (!isEdit && !logDbUri.trim()) || check?.status === "pending" || testCentralLog.isPending}
+                      onClick={runCheck}
+                    >
+                      <PlugZap className={`size-3.5 ${check?.status === "pending" ? "animate-pulse" : ""}`} />
+                      {check?.status === "pending" ? t("observability.checking") : t("observability.check_connection")}
+                    </Button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-[110px_1fr] items-center gap-2">
+                  <Label htmlFor="otel-db" className="text-xs">{t("observability.otel_db_name")}</Label>
+                  <Input
+                    id="otel-db"
+                    value={logDbName}
+                    onChange={(e) => { setLogDbName(e.target.value); setCheck(null) }}
+                    placeholder="bucketlog_DB"
+                    className="h-8 font-mono text-xs"
+                  />
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <Label htmlFor="otel-span-col" className="text-xs">{t("observability.otel_span_collection")}</Label>
+                    <Input id="otel-span-col" value={spanCollection} onChange={(e) => setSpanCollection(e.target.value)} placeholder="span_logs" className="h-8 font-mono text-xs" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="otel-http-col" className="text-xs">{t("observability.otel_http_collection")}</Label>
+                    <Input id="otel-http-col" value={httpCollection} onChange={(e) => setHttpCollection(e.target.value)} placeholder="http_logs" className="h-8 font-mono text-xs" />
+                  </div>
+                </div>
+                {check?.kind === "otel" && check.status !== "pending" && (
+                  <p className={`text-xs ${check.status === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>
+                    {check.msg}
+                  </p>
+                )}
               </div>
+            ) : (
+              <>
+                <div className="flex gap-2">
+                  <Input
+                    id="obs-url"
+                    value={urls[kind as Exclude<ObsKind, "otel">]}
+                    onChange={(e) => setUrl(kind as Exclude<ObsKind, "otel">, e.target.value)}
+                    placeholder={currentMeta.placeholder}
+                    className="min-w-0 flex-1 font-mono text-xs"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={!urls[kind as Exclude<ObsKind, "otel">].trim() || check?.status === "pending" || testUrl.isPending}
+                    onClick={runCheck}
+                    className="shrink-0"
+                  >
+                    <PlugZap className={`size-3.5 ${check?.status === "pending" ? "animate-pulse" : ""}`} />
+                    {check?.status === "pending" ? t("observability.checking") : t("observability.check_connection")}
+                  </Button>
+                </div>
+                {check?.kind === kind && check.status !== "pending" && (
+                  <p className={`text-xs ${check.status === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>
+                    {check.msg}
+                  </p>
+                )}
+                {configuredKinds.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {configuredKinds.map((k) => (
+                      <Badge key={k.id} variant="secondary" className="gap-1 py-0.5 pr-1 font-normal">
+                        <span className="font-medium">{k.label}</span>
+                        <span className="max-w-36 truncate font-mono text-[10px] opacity-70">{urls[k.id as Exclude<ObsKind, "otel">]}</span>
+                        <button
+                          type="button"
+                          aria-label={t("action.delete", { ns: "common" })}
+                          className="rounded-full p-0.5 hover:bg-foreground/10"
+                          onClick={() => setUrl(k.id as Exclude<ObsKind, "otel">, "")}
+                        >
+                          <X className="size-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
-          <Label className="flex cursor-pointer items-center gap-2 text-sm font-normal">
-            <input type="checkbox" checked={webhookMode} onChange={(e) => setWebhookMode(e.target.checked)} className="size-4 accent-primary" />
-            Webhook push real-time (opsional — butuh copy snippet ke alertmanager.yml klien;
-            tanpa ini polling otomatis tetap berjalan)
-          </Label>
+          {!isOtel && (
+            <Label className="flex cursor-pointer items-center gap-2 text-sm font-normal">
+              <input type="checkbox" checked={webhookMode} onChange={(e) => setWebhookMode(e.target.checked)} className="size-4 accent-primary" />
+              {t("observability.webhook_label")}
+            </Label>
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>{t("observability.cancel")}</Button>
           <Button
             disabled={!valid || submitting}
-            title={!hasUrl ? t("observability.add_endpoint_hint") : name.trim().length < 3 ? t("observability.name_min_hint") : undefined}
+            title={
+              isOtel
+                ? !otelValid
+                  ? t("observability.otel_missing_hint")
+                  : name.trim().length < 3
+                    ? t("observability.name_min_hint")
+                    : undefined
+                : !hasUrl
+                  ? t("observability.add_endpoint_hint")
+                  : name.trim().length < 3
+                    ? t("observability.name_min_hint")
+                    : undefined
+            }
             onClick={async () => {
-              const r = await create.mutateAsync({
-                name,
-                workspace_id: fixedWorkspaceId || workspaceId || undefined,
-                prometheus_url: urls.prometheus.trim(),
-                tempo_url: urls.tempo.trim(),
-                alertmanager_url: urls.alertmanager.trim(),
-                loki_url: urls.loki.trim(),
-                webhook_mode: webhookMode,
-              })
+              if (isEdit && editing) {
+                const patch: ObservabilityTargetCreateInput = { name: name.trim() }
+                if (isOtel) {
+                  patch.log_db_type = logDbType
+                  patch.log_db_name = logDbName.trim()
+                  patch.span_collection = spanCollection.trim() || "span_logs"
+                  patch.http_collection = httpCollection.trim() || "http_logs"
+                  if (logDbUri.trim()) patch.log_db_uri = logDbUri.trim()
+                } else {
+                  patch.prometheus_url = urls.prometheus.trim()
+                  patch.tempo_url = urls.tempo.trim()
+                  patch.alertmanager_url = urls.alertmanager.trim()
+                  patch.loki_url = urls.loki.trim()
+                  patch.webhook_mode = webhookMode
+                }
+                await update.mutateAsync({ observ_id: editing.observ_id, ...patch })
+              } else {
+                const payload = isOtel
+                  ? {
+                      name,
+                      kind: "otel" as const,
+                      workspace_id: fixedWorkspaceId || workspaceId || undefined,
+                      log_db_type: logDbType,
+                      log_db_uri: logDbUri.trim(),
+                      log_db_name: logDbName.trim(),
+                      span_collection: spanCollection.trim() || "span_logs",
+                      http_collection: httpCollection.trim() || "http_logs",
+                    }
+                  : {
+                      name,
+                      workspace_id: fixedWorkspaceId || workspaceId || undefined,
+                      prometheus_url: urls.prometheus.trim(),
+                      tempo_url: urls.tempo.trim(),
+                      alertmanager_url: urls.alertmanager.trim(),
+                      loki_url: urls.loki.trim(),
+                      webhook_mode: webhookMode,
+                    }
+                const r = await create.mutateAsync(payload)
+                onCreated?.(r)
+              }
               onOpenChange(false)
-              setName(""); setWorkspaceId(""); setKind("prometheus"); setCheck(null)
-              setUrls({ prometheus: "", alertmanager: "", tempo: "", loki: "" })
-              onCreated(r)
             }}
           >
-            {submitting ? t("observability.creating") : t("observability.create_submit")}
+            {(submitting ? (isEdit ? t("observability.saving") : t("observability.creating")) : (isEdit ? t("observability.edit_submit") : t("observability.create_submit")))}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -301,7 +301,7 @@ async def update_observability(body: ObservabilityUpdateRequest, admin: dict = D
 
 class ObservabilityTargetUpsert(BaseModel):
     name: str
-    kind: Optional[str] = None          # Fix #45: prometheus/tempo/alertmanager/loki
+    kind: Optional[str] = None          # Fix #45: prometheus/tempo/alertmanager/loki/otel
     workspace_id: Optional[str] = None
     project_ids: list[str] = []
     alertmanager_url: str = ""
@@ -310,6 +310,12 @@ class ObservabilityTargetUpsert(BaseModel):
     loki_url: Optional[str] = None
     webhook_mode: bool = False
     poll_interval_seconds: int = 300
+    # kind="otel" (Central Log OTel): DB log span_logs/http_logs per-workspace
+    log_db_type: str = "mongodb"        # mongodb dulu; postgresql/mysql/sqlite menyusul
+    log_db_uri: str = ""
+    log_db_name: str = ""
+    span_collection: Optional[str] = None   # default span_logs
+    http_collection: Optional[str] = None   # default http_logs
 
 
 def _public_url() -> str:
@@ -320,27 +326,36 @@ def _public_url() -> str:
 
 @router.get("/observability-targets")
 async def list_observability_targets(admin: dict = Depends(require_admin)):
-    from services.observability_store import list_targets
-    return {"targets": await list_targets(enabled_only=False)}
+    from services.observability_store import list_targets, mask_otel_target
+    targets = await list_targets(enabled_only=False)
+    return {"targets": [mask_otel_target(t) for t in targets]}
 
 
 @router.post("/observability-targets", status_code=201)
 async def create_observability_target(body: ObservabilityTargetUpsert, admin: dict = Depends(require_admin)):
-    from services.observability_store import build_alertmanager_snippet, create_target
-    result = await create_target(
-        name=body.name,
-        workspace_id=body.workspace_id,
-        project_ids=body.project_ids,
-        alertmanager_url=body.alertmanager_url,
-        prometheus_url=body.prometheus_url,
-        tempo_url=body.tempo_url,
-        loki_url=body.loki_url or None,
-        webhook_mode=body.webhook_mode,
-        poll_interval_seconds=body.poll_interval_seconds,
-        kind=body.kind,
-    )
+    from services.observability_store import build_alertmanager_snippet, create_target, mask_otel_target
+    try:
+        result = await create_target(
+            name=body.name,
+            workspace_id=body.workspace_id,
+            project_ids=body.project_ids,
+            alertmanager_url=body.alertmanager_url,
+            prometheus_url=body.prometheus_url,
+            tempo_url=body.tempo_url,
+            loki_url=body.loki_url or None,
+            webhook_mode=body.webhook_mode,
+            poll_interval_seconds=body.poll_interval_seconds,
+            kind=body.kind,
+            log_db_type=body.log_db_type,
+            log_db_uri=body.log_db_uri,
+            log_db_name=body.log_db_name,
+            span_collection=body.span_collection or "",
+            http_collection=body.http_collection or "",
+        )
+    except ValueError as e:
+        raise HTTPException(409 if "sudah memiliki" in str(e) else 422, str(e))
     snippet = build_alertmanager_snippet(_public_url(), result["target"]["observ_id"], result["webhook_token"])
-    return {**result, "alertmanager_snippet": snippet}
+    return {**result, "target": mask_otel_target(result["target"]), "alertmanager_snippet": snippet}
 
 
 class ObservabilityTargetPatchRequest(BaseModel):
@@ -355,6 +370,12 @@ class ObservabilityTargetPatchRequest(BaseModel):
     loki_url: Optional[str] = None
     webhook_mode: Optional[bool] = None
     poll_interval_seconds: Optional[int] = None
+    # kind="otel" — log_db_uri kosong string = biarkan lama (write-only)
+    log_db_type: Optional[str] = None
+    log_db_uri: Optional[str] = None
+    log_db_name: Optional[str] = None
+    span_collection: Optional[str] = None
+    http_collection: Optional[str] = None
 
 
 @router.patch("/observability-targets/{observ_id}")
@@ -364,7 +385,10 @@ async def update_observability_target(observ_id: str, body: ObservabilityTargetP
     payload = body.model_dump(exclude_unset=True)
     if not payload:
         raise HTTPException(422, "Tidak ada perubahan")
-    ok = await update_target(observ_id, payload)
+    try:
+        ok = await update_target(observ_id, payload)
+    except ValueError as e:
+        raise HTTPException(409 if "sudah memiliki" in str(e) else 422, str(e))
     if not ok:
         raise HTTPException(404, "target tidak ditemukan")
     return {"ok": True}
@@ -400,6 +424,37 @@ async def test_target_connection(observ_id: str, admin: dict = Depends(require_a
     if not target:
         raise HTTPException(404, "target tidak ditemukan")
     return await test_connection(target)
+
+
+class CentralLogTestRequest(BaseModel):
+    """Probe koneksi Central Log dgn value form (belum disimpan)."""
+    log_db_uri: str
+    log_db_name: str
+
+
+@router.post("/observability-targets/test-central-log")
+async def test_central_log(body: CentralLogTestRequest, admin: dict = Depends(require_admin)):
+    from services.observability_store import mask_log_uri, test_otel_connection
+    return await test_otel_connection(
+        {"log_db_uri": body.log_db_uri, "log_db_name": body.log_db_name}
+    )
+
+
+class TestUrlRequest(BaseModel):
+    """Probe satu endpoint observability dgn value form (belum disimpan) — Fix #108."""
+    kind: str
+    url: str
+
+
+@router.post("/observability-targets/test-url")
+async def test_target_url(body: TestUrlRequest, admin: dict = Depends(require_admin)):
+    from services.observability_store import PROBE_PATHS, probe_single
+    if body.kind not in PROBE_PATHS:
+        raise HTTPException(422, f"kind harus salah satu dari {sorted(PROBE_PATHS)}")
+    result = await probe_single(body.kind, body.url)
+    if result.get("status") == "not_configured":
+        raise HTTPException(422, "URL wajib diisi")
+    return result
 
 
 # ── Fix #37: Notification Targets (multi-channel per workspace/project) ──────

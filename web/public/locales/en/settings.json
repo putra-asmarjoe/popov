@@ -77,7 +77,22 @@
     "done": "Done",
     "url_prefix_hint": "URL must start with http:// or https://",
     "add_endpoint_hint": "Add at least 1 endpoint (http://…)",
-    "name_min_hint": "Name must be at least 3 characters"
+    "name_min_hint": "Name must be at least 3 characters",
+    "otel_intro": "Central Log is the primary OTel log source (span_logs/http_logs) used by the Span agent for trace detail and recent errors. One stack per workspace; link projects to scope it.",
+    "otel_db_type": "Log database type",
+    "otel_uri": "Connection URI",
+    "otel_db_name": "Database name",
+    "otel_span_collection": "Span collection",
+    "otel_http_collection": "HTTP log collection",
+    "otel_check_ok": "Central Log connected — database found.",
+    "otel_check_db_missing": "Server reachable, but database \"{{db}}\" was not found.",
+    "otel_missing_hint": "Fill in the connection URI and database name first",
+    "edit_title": "Edit Stack",
+    "edit_description": "Update stack configuration. Kind cannot be changed.",
+    "edit_submit": "Save changes",
+    "saving": "Saving…",
+    "uri_keep_hint": "leave blank to keep current",
+    "webhook_label": "Webhook push real-time (optional — requires pasting the snippet into the client's alertmanager.yml; without it automatic polling still runs)"
   },
   "snippet": {
     "title": "Alertmanager snippet — {{name}}",

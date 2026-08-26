@@ -45,14 +45,21 @@ def invalidate_obs_cfg_cache() -> None:
     _OBS_CFG_CACHE.clear()
 
 # Typed stacks (Fix #45): satu stack mewakili SATU jenis sumber.
-# "otel" reserved (central log span_logs masih global via APP_LOGS_DB_URI).
-TARGET_KINDS = ["prometheus", "tempo", "alertmanager", "loki"]
+# "otel" (Central Log OTel): konfigurasi DB span_logs/http_logs pindah dari .env
+# ke stack DB — resolusi via get_central_log_config_for_state (fallback .env legacy).
+TARGET_KINDS = ["prometheus", "tempo", "alertmanager", "loki", "otel"]
 KIND_URL_FIELD = {
     "prometheus": "prometheus_url",
     "tempo": "tempo_url",
     "alertmanager": "alertmanager_url",
     "loki": "loki_url",
+    # "otel" tanpa url field — pakai log_db_uri/log_db_name/collections
 }
+
+# Central Log (kind="otel") — driver DB log yang didukung (multi-DB menyusul)
+LOG_DB_TYPES = ["mongodb"]
+DEFAULT_SPAN_COLLECTION = "span_logs"
+DEFAULT_HTTP_COLLECTION = "http_logs"
 
 OBSERVABILITY_TARGETS_COLLECTION = "observability_targets"
 
@@ -137,11 +144,20 @@ async def create_target(
     poll_interval_seconds: int = 300,
     token: Optional[str] = None,
     kind: Optional[str] = None,
+    log_db_type: str = "mongodb",
+    log_db_uri: str = "",
+    log_db_name: str = "",
+    span_collection: str = DEFAULT_SPAN_COLLECTION,
+    http_collection: str = DEFAULT_HTTP_COLLECTION,
 ) -> dict:
-    """kind (Fix #45): tipe stack — prometheus/tempo/alertmanager/loki.
-    Wajib di UI baru; None ditoleransi untuk data legacy (resolusi skip kind kosong)."""
+    """kind (Fix #45): tipe stack — prometheus/tempo/alertmanager/loki/otel.
+    Wajib di UI baru; None ditoleransi untuk data legacy (resolusi skip kind kosong).
+    kind="otel": wajib log_db_uri + log_db_name (Central Log DB, multi-DB menyusul)."""
     if kind is not None and kind not in TARGET_KINDS:
         raise ValueError(f"kind '{kind}' tidak valid (opsi: {TARGET_KINDS})")
+    if kind == "otel":
+        _validate_otel_fields(log_db_type, log_db_uri, log_db_name)
+        await _ensure_single_otel(workspace_id)
     """
     Buat target baru. Return {target, webhook_token} — token plaintext HANYA
     sekali ini dikembalikan (untuk ditampilkan/copy di UI), DB simpan hash.
@@ -166,21 +182,59 @@ async def create_target(
         "last_health_check_at": None,
         "created_at": _now(),
     }
+    if kind == "otel":
+        doc.update({
+            "log_db_type": log_db_type or "mongodb",
+            "log_db_uri": (log_db_uri or "").strip(),
+            "log_db_name": (log_db_name or "").strip(),
+            "span_collection": (span_collection or "").strip() or DEFAULT_SPAN_COLLECTION,
+            "http_collection": (http_collection or "").strip() or DEFAULT_HTTP_COLLECTION,
+        })
     await coll.insert_one(doc)
     doc["_id"] = str(doc["_id"])
-    logger.info(f"[ObservStore] created target {doc['observ_id']} ws={workspace_id} webhook_mode={webhook_mode}")
+    logger.info(f"[ObservStore] created target {doc['observ_id']} ws={workspace_id} kind={kind} webhook_mode={webhook_mode}")
     return {"target": _strip_secret(doc), "webhook_token": token}
+
+
+def _validate_otel_fields(log_db_type: str, log_db_uri: str, log_db_name: str) -> None:
+    if (log_db_type or "mongodb") not in LOG_DB_TYPES:
+        raise ValueError(f"log_db_type '{log_db_type}' tidak valid (opsi: {LOG_DB_TYPES})")
+    if not (log_db_uri or "").strip():
+        raise ValueError("URI database log wajib diisi untuk stack Central Log (OTel)")
+    if not (log_db_name or "").strip():
+        raise ValueError("Nama database log wajib diisi untuk stack Central Log (OTel)")
+
+
+async def _ensure_single_otel(workspace_id: Optional[str], exclude_observ_id: Optional[str] = None) -> None:
+    """Satu Central Log (OTel) per workspace — sumber log utama harus deterministik.
+    Per-project tetap bisa beda via link_project (auto-replace kind collision)."""
+    q: Dict[str, Any] = {"kind": "otel", "enabled": {"$ne": False}}
+    if workspace_id is None:
+        q["workspace_id"] = None
+    else:
+        q["workspace_id"] = workspace_id
+    if exclude_observ_id:
+        q["observ_id"] = {"$ne": exclude_observ_id}
+    existing = await _collection().find_one(q)
+    if existing:
+        raise ValueError(
+            f"Workspace sudah memiliki stack Central Log (OTel): '{existing.get('name')}' "
+            f"({existing.get('observ_id')}). Edit stack itu atau hapus dulu sebelum membuat baru."
+        )
 
 
 async def update_target(observ_id: str, patch: Dict[str, Any]) -> bool:
     """Update field aman (partial-safe, Fix #46):
     - hanya key yang diizinkan & BUKAN None yang di-$set (None = tidak dikirim)
     - kind divalidasi terhadap TARGET_KINDS
+    - kind="otel": field log_db_* tervalidasi; URI kosong = tidak ditimpa
     webhook_secret hanya via rotate_webhook_token()."""
     allowed = {
         "name", "kind", "workspace_id", "project_ids",
         "alertmanager_url", "prometheus_url", "tempo_url", "loki_url",
         "webhook_mode", "poll_interval_seconds", "enabled",
+        "log_db_type", "log_db_uri", "log_db_name",
+        "span_collection", "http_collection",
     }
     clean = {
         k: v for k, v in patch.items()
@@ -195,8 +249,30 @@ async def update_target(observ_id: str, patch: Dict[str, Any]) -> bool:
             clean["kind"] = patch["kind"]
     if not clean:
         return False
+
+    current = await get_target(observ_id)
+    if not current:
+        return False
+    eff_kind = clean.get("kind") or current.get("kind")
+
+    if eff_kind == "otel":
+        merged_type = clean.get("log_db_type") or current.get("log_db_type") or "mongodb"
+        merged_uri = (clean.get("log_db_uri") or current.get("log_db_uri") or "").strip()
+        merged_name = (clean.get("log_db_name") or current.get("log_db_name") or "").strip()
+        _validate_otel_fields(merged_type, merged_uri, merged_name)
+        if "log_db_uri" in clean and not str(clean["log_db_uri"]).strip():
+            clean.pop("log_db_uri")  # kosong = biarkan lama
+        target_ws = clean.get("workspace_id", current.get("workspace_id"))
+        if ("workspace_id" in clean and clean["workspace_id"] != current.get("workspace_id")) or \
+           ("enabled" in clean and clean["enabled"] and not current.get("enabled", True)):
+            await _ensure_single_otel(target_ws, exclude_observ_id=observ_id)
+        for coll_key, default in (("span_collection", DEFAULT_SPAN_COLLECTION), ("http_collection", DEFAULT_HTTP_COLLECTION)):
+            if coll_key in clean and not str(clean[coll_key]).strip():
+                clean[coll_key] = default
+
     clean["updated_at"] = _now()
     result = await _collection().update_one({"observ_id": observ_id}, {"$set": clean})
+    invalidate_obs_cfg_cache()
     return result.matched_count > 0
 
 
@@ -257,6 +333,71 @@ def _strip_secret(doc: dict) -> dict:
     return d
 
 
+def mask_log_uri(uri: Optional[str]) -> str:
+    """Samarkan kredensial URI DB log utk response API — versi PENDEK agar muat
+    di tabel UI: skema://***@host-dipotong (path/db dibuang, host max 24 char + …)."""
+    from urllib.parse import urlsplit
+    raw = (uri or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+        netloc = parts.netloc
+        if "@" in netloc:
+            host = netloc.rsplit("@", 1)[1]
+            host = host if len(host) <= 24 else host[:24] + "…"
+            return f"{parts.scheme}://***@{host}"
+        host = netloc if len(netloc) <= 24 else netloc[:24] + "…"
+        return f"{parts.scheme}://{host}"
+    except Exception:
+        return "***"
+
+
+def mask_otel_target(doc: dict) -> dict:
+    """Response API untuk kind=otel: ganti log_db_uri mentah dgn versi tersamar.
+    Resolver internal baca langsung dari DB — masking hanya di lapisan API."""
+    d = dict(doc)
+    if "log_db_uri" in d:
+        d["log_db_uri_masked"] = mask_log_uri(d.get("log_db_uri"))
+        if not d.get("log_db_uri"):
+            d.pop("log_db_uri_masked", None)
+        d.pop("log_db_uri", None)
+    return d
+
+
+async def test_otel_connection(target: dict, timeout_s: float = 4.0) -> Dict[str, Any]:
+    """Probe stack Central Log (kind=otel): ping server Mongo + cek database exists.
+    Return bentuk sama dgn test_connection (overall/sources/checked_at)."""
+    from motor.motor_asyncio import AsyncIOMotorClient
+    uri = (target.get("log_db_uri") or "").strip()
+    db_name = (target.get("log_db_name") or "").strip()
+    src: Dict[str, Any] = {"url": mask_log_uri(uri), "db": db_name}
+    if not uri or not db_name:
+        src["status"] = "not_configured"
+        return {"overall": "not_configured", "sources": {"central_log": src}, "checked_at": _now().isoformat()}
+    client = None
+    try:
+        client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=int(timeout_s * 1000))
+        await client.admin.command("ping")
+        src["status"] = "ok"
+        try:
+            dbs = await client.list_database_names()
+            src["db_exists"] = db_name in dbs
+        except Exception:
+            src["db_exists"] = None  # hak akses terbatas — ping sudah cukup
+        detail = "ok" if src.get("db_exists") is not False else "db_not_found"
+        overall = "ok" if detail == "ok" else "degraded"
+        if detail == "db_not_found":
+            src["status"] = "db_not_found"
+        return {"overall": overall, "sources": {"central_log": src}, "checked_at": _now().isoformat()}
+    except Exception as e:
+        src["status"] = f"error:{type(e).__name__}"
+        return {"overall": "error", "sources": {"central_log": src}, "checked_at": _now().isoformat()}
+    finally:
+        if client is not None:
+            client.close()
+
+
 def build_alertmanager_snippet(base_public_url: str, observ_id: str, token: str) -> str:
     """Snippet alertmanager.yml siap-copy untuk klien (C5/L2-6/L2-7)."""
     return f"""# alertmanager.yml — snippet Popov Agent (stack {observ_id})
@@ -314,13 +455,47 @@ async def get_observ_config_for_state(state: dict) -> Optional[Dict[str, str]]:
         return None
 
 
+async def get_central_log_config_for_state(state: dict) -> Optional[Dict[str, Any]]:
+    """
+    Resolusi satu-pintu Central Log (OTel) untuk span_agent:
+      stack kind="otel" via resolve_targets_for_project (project-linked > ws-wide).
+      None = central log disabled untuk konteks ini (daftarkan di UI Stacks).
+      Fix #107: fallback .env (APP_LOGS_DB_URI) DIHAPUS — MURNI dari DB.
+    Return {uri, db, span_collection, http_collection, source} atau None.
+    """
+    try:
+        targets = await resolve_targets_for_project(
+            state.get("workspace_id"), state.get("project_id")
+        )
+        for t in sorted(targets, key=lambda x: x.get("created_at") or _now()):
+            if t.get("kind") != "otel":
+                continue
+            uri = (t.get("log_db_uri") or "").strip()
+            db_name = (t.get("log_db_name") or "").strip()
+            if uri and db_name:
+                return {
+                    "uri": uri,
+                    "db": db_name,
+                    "span_collection": (t.get("span_collection") or "").strip() or DEFAULT_SPAN_COLLECTION,
+                    "http_collection": (t.get("http_collection") or "").strip() or DEFAULT_HTTP_COLLECTION,
+                    "source": "stack",
+                    "observ_id": t.get("observ_id"),
+                }
+    except Exception as e:
+        logger.warning(f"central log stack lookup failed (non-fatal): {e}")
+    return None
+
+
 async def test_connection(target: dict, timeout_s: float = 4.0) -> Dict[str, Any]:
     """
     Probe endpoint tiap sumber yang terdaftar di target (D7/D1).
     Prometheus: GET /-/ready · Tempo: GET /ready · Alertmanager: GET /-/ready · Loki: GET /ready
+    kind="otel" → test_otel_connection (ping Mongo + cek db exists).
     Return {source: {status, detail}} — status 'ok' | 'http_<code>' | 'error:<type>'.
     Sumber tanpa URL → {'status': 'not_configured'}.
     """
+    if target.get("kind") == "otel":
+        return await test_otel_connection(target, timeout_s)
     import httpx
     probes = {
         "prometheus": ((target.get("prometheus_url") or "").rstrip("/"), PROBE_PATHS["prometheus"]),
@@ -332,8 +507,7 @@ async def test_connection(target: dict, timeout_s: float = 4.0) -> Dict[str, Any
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         for name, (base, path) in probes.items():
             if not base:
-                result[name] = {"status": "not_configured"}
-                continue
+                continue  # field kosong = bukan bagian stack ini — jangan di-probe/dilaporkan
             try:
                 resp = await client.get(f"{base}{path}")
                 ok = resp.status_code < 500
@@ -344,10 +518,13 @@ async def test_connection(target: dict, timeout_s: float = 4.0) -> Dict[str, Any
             except Exception as e:
                 result[name] = {"status": f"error:{type(e).__name__}", "url": base}
 
-    overall = all(v["status"] == "ok" for v in result.values()) if result else False
-    configured_any = any(v.get("status") != "not_configured" for v in result.values())
+    # Stack bertipe tunggal (mis. hanya tempo) → hanya sumber terisi yang dicek;
+    # verdict murni atas apa yang ada di stack ini.
+    if not result:
+        return {"overall": "not_configured", "sources": {}, "checked_at": _now().isoformat()}
+    overall = "ok" if all(v["status"] == "ok" for v in result.values()) else "degraded"
     return {
-        "overall": "ok" if overall else ("degraded" if configured_any else "not_configured"),
+        "overall": overall,
         "sources": result,
         "checked_at": _now().isoformat(),
     }

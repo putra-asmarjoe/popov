@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
 import { api, apiErrorMessage } from "@/lib/api"
+import { useTranslation } from "react-i18next"
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -49,25 +50,26 @@ export function useConfigServices() {
 
 export function useServiceMutations() {
   const qc = useQueryClient()
+  const { t } = useTranslation("common")
   const invalidate = () => qc.invalidateQueries({ queryKey: ["config", "services"] })
-  const onError = (e: unknown) => toast.error(apiErrorMessage(e, "Operasi service gagal"))
+  const onError = (e: unknown) => toast.error(apiErrorMessage(e, t("toasts.svc_failed")))
 
   const create = useMutation({
     mutationFn: async (input: Partial<ManagedService>) =>
       (await api.post("/config/services", input)).data,
-    onSuccess: () => { toast.success("Service ditambahkan"); invalidate() },
+    onSuccess: () => { toast.success(t("toasts.svc_created")); invalidate() },
     onError,
   })
   const update = useMutation({
     mutationFn: async ({ service_id, ...input }: Partial<ManagedService> & { service_id: string }) =>
       (await api.patch(`/config/services/${service_id}`, input)).data,
-    onSuccess: () => { toast.success("Service diperbarui"); invalidate() },
+    onSuccess: () => { toast.success(t("toasts.svc_updated")); invalidate() },
     onError,
   })
   const remove = useMutation({
     mutationFn: async (service_id: string) =>
       (await api.delete(`/config/services/${service_id}`)).data,
-    onSuccess: () => { toast.success("Service dihapus"); invalidate() },
+    onSuccess: () => { toast.success(t("toasts.svc_deleted")); invalidate() },
     onError,
   })
   return { create, update, remove }
@@ -84,6 +86,7 @@ export function useLlmConfig(options?: { enabled?: boolean }) {
 }
 
 export function useUpdateLlm() {
+  const { t } = useTranslation("common")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (input: {
@@ -95,10 +98,10 @@ export function useUpdateLlm() {
       embedding?: { mode: string; provider?: string; model?: string }
     }) => (await api.put("/config/llm", input)).data as LlmConfig,
     onSuccess: (data) => {
-      toast.success("Konfigurasi LLM tersimpan — berlaku langsung")
+      toast.success(t("toasts.llm_saved"))
       qc.setQueryData(["config", "llm"], data)
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal menyimpan konfigurasi LLM")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.llm_save_failed"))),
   })
 }
 
@@ -129,24 +132,27 @@ export function useEpisodes(service: string, status: string) {
 }
 
 export function useDeleteEpisode() {
+  const { t } = useTranslation("common")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (episodeId: string) =>
       (await api.delete(`/brain/episodes/${episodeId}`)).data,
     onSuccess: () => {
-      toast.success("Episode dihapus")
+      toast.success(t("toasts.episode_deleted"))
       qc.invalidateQueries({ queryKey: ["brain", "episodes"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal menghapus episode")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.episode_delete_failed"))),
   })
 }
 
 // ── Observability Targets (SCALE Layer 2: multi-stack + webhook per-tenant) ──
 
+export type ObsStackKind = "prometheus" | "tempo" | "alertmanager" | "loki" | "otel"
+
 export interface ObservabilityTarget {
   observ_id: string
   name: string
-  kind?: "prometheus" | "tempo" | "alertmanager" | "loki" | null   // Fix #45 typed stacks
+  kind?: ObsStackKind | null   // Fix #45 typed stacks; "otel" = Central Log
   workspace_id: string | null
   project_ids: string[]
   alertmanager_url: string
@@ -158,11 +164,17 @@ export interface ObservabilityTarget {
   enabled: boolean
   health_status: string | null
   last_health_check_at: string | null
+  // kind="otel" (Central Log OTel) — URI hanya tersamar dari API (write-only)
+  log_db_type?: "mongodb"
+  log_db_uri_masked?: string
+  log_db_name?: string
+  span_collection?: string
+  http_collection?: string
 }
 
 export interface ObservabilityTargetCreateInput {
   name: string
-  kind?: "prometheus" | "tempo" | "alertmanager" | "loki" | null
+  kind?: ObsStackKind | null
   workspace_id?: string | null
   project_ids?: string[]
   alertmanager_url?: string
@@ -171,6 +183,12 @@ export interface ObservabilityTargetCreateInput {
   loki_url?: string
   webhook_mode?: boolean
   poll_interval_seconds?: number
+  // kind="otel"
+  log_db_type?: string
+  log_db_uri?: string
+  log_db_name?: string
+  span_collection?: string
+  http_collection?: string
 }
 
 export function useObservabilityTargets(options?: { enabled?: boolean }) {
@@ -186,8 +204,9 @@ export function useObservabilityTargets(options?: { enabled?: boolean }) {
 
 export function useObservabilityTargetMutations() {
   const qc = useQueryClient()
+  const { t } = useTranslation("common")
   const invalidate = () => qc.invalidateQueries({ queryKey: ["config", "observability-targets"] })
-  const onError = (e: unknown) => toast.error(apiErrorMessage(e, "Operasi observability target gagal"))
+  const onError = (e: unknown) => toast.error(apiErrorMessage(e, t("toasts.obs_failed")))
 
   const create = useMutation({
     mutationFn: async (input: ObservabilityTargetCreateInput) =>
@@ -197,7 +216,7 @@ export function useObservabilityTargetMutations() {
         alertmanager_snippet: string
       },
     onSuccess: (data) => {
-      toast.success("Observability stack ditambahkan — copy snippet Alertmanager sekarang (token hanya tampil sekali)")
+      toast.success(t("toasts.obs_created"))
       invalidate()
       return data
     },
@@ -207,13 +226,13 @@ export function useObservabilityTargetMutations() {
   const update = useMutation({
     mutationFn: async ({ observ_id, ...input }: Partial<ObservabilityTargetCreateInput> & { observ_id: string }) =>
       (await api.patch(`/config/observability-targets/${observ_id}`, input)).data,
-    onSuccess: () => { toast.success("Stack diperbarui"); invalidate() },
+    onSuccess: () => { toast.success(t("toasts.obs_updated")); invalidate() },
     onError,
   })
 
   const remove = useMutation({
     mutationFn: async (observ_id: string) => (await api.delete(`/config/observability-targets/${observ_id}`)).data,
-    onSuccess: () => { toast.success("Stack dihapus"); invalidate() },
+    onSuccess: () => { toast.success(t("toasts.obs_deleted")); invalidate() },
     onError,
   })
 
@@ -223,7 +242,7 @@ export function useObservabilityTargetMutations() {
         webhook_token: string
         alertmanager_snippet: string
       },
-    onSuccess: () => toast.success("Token baru dibuat — token lama tidak berlaku"),
+    onSuccess: () => toast.success(t("toasts.token_rotated")),
     onError,
   })
 
@@ -241,7 +260,19 @@ export function useTestTargetUrl() {
   })
 }
 
+/** Probe koneksi Central Log (kind=otel) sebelum stack disimpan — ping + cek db. */
+export function useTestCentralLog() {
+  return useMutation({
+    mutationFn: async (input: { log_db_uri: string; log_db_name: string }) =>
+      (await api.post("/config/observability-targets/test-central-log", input)).data as {
+        overall: "ok" | "degraded" | "not_configured" | "error"
+        sources: Record<string, { status: string; db_exists?: boolean | null }>
+      },
+  })
+}
+
 export function useTestConnection() {
+  const { t } = useTranslation("common")
   return useMutation({
     mutationFn: async (observ_id: string) =>
       (await api.post(`/config/observability-targets/${observ_id}/test-connection`)).data as {
@@ -249,15 +280,16 @@ export function useTestConnection() {
         sources: Record<string, { status: string }>
       },
     onSuccess: (d) => {
-      if (d.overall === "ok") toast.success("Semua sumber terhubung")
-      else if (d.overall === "not_configured") toast.info("Belum ada URL yang dikonfigurasi")
-      else toast.warning(`Sebagian sumber bermasalah (${d.overall})`)
+      if (d.overall === "ok") toast.success(t("toasts.all_sources_ok"))
+      else if (d.overall === "not_configured") toast.info(t("toasts.no_url_configured"))
+      else toast.warning(t("toasts.some_sources_degraded", { status: d.overall }))
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Test koneksi gagal")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.test_failed"))),
   })
 }
 
 export function useTestTargetConnection() {
+  const { t } = useTranslation("common")
   return useMutation({
     mutationFn: async (observ_id: string) =>
       (await api.post(`/config/observability-targets/${observ_id}/test-connection`)).data as {
@@ -265,10 +297,10 @@ export function useTestTargetConnection() {
         sources: Record<string, { status: string }>
       },
     onSuccess: (d) => {
-      if (d.overall === "ok") toast.success("Semua sumber terhubung")
-      else toast.warning(`Status: ${d.overall}`)
+      if (d.overall === "ok") toast.success(t("toasts.all_sources_ok"))
+      else toast.warning(t("toasts.status_is", { status: d.overall }))
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Test koneksi gagal")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.test_failed"))),
   })
 }
 
@@ -305,28 +337,29 @@ export interface RegistryInput {
 }
 
 export function useWsRegistryMutations(wsId?: string) {
+  const { t } = useTranslation("common")
   const qc = useQueryClient()
   const invalidate = () => qc.invalidateQueries({ queryKey: ["config", "ws-registry", wsId] })
-  const onError = (e: unknown) => toast.error(apiErrorMessage(e, "Operasi registry gagal"))
+  const onError = (e: unknown) => toast.error(apiErrorMessage(e, t("toasts.registry_failed")))
 
   const create = useMutation({
     mutationFn: async (input: RegistryInput) =>
       (await api.post(`/config/workspaces/${wsId}/service-registry`, input)).data as { item: WsRegistryItem },
-    onSuccess: () => { toast.success("Service terdaftar di workspace"); invalidate() },
+    onSuccess: () => { toast.success(t("toasts.registry_created")); invalidate() },
     onError,
   })
 
   const update = useMutation({
     mutationFn: async ({ registry_id, ...input }: RegistryInput & { registry_id: string }) =>
       (await api.patch(`/config/workspaces/${wsId}/service-registry/${registry_id}`, input)).data,
-    onSuccess: () => { toast.success("Registry diperbarui"); invalidate() },
+    onSuccess: () => { toast.success(t("toasts.registry_updated")); invalidate() },
     onError,
   })
 
   const remove = useMutation({
     mutationFn: async (registry_id: string) =>
       (await api.delete(`/config/workspaces/${wsId}/service-registry/${registry_id}`)).data,
-    onSuccess: () => { toast.success("Registry dihapus"); invalidate() },
+    onSuccess: () => { toast.success(t("toasts.registry_deleted")); invalidate() },
     onError,
   })
 
@@ -336,9 +369,9 @@ export function useWsRegistryMutations(wsId?: string) {
         overall: string
       },
     onSuccess: (d) => {
-      if (d.overall === "ok") toast.success("Koneksi DB log OK")
-      else if (d.overall === "not_configured") toast.info("Koneksi log belum diisi")
-      else toast.warning(`Status koneksi: ${d.overall}`)
+      if (d.overall === "ok") toast.success(t("toasts.db_log_ok"))
+      else if (d.overall === "not_configured") toast.info(t("toasts.db_log_not_set"))
+      else toast.warning(t("toasts.conn_status", { status: d.overall }))
     },
     onError,
   })
@@ -360,9 +393,10 @@ export function useWsRegistryList(workspaceId: string | null) {
 }
 
 export function useStackProjectLinks() {
+  const { t } = useTranslation("common")
   const qc = useQueryClient()
   const invalidate = () => qc.invalidateQueries({ queryKey: ["config", "observability-targets"] })
-  const onError = (e: unknown) => toast.error(apiErrorMessage(e, "Operasi link stack-project gagal"))
+  const onError = (e: unknown) => toast.error(apiErrorMessage(e, t("toasts.link_failed")))
 
   const link = useMutation({
     mutationFn: async ({ observ_id, project_id }: { observ_id: string; project_id: string }) =>
@@ -370,8 +404,8 @@ export function useStackProjectLinks() {
         ok: boolean; replaced?: string[]
       },
     onSuccess: (d) => {
-      if (d.replaced?.length) toast.info(`Stack lain sejenis dilepas otomatis (${d.replaced.length})`)
-      else toast.success("Stack ter-link ke project")
+      if (d.replaced?.length) toast.info(t("toasts.link_replaced", { count: d.replaced.length }))
+      else toast.success(t("toasts.link_ok"))
       invalidate()
     },
     onError,
@@ -380,7 +414,7 @@ export function useStackProjectLinks() {
   const unlink = useMutation({
     mutationFn: async ({ observ_id, project_id }: { observ_id: string; project_id: string }) =>
       (await api.post(`/config/observability-targets/${observ_id}/unlink-project`, { project_id })).data,
-    onSuccess: () => { toast.success("Link stack-project dilepas"); invalidate() },
+    onSuccess: () => { toast.success(t("toasts.unlink_ok")); invalidate() },
     onError,
   })
 
@@ -391,24 +425,25 @@ export function useStackProjectLinks() {
 // ── Fix #47: link/unlink project ↔ notification channel (atomik) ─────────────
 
 export function useNtfProjectLinks() {
+  const { t } = useTranslation("common")
   const qc = useQueryClient()
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["workspaces"] })
     qc.invalidateQueries({ queryKey: ["project-notification-channels"] })
   }
-  const onError = (e: unknown) => toast.error(apiErrorMessage(e, "Operasi link notifikasi gagal"))
+  const onError = (e: unknown) => toast.error(apiErrorMessage(e, t("toasts.ntf_link_failed")))
 
   const link = useMutation({
     mutationFn: async ({ notif_id, project_id }: { notif_id: string; project_id: string }) =>
       (await api.post(`/config/notification-targets/${notif_id}/link-project`, { project_id })).data,
-    onSuccess: () => { toast.success("Channel ter-link ke project"); invalidate() },
+    onSuccess: () => { toast.success(t("toasts.ntf_link_ok")); invalidate() },
     onError,
   })
 
   const unlink = useMutation({
     mutationFn: async ({ notif_id, project_id }: { notif_id: string; project_id: string }) =>
       (await api.post(`/config/notification-targets/${notif_id}/unlink-project`, { project_id })).data,
-    onSuccess: () => { toast.success("Link channel-project dilepas"); invalidate() },
+    onSuccess: () => { toast.success(t("toasts.ntf_unlink_ok")); invalidate() },
     onError,
   })
 

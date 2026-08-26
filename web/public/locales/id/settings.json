@@ -77,7 +77,22 @@
     "done": "Selesai",
     "url_prefix_hint": "URL harus diawali http:// atau https://",
     "add_endpoint_hint": "Tambah minimal 1 endpoint (http://…)",
-    "name_min_hint": "Nama minimal 3 karakter"
+    "name_min_hint": "Nama minimal 3 karakter",
+    "otel_intro": "Central Log adalah sumber utama log OTel (span_logs/http_logs) yang dipakai agent Span untuk detail trace dan error terbaru. Satu stack per workspace; link project untuk membatasi scope.",
+    "otel_db_type": "Tipe database log",
+    "otel_uri": "URI koneksi",
+    "otel_db_name": "Nama database",
+    "otel_span_collection": "Collection span",
+    "otel_http_collection": "Collection HTTP log",
+    "otel_check_ok": "Central Log terhubung — database ditemukan.",
+    "otel_check_db_missing": "Server terjangkau, tetapi database \"{{db}}\" tidak ditemukan.",
+    "otel_missing_hint": "Isi URI koneksi dan nama database dulu",
+    "edit_title": "Edit Stack",
+    "edit_description": "Perbarui konfigurasi stack. Kind tidak dapat diubah.",
+    "edit_submit": "Simpan perubahan",
+    "saving": "Menyimpan…",
+    "uri_keep_hint": "biarkan kosong untuk mempertahankan URI saat ini",
+    "webhook_label": "Webhook push real-time (opsional — perlu tempel snippet ke alertmanager.yml klien; tanpa ini polling otomatis tetap berjalan)"
   },
   "snippet": {
     "title": "Snippet Alertmanager — {{name}}",

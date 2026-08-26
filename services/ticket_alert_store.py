@@ -108,7 +108,7 @@ async def record_ticket_alert(
 
             await add_progress_note_watchdog(
                 updated,
-                f"{note} — total {int(updated.get('alertsCount') or 1)} alert",
+                f"{note} — total {int(updated.get('alertsCount') or 1)} alerts",
             )
     except Exception as e:
         logger.warning(f"[ticket-alert] counter tiket {doc['ticketId']} gagal diupdate: {e}")

@@ -86,9 +86,13 @@ async def maybe_create_watchdog_ticket(
     ticket_alerts ter-link ke tiket itu (1 tiket : N alert), TANPA tiket baru.
     Di luar window / tiket resolved|closed → tiket baru + alert pertama.
 
-    Returns: daftar tiket baru (kosong bila semua ter-link / gagal — selalu aman).
+    Returns: tuple (created, ticket_refs) — Fix #105:
+      - created: daftar tiket baru (kosong bila semua ter-link / gagal — selalu aman)
+      - ticket_refs: {"new": ["KEY-N", …], "linked": ["KEY-N", …]} label nomor tiket
+        utk pesan broadcast; nomor tiket netral bahasa.
     """
     created: List[Dict[str, Any]] = []
+    ticket_refs: Dict[str, List[str]] = {"new": [], "linked": []}
     try:
         observ_target = None
         if observ_id:
@@ -139,14 +143,16 @@ async def maybe_create_watchdog_ticket(
                     workspace_id=str(workspace_id) if workspace_id else None,
                     observ_id=observ_id,
                     note=(
-                        f"🔔 Alert baru ter-link: {alert_name} ({alert_severity})"
+                        f"🔔 New alert linked: {alert_name} ({alert_severity})"
                     ),
                 )
                 # Web bell: paritas dgn Telegram — semua member workspace (Fix #89)
                 link_no = f"{project.get('key', '?')}-{linkable.get('ticketNumber', '?')}"
+                # Fix #105: label tiket ter-link ikut dilaporkan di broadcast
+                ticket_refs["linked"].append(link_no)
                 await _notify_workspace_members(
                     workspace_id or linkable.get("workspaceId"),
-                    f"🔔 {service}: {alert_name} — alert baru di tiket {link_no}",
+                    f"🔔 {service}: {alert_name} — new alert on ticket {link_no}",
                     {
                         "projectId": pid,
                         "ticketNumber": linkable.get("ticketNumber"),
@@ -168,10 +174,9 @@ async def maybe_create_watchdog_ticket(
                     WATCHDOG_ACTOR,
                     title=f"[ALERT] {service}: {alert_name}",
                     description=(
-                        f"Tiket dibuat otomatis oleh Popov Watchdog untuk service '{service}'.\n\n"
-                        f"Jumlah alert: {len(alerts)}. Sumber: observability (Prometheus/Tempo/Alertmanager).\n"
-                        f"Alert pertama: {alert_name} (severity {alert_severity}).\n"
-                        "Gunakan tombol Cek Detail di laporan Telegram untuk investigasi penuh."
+                        f"Ticket auto-created by Popov Watchdog for service '{service}'.\n\n"
+                        f"Alerts: {len(alerts)}. Source: observability (Prometheus/Tempo/Alertmanager).\n"
+                        f"First alert: {alert_name} (severity {alert_severity})."
                     ),
                     kind="infrastructure",
                     severity=_ticket_severity(alerts),
@@ -181,7 +186,7 @@ async def maybe_create_watchdog_ticket(
                     source="watchdog",
                     fingerprint=fingerprint,
                     content_fp=base_fp,
-                    initial_note=f"Tiket dibuat otomatis oleh watchdog (alert {alert_id or '-'})",
+                    initial_note=f"Ticket auto-created by watchdog (alert {alert_id or '-'})",
                     service_name=service,
                 )
                 # Alert pertama → dokumen alert ter-link ke tiket baru
@@ -199,7 +204,7 @@ async def maybe_create_watchdog_ticket(
                 new_no = f"{project.get('key', '?')}-{ticket['ticketNumber']}"
                 await _notify_workspace_members(
                     workspace_id or ticket.get("workspaceId"),
-                    f"🚨 {service}: {alert_name} — tiket baru {new_no}",
+                    f"🚨 {service}: {alert_name} — new ticket {new_no}",
                     {
                         "projectId": pid,
                         "ticketNumber": ticket["ticketNumber"],
@@ -209,6 +214,8 @@ async def maybe_create_watchdog_ticket(
                     },
                 )
                 created.append(ticket)
+                # Fix #105: label tiket baru utk pesan broadcast
+                ticket_refs["new"].append(new_no)
                 logger.info(
                     f"Auto-ticket created #{ticket['ticketNumber']} untuk service {service} "
                     f"di project '{project.get('name')}'"
@@ -218,4 +225,4 @@ async def maybe_create_watchdog_ticket(
                 logger.info(f"Auto-ticket skipped di project '{project.get('name')}': {e}")
     except Exception as e:
         logger.error(f"Auto-ticket failed (watchdog tetap jalan): {e}")
-    return created
+    return created, ticket_refs
