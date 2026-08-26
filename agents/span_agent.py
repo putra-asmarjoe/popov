@@ -3,7 +3,6 @@ import logging
 from typing import Optional, List
 
 from state.schema import AgentState
-from config.settings import settings
 from services.mongodb_client import DBConnectionError
 from services.span_log_loader import (
     fetch_spans_by_trace_id,
@@ -107,23 +106,32 @@ def _pick_trace_id(state: AgentState) -> Optional[str]:
 
 async def span_agent(state: AgentState) -> dict:
     """
-    Query app_logs_db (span_logs + http_logs):
+    Query central log DB (span_logs + http_logs):
     - dengan traceId → detail satu trace (span + http_logs).
     - tanpa traceId + intent "error terakhir di span" → daftar span error terbaru.
     Sumber kebenaran centralized OTel logging (observplan.md).
+    Konfigurasi: stack kind="otel" (DB, per-workspace) → fallback .env legacy.
     Exception safe — tidak pernah throw error.
     """
+    from services.observability_store import get_central_log_config_for_state
     agents_visited = ["span_agent"]
 
-    if not settings.app_logs_enabled:
+    log_cfg = await get_central_log_config_for_state(dict(state))
+    if not log_cfg:
         return {
-            "span_summary": "Detail trace tidak tersedia: APP_LOGS_DB_URI / APP_LOGS_DB_NAME belum dikonfigurasi.",
+            "span_summary": (
+                "Central log is not configured for this workspace. "
+                "Register a Central Log (OTel) stack in Workspace Settings → Stacks."
+            ),
             "span_available": False,
             "span_mode": True,
             "trace_id": None,
             "next_agent": "telegram_agent",
             "agents_visited": agents_visited,
         }
+    logger.info(
+        f"SpanAgent central log source='{log_cfg['source']}' db='{log_cfg['db']}'"
+    )
 
     intent = state.get("intent", "")
     trace_id = _pick_trace_id(state)
@@ -141,7 +149,7 @@ async def span_agent(state: AgentState) -> dict:
                 svc_filter = matched
         logger.info(f"SpanAgent mode central-log: service='{svc_filter or 'ALL'}' isError=true terbaru.")
         try:
-            spans = await fetch_recent_error_spans(limit=20, service=svc_filter or None)
+            spans = await fetch_recent_error_spans(limit=20, service=svc_filter or None, log_cfg=log_cfg)
         except DBConnectionError as e:
             logger.error(f"SpanAgent connection failed (recent errors): {e}")
             return {
@@ -184,7 +192,7 @@ async def span_agent(state: AgentState) -> dict:
     if not trace_id and is_recent_error_request(intent):
         logger.info("SpanAgent mode recent-error: query isError=true terbaru.")
         try:
-            spans = await fetch_recent_error_spans(limit=20)
+            spans = await fetch_recent_error_spans(limit=20, log_cfg=log_cfg)
         except DBConnectionError as e:
             logger.error(f"SpanAgent connection failed (recent errors): {e}")
             return {
@@ -241,8 +249,8 @@ async def span_agent(state: AgentState) -> dict:
     logger.info(f"SpanAgent querying app_logs_db for traceId='{trace_id}'")
 
     try:
-        spans = await fetch_spans_by_trace_id(trace_id, limit=50)
-        http_logs = await fetch_http_logs_by_trace_id(trace_id, limit=10)
+        spans = await fetch_spans_by_trace_id(trace_id, limit=50, log_cfg=log_cfg)
+        http_logs = await fetch_http_logs_by_trace_id(trace_id, limit=10, log_cfg=log_cfg)
     except DBConnectionError as e:
         logger.error(f"SpanAgent connection failed for '{trace_id}': {e}")
         return {

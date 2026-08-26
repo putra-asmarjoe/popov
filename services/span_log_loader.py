@@ -1,7 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
 
-from config.settings import settings
 from services.mongodb_client import query_collection, DBConnectionError
 
 logger = logging.getLogger(__name__)
@@ -10,18 +9,40 @@ SPAN_COLLECTION = "span_logs"
 HTTP_COLLECTION = "http_logs"
 
 
+def _resolve_cfg(log_cfg: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    """Resolve konfigurasi central log dari stack kind="otel" (log_cfg).
+    Fix #107: TIDAK ada lagi fallback .env — tanpa log_cfg berarti belum
+    dikonfigurasi (span_agent guard resolver lebih dulu, jadi ini safety net)."""
+    c = log_cfg or {}
+    uri = c.get("uri")
+    db = c.get("db")
+    if not uri or not db:
+        raise ValueError(
+            "Central log is not configured for this workspace. "
+            "Register a Central Log (OTel) stack in Workspace Settings → Stacks."
+        )
+    return {
+        "uri": uri,
+        "db": db,
+        "span_collection": c.get("span_collection") or SPAN_COLLECTION,
+        "http_collection": c.get("http_collection") or HTTP_COLLECTION,
+    }
+
+
 async def fetch_spans_by_trace_id(
     trace_id: str,
     limit: int = 50,
+    log_cfg: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Ambil semua span dari app_logs_db.span_logs untuk satu traceId (terbaru dulu)."""
+    """Ambil semua span dari central log DB untuk satu traceId (terbaru dulu)."""
+    cfg = _resolve_cfg(log_cfg)
     query = {"traceId": trace_id}
     return await query_collection(
-        collection_name=SPAN_COLLECTION,
+        collection_name=cfg["span_collection"],
         query=query,
         limit=limit,
-        uri=settings.app_logs_db_uri,
-        db_name=settings.app_logs_db_name,
+        uri=cfg["uri"],
+        db_name=cfg["db"],
         sort_field="timestamp",
         service_name="span_logs",
     )
@@ -30,15 +51,17 @@ async def fetch_spans_by_trace_id(
 async def fetch_http_logs_by_trace_id(
     trace_id: str,
     limit: int = 10,
+    log_cfg: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Ambil detail request dari app_logs_db.http_logs untuk satu traceId."""
+    """Ambil detail request dari central log DB http_logs untuk satu traceId."""
+    cfg = _resolve_cfg(log_cfg)
     query = {"traceId": trace_id}
     return await query_collection(
-        collection_name=HTTP_COLLECTION,
+        collection_name=cfg["http_collection"],
         query=query,
         limit=limit,
-        uri=settings.app_logs_db_uri,
-        db_name=settings.app_logs_db_name,
+        uri=cfg["uri"],
+        db_name=cfg["db"],
         sort_field="timestamp",
         service_name="http_logs",
     )
@@ -47,9 +70,11 @@ async def fetch_http_logs_by_trace_id(
 async def fetch_recent_error_spans(
     limit: int = 20,
     service: Optional[str] = None,
+    log_cfg: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Ambil span error (isError=true) terbaru dari app_logs_db.span_logs.
+    """Ambil span error (isError=true) terbaru dari central log DB.
     Jika service diisi, filter hanya untuk service tersebut (mendukung varian dash/underscore)."""
+    cfg = _resolve_cfg(log_cfg)
     query: Dict[str, Any] = {"isError": True}
     if service:
         # Nama service di central log bisa dash, intent memakai underscore —
@@ -63,11 +88,11 @@ async def fetch_recent_error_spans(
         else:
             query["service"] = {"$in": list(variants)}
     return await query_collection(
-        collection_name=SPAN_COLLECTION,
+        collection_name=cfg["span_collection"],
         query=query,
         limit=limit,
-        uri=settings.app_logs_db_uri,
-        db_name=settings.app_logs_db_name,
+        uri=cfg["uri"],
+        db_name=cfg["db"],
         sort_field="timestamp",
         service_name="span_logs",
     )

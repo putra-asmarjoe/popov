@@ -104,14 +104,8 @@ class Settings(BaseSettings):
     ticket_alert_dedup_hours: int = 12
 
     # Centralized OpenTelemetry log DB (observplan.md) — sumber kebenaran lintas-service.
-    # berisi collection `span_logs` + `http_logs` (query by traceId via span_agent).
-    # Fix #46: URI TIDAK di-hardcode di kode — MURNI dari .env (APP_LOGS_DB_URI).
-    app_logs_db_uri: str = ""
-    app_logs_db_name: str = "bucketlog_DB"
-
-    @property
-    def app_logs_enabled(self) -> bool:
-        return bool(self.app_logs_db_uri) and bool(self.app_logs_db_name)
+    # Fix #107: konfigurasi MURNI dari DB (stack kind="otel" di observability_targets,
+    # dikelola via UI Workspace Settings → Stacks) — TIDAK ada lagi fallback .env.
 
     @property
     def prometheus_enabled(self) -> bool:

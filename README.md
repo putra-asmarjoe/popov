@@ -252,7 +252,6 @@ Only a few things live in `.env` (see `.env.example`):
 | Variable | Purpose |
 |---|---|
 | `MONGODB_URI` / `MONGODB_DB` | Main store: tickets, episodes, audit trails, sessions |
-| `APP_LOGS_DB_URI` / `APP_LOGS_DB_NAME` | Central OpenTelemetry log DB (`span_logs` / `http_logs`) |
 | `DATA_ENCRYPTION_KEY` | **Required.** Fernet master key for encrypting stored API keys |
 | `JWT_SECRET` / `JWT_EXPIRY_HOURS` | Web authentication |
 | `EMBEDDING_PROVIDER/MODEL/DIM` | Second Brain embeddings (`local` TF cosine by default, zero cost) |
