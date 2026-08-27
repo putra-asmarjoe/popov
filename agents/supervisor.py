@@ -80,6 +80,14 @@ DATA_INTENT_KEYWORDS = [
 DATA_COUNT_RE = re.compile(r"(\d+)\s*(?:data|record|row)", re.IGNORECASE)
 COLLECTION_RE = re.compile(r"(?:collection|table|tabel)\s+([\w\-.]+)", re.IGNORECASE)
 
+# Chat by Project — pertanyaan level project (tanpa menyebut service spesifik).
+# Aktif HANYA bila state punya project_id & BUKAN sesi terikat tiket.
+PROJECT_QUERY_KW = [
+    "tiket", "ticket", "total", "berapa", "jenis", "masuk",
+    "terjadi", "jam terakhir", "menit terakhir", "hari ini",
+    "aktivitas", "alert", "knowledge", "dokumen", "playbook",
+]
+
 
 def is_data_request(intent: str) -> bool:
     """Deteksi intent pengambilan data mentah (bukan analisis error)."""
@@ -247,6 +255,10 @@ async def supervisor_agent(state: AgentState) -> dict:
     intent = intent_raw.lower().strip()
     logger.info(f"Supervisor processing intent: '{intent}'")
     agents_visited = state.get("agents_visited", []) + ["supervisor"]
+    # Fix #123: inisialisasi chat_depth di awal (sebelum semua branch return)
+    # agar Strategy 5 (line ~466) tidak gagal "referenced before assignment".
+    # State optional — default "low" bila kosong/invalid.
+    chat_depth = (state.get("chat_depth") or "low").lower()
 
     # ── Offer Session: user menanggapi tawaran agent sebelumnya ──────────────
     # (Tahap 1-3). Keyed sender.session_id (web chat). Proses SEBELUM routing lain
@@ -450,6 +462,23 @@ async def supervisor_agent(state: AgentState) -> dict:
                     # LLM tidak yakin service, tapi intent_type bisa dipakai? tetap fallback
                     routing_strategy = "llm_fallback"
                     routing_flag = "low_confidence_routing"
+                    # Chat by Project: LLM yakin ini pertanyaan level project → route langsung
+                    if (
+                        llm_res.get("intent_type") == "project"
+                        and state.get("project_id")
+                        and not state.get("ticket_context")
+                        and chat_depth != "thinking"
+                    ):
+                        logger.info("[Supervisor] Strategy 5 intent_type=project → project_agent")
+                        return {
+                            "service_name": "",
+                            "collection_name": "",
+                            "next_agent": "project_agent",
+                            "agents_visited": agents_visited,
+                            "routing_strategy": "llm_fallback",
+                            "routing_flag": "low_confidence_routing",
+                            "error": None,
+                        }
 
     # 2. Deteksi intent detail traceId (span_agent) — DULUAN dari follow-up,
     #    karena "detail trace <id>" mengandung kata "detail". Trigger:
@@ -649,9 +678,48 @@ async def supervisor_agent(state: AgentState) -> dict:
             "error": None,
         }
 
+    # ── Chat by Project: pertanyaan level project (tanpa service eksplisit) ───
+    # Fix #123: chat_depth sudah di-inisialisasi di awal function; reassign dihapus.
+    if (
+        project_id
+        and not state.get("ticket_context")
+        and chat_depth != "thinking"
+        and not matched_service
+        and any(kw in intent for kw in PROJECT_QUERY_KW)
+    ):
+        logger.info(f"Project query detected (depth={chat_depth}): '{intent}'")
+        return {
+            "service_name": "",
+            "collection_name": "",
+            "next_agent": "project_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": routing_strategy or "project_query",
+            "routing_flag": routing_flag,
+            "error": None,
+        }
+
     # Jika bukan health check dan service tidak teridentifikasi
     if not matched_service:
         logger.warning(f"No service matched for intent: '{intent}'")
+        # Chat by Project: fallback ramah — jangan error telanjang daftar service.
+        # Bila pertanyaan terlihat seperti project query (atau ambigu di sesi project),
+        # biarkan project_agent yang menjawab dgn data project. Termasuk mode thinking
+        # tanpa subject: tanpa service eksplisit pipeline insiden tak punya target —
+        # insight terbaik yang mungkin = fakta database project (Fix G3 gap-scan).
+        if (
+            state.get("project_id")
+            and not state.get("ticket_context")
+        ):
+            logger.info(f"[Supervisor] no-match dalam sesi project → project_agent (fallback ramah): '{intent}'")
+            return {
+                "service_name": "",
+                "collection_name": "",
+                "next_agent": "project_agent",
+                "agents_visited": agents_visited,
+                "routing_strategy": routing_strategy or "project_query",
+                "routing_flag": routing_flag or "low_confidence_routing",
+                "error": None,
+            }
         # Fix #50: fuzzy-suggest — typo user dicocokkan ke service terdekat (project-gated)
         suggest = _fuzzy_suggest_service(
             intent, list(service_map.keys()), (state.get("ticket_context") or {}).get("serviceName")

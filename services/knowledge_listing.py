@@ -151,3 +151,42 @@ async def _linked_knowledge_list(service_id: str, project_id: Optional[str] = No
     except Exception as e:
         logger.warning(f"[KnowledgeListing] linked list gagal: {e}")
         return []
+
+
+async def build_project_knowledge_inventory(
+    project_id: str, workspace_id: Optional[str] = None
+) -> str:
+    """Daftar knowledge seluruh service ter-link project (Chat by Project fase 1).
+    Deterministik, tanpa LLM: per service — grounding docs + knowledge library ter-link."""
+    try:
+        from services.service_store import list_refs_for_project
+
+        refs = await list_refs_for_project(project_id)
+        service_ids = sorted({r.get("serviceId", "") for r in refs if r.get("serviceId")})
+    except Exception as e:
+        logger.warning(f"[KnowledgeListing] project refs gagal: {e}")
+        service_ids = []
+
+    if not service_ids:
+        return (
+            "📚 *Knowledge Project*\n"
+            "Belum ada service ter-link pada project ini, jadi belum ada knowledge.\n"
+            "_Link service lewat Workspace → Settings → Projects._"
+        )
+
+    header = f"📚 *Knowledge Project* ({len(service_ids)} service)\n"
+    body_parts: list[str] = []
+    total_items = 0
+    for sid in service_ids:
+        inv = await build_service_knowledge_inventory(sid, workspace_id, project_id, detail=False)
+        # strip hint footer per-service (cukup sekali di akhir)
+        inv_clean = inv.split("\n\n_Untuk isi lengkap")[0]
+        body_parts.append(f"\n*{sid}*\n{inv_clean}")
+        total_items += inv_clean.count("•") + inv_clean.count("  - ")
+    if total_items == 0:
+        return header + "\nBelum ada grounding docs maupun knowledge ter-link."
+    footer = (
+        "\n\n_Untuk isi lengkap setiap dokumen, silakan lihat halaman "
+        "*Workspace → Settings → Services → Knowledge*._"
+    )
+    return header + "".join(body_parts) + footer

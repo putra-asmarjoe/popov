@@ -1,0 +1,24 @@
+{
+  "sidebar_title": "Chat",
+  "new_chat": "New project chat",
+  "pick_project": "Choose a project",
+  "sidebar_empty": "No project chats yet",
+  "back": "Back",
+  "title_fallback": "Project chat",
+  "no_session": "Session not found or not accessible.",
+  "input_placeholder": "Ask anything about this project… (tickets, activity, errors, knowledge)",
+  "send": "Send",
+  "stop": "Stop streaming",
+  "delete_session": "Delete session",
+  "delete_session_aria": "More options",
+  "delete_confirm_title": "Delete session?",
+  "delete_confirm_description": "Delete session \"{{title}}\"? Messages will be archived and no longer appear in this list.",
+  "delete_confirm_cancel": "Cancel",
+  "delete_confirm_action": "Delete",
+  "delete_failed": "Failed to delete session",
+  "mode_hint": {
+    "low": "Fast: facts gathered directly from the database",
+    "medium": "Balanced: adds deeper investigation offers",
+    "thinking": "Full insight: runs the complete incident analysis (slower, more tokens)"
+  }
+}

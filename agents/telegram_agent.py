@@ -10,7 +10,7 @@ from services.llm_factory import get_chat_llm
 from services.offer_planner import build_investigate_offer, render_offer_question
 from services.offer_session import create_offer
 from services.prompt_loader import render as render_prompt
-from agents.correlation_agent import LLM_UNAVAILABLE_NOTE  # Fix #53: pesan LLM down profesional
+from agents.correlation_agent import llm_unavailable_note_for  # Fix #53/#113: pesan LLM down bilingual
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,7 @@ async def telegram_agent(state: AgentState) -> dict:
                                                 history=state.get("conversation_history"))
         except Exception as e:
             logger.error(f"Span LLM formatting failed: {e}")
-            formatted = _format_span_fallback(trace_id, span_summary) + LLM_UNAVAILABLE_NOTE
+            formatted = await _format_span_fallback(state) + await llm_unavailable_note_for(state)
 
         success, send_error = await _deliver(state, formatted)
         return {
@@ -177,7 +177,7 @@ async def telegram_agent(state: AgentState) -> dict:
             formatted = await _format_data_with_llm(intent, service_name, documents)
         except Exception as e:
             logger.error(f"Data LLM formatting failed: {e}")
-            formatted = _format_data_fallback(service_name, documents) + LLM_UNAVAILABLE_NOTE
+            formatted = await _format_data_fallback(state) + await llm_unavailable_note_for(state)
 
         success, send_error = await _deliver(state, formatted)
         return {
@@ -195,7 +195,7 @@ async def telegram_agent(state: AgentState) -> dict:
             formatted = await _format_follow_up(intent, follow_up_context)
         except Exception as e:
             logger.error(f"Follow-up LLM formatting failed: {e}")
-            formatted = _format_follow_up_fallback(follow_up_context) + LLM_UNAVAILABLE_NOTE
+            formatted = await _format_follow_up_fallback(state) + await llm_unavailable_note_for(state)
 
         success, send_error = await _deliver(state, formatted)
         return {
@@ -214,7 +214,7 @@ async def telegram_agent(state: AgentState) -> dict:
             formatted = await _format_health_with_llm(intent, health_result)
         except Exception as e:
             logger.error(f"Health LLM formatting failed: {e}")
-            formatted = _format_health_fallback(health_result) + LLM_UNAVAILABLE_NOTE
+            formatted = await _format_health_fallback(state) + await llm_unavailable_note_for(state)
 
         success, send_error = await _deliver(state, formatted)
         return {
@@ -264,7 +264,7 @@ async def telegram_agent(state: AgentState) -> dict:
             formatted += "\n\n📡 _Span detail OTel turut dianalisis dalam root cause assessment_"
     except Exception as e:
         logger.error(f"LLM formatting failed: {e}")
-        formatted = await _fallback_message(service_name, documents, state) + LLM_UNAVAILABLE_NOTE
+        formatted = await _fallback_message(service_name, documents, state) + await llm_unavailable_note_for(state)
 
     # FASE 6A: tombol dinamis per root_cause + feedback (feedback tetap di baris bawah)
     reply_markup = _build_dynamic_buttons(state)

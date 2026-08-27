@@ -49,7 +49,8 @@
     "emb_model_placeholder": "e.g. liquid/lfm-2.5-embedding-350m:free",
     "test_embedding": "Test embedding",
     "cancel": "Cancel",
-    "save": "Save"
+    "save": "Save",
+    "test_saved_title": "Test using the saved credentials (no changes needed)"
   },
   "service_library": {
     "owner_only_read_error": "Only the document owner can read it",

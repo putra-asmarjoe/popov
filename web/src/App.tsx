@@ -8,10 +8,18 @@ import { WorkspaceSettingsPage } from "@/pages/WorkspaceSettingsPage"
 import { ProjectPage } from "@/pages/ProjectPage"
 import { NewTicketPage } from "@/pages/NewTicketPage"
 import { NotificationsPage } from "@/pages/NotificationsPage"
+import { ProjectChatPage } from "@/pages/ProjectChatPage"
 import { ManagementPage } from "@/pages/management/ManagementPage"
 import { useAuth } from "@/hooks/useAuth"
 import { useWorkspaces } from "@/hooks/useWorkspaces"
 import { useWorkspaceStore } from "@/store/workspace.store"
+import { useParams } from "react-router-dom"
+
+/** Fix G2: `/w/:ws/chats` tanpa id → workspace (kalau tidak, tertelan `:projSlug`). */
+function ChatsRedirect() {
+  const { wsSlug = "" } = useParams()
+  return <Navigate to={`/w/${wsSlug}`} replace />
+}
 
 /** Guard: tunggu session check, redirect ke /login bila belum auth. */
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -66,6 +74,8 @@ export default function App() {
           <Route path="/" element={<RootRedirect />} />
           <Route path="/w/:wsSlug" element={<WorkspacesPage />} />
           <Route path="/w/:wsSlug/settings" element={<WorkspaceSettingsPage />} />
+          <Route path="/w/:wsSlug/chats" element={<ChatsRedirect />} />
+          <Route path="/w/:wsSlug/chats/:sessionId" element={<ProjectChatPage />} />
           <Route path="/w/:wsSlug/:projSlug" element={<ProjectPage />} />
           <Route path="/w/:wsSlug/:projSlug/new" element={<NewTicketPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />

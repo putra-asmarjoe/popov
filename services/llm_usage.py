@@ -190,3 +190,39 @@ class TrackingLLM:
         except Exception as e:
             logger.warning(f"[LLMUsage] record failed: {e}")
         return resp
+
+
+async def slowest_failure_since(since_iso: str) -> Optional[Dict[str, Any]]:
+    """Diagnosis timeout pipeline (Fix #116): LLM call berstatus timeout/error
+    TERLAMBAH sejak `since_iso`. Return {agent, model, latency_ms, error} | None.
+    Dipakai chat.py agar pesan timeout menyebut penyebab nyata (LLM lambat),
+    bukan fallback generik "coba pertanyaan lebih spesifik"."""
+    try:
+        from datetime import datetime, timezone
+        # timestamp di collection = BSON datetime — konversi dari ISO string
+        since_dt = (
+            datetime.fromisoformat(since_iso)
+            if isinstance(since_iso, str)
+            else since_iso
+        )
+        if since_dt.tzinfo is None:
+            since_dt = since_dt.replace(tzinfo=timezone.utc)
+        from services.mongodb_client import get_db
+        doc = await get_db()[COLLECTION].find_one(
+            {
+                "timestamp": {"$gte": since_dt},
+                "status": {"$in": ["timeout", "error"]},
+            },
+            sort=[("latency_ms", -1)],
+        )
+        if not doc:
+            return None
+        return {
+            "agent": str(doc.get("agent") or "").replace("agents.", "").replace("_agent", ""),
+            "model": doc.get("model"),
+            "latency_ms": doc.get("latency_ms"),
+            "error": str(doc.get("error") or "")[:120],
+        }
+    except Exception as e:
+        logger.warning(f"[LLMUsage] slowest_failure_since failed: {e}")
+        return None

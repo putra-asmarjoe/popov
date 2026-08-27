@@ -549,3 +549,72 @@ async def add_progress_note_watchdog(ticket: Dict[str, Any], note: str) -> Optio
     if doc is not None:
         _emit_ticket_event("ticket:updated", doc, status=doc.get("status", "open"))
     return doc
+
+
+# ── Agregasi Chat by Project (read-only) ──────────────────────────────────────
+
+def _since_iso(hours: Optional[float]) -> Optional[str]:
+    """createdAt tersimpan sebagai ISO-8601 UTC string (_now_iso) — perbandingan
+    leksikografis valid utk rentang waktu (format sama panjang)."""
+    if not hours or hours <= 0:
+        return None
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+
+async def count_by_project(
+    project_id: str,
+    *,
+    since_hours: Optional[float] = None,
+    group_by: str = "status",
+) -> Dict[str, Any]:
+    """Agregasi tiket per project untuk chat project (Chat by Project fase 1).
+    group_by: 'status' | 'kind' | 'severity'. Return {total, groups{key:count}}.
+    since_hours kosong/<=0 = semua waktu."""
+    field = {"status": "status", "kind": "kind", "severity": "severity"}.get(group_by, "status")
+    query: Dict[str, Any] = {"projectId": project_id}
+    since = _since_iso(since_hours)
+    if since:
+        query["createdAt"] = {"$gte": since}
+    coll = get_db()[TICKETS_COLLECTION]
+    total = await coll.count_documents(query)
+    cursor = coll.aggregate(
+        [{"$match": query}, {"$group": {"_id": f"${field}", "count": {"$sum": 1}}}]
+    )
+    groups = {doc["_id"] or "unknown": doc["count"] async for doc in cursor}
+    return {"total": total, "groups": groups}
+
+
+async def recent_tickets_by_project(
+    project_id: str,
+    *,
+    since_hours: float = 24.0,
+    limit: int = 10,
+) -> List[Dict[str, Any]]:
+    """Tiket terbaru dalam window N jam (aktivitas project utk chat project)."""
+    query: Dict[str, Any] = {"projectId": project_id}
+    since = _since_iso(since_hours)
+    if since:
+        query["createdAt"] = {"$gte": since}
+    cursor = (
+        get_db()[TICKETS_COLLECTION]
+        .find(query)
+        .sort("createdAt", -1)
+        .limit(max(1, min(limit, 50)))
+    )
+    return [doc async for doc in cursor]
+
+
+async def get_ticket_by_number(
+    ticket_number: int, *, workspace_id: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """Cari tiket dari nomor (KEY-N) — untuk deteksi referensi tiket di chat project.
+    ticketNumber unik PER PROJECT saja, jadi bila hasil >1 tanpa konteks workspace
+    → None ambigu. Bila workspace_id diberikan, dibatasi ke workspace tsb."""
+    coll = get_db()[TICKETS_COLLECTION]
+    query: Dict[str, Any] = {"ticketNumber": int(ticket_number)}
+    if workspace_id:
+        query["workspaceId"] = str(workspace_id)
+    docs = [doc async for doc in coll.find(query).limit(2)]
+    if len(docs) == 1:
+        return docs[0]
+    return None

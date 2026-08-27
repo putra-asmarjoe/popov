@@ -49,7 +49,8 @@
     "emb_model_placeholder": "mis. liquid/lfm-2.5-embedding-350m:free",
     "test_embedding": "Uji embedding",
     "cancel": "Batal",
-    "save": "Simpan"
+    "save": "Simpan",
+    "test_saved_title": "Tes memakai kredensial tersimpan (tanpa perlu perubahan)"
   },
   "service_library": {
     "owner_only_read_error": "Hanya pemilik dokumen yang bisa membaca",

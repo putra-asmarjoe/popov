@@ -28,6 +28,7 @@ from services.chat_store import (
     get_messages,
     get_session,
     list_sessions,
+    soft_delete_session,
     _public_message,
     _public_session,
 )
@@ -35,6 +36,7 @@ from services.chat_stream import (
     DONE,
     publish,
     publish_sentinel,
+    mark_done,
     register,
     release_reader,
     try_set_reader,
@@ -63,6 +65,12 @@ class CreateSessionRequest(BaseModel):
 
 class SendMessageRequest(BaseModel):
     message: str
+    # Chat by Project — depth analisis per pesan: low (ringan, default) |
+    # medium (+tawaran investigasi) | thinking (pipeline insiden penuh)
+    mode: Optional[str] = None
+
+
+VALID_CHAT_MODES = ("low", "medium", "thinking")
 
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
@@ -118,9 +126,28 @@ async def _resolve_workspace_id(project_id: Optional[str]) -> Optional[str]:
         return None
 
 
+async def _require_project_member(project_id: str, user: dict) -> dict:
+    """Chat by Project: hanya owner/member workspace pemilik project yang boleh
+    membuat sesi / mengirim pesan. Return doc project (untuk auto-title)."""
+    from services.workspace_store import find_project_by_id, find_workspace_by_id, get_membership
+
+    project = await find_project_by_id(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project tidak ditemukan")
+    ws = await find_workspace_by_id(str(project.get("workspaceId", "")))
+    if ws is None or get_membership(ws, str(user["_id"])) is None:
+        raise HTTPException(status_code=403, detail="Kamu bukan member workspace ini")
+    return project
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 async def _run_pipeline(
     session_id: str, message: str, workspace_id: Optional[str] = None,
-    project_id: Optional[str] = None,
+    project_id: Optional[str] = None, chat_depth: str = "low",
 ) -> None:
     """Background task: jalankan graph → publish progress + token → persist jawaban.
     Slot antrian SUDAH diklaim endpoint /send (register) — di sini hanya konsumsi.
@@ -131,6 +158,15 @@ async def _run_pipeline(
     # (bila error terjadi sebelum variabel di-assign di dalam try).
     request_id = None
     merged: dict = {}
+    started_at = _now_iso()
+    # Fix #113: locale user utk pesan fallback backend (timeout/error/empty)
+    # get_session = chat_store (sudah di-import level modul) — session punya userId.
+    from services.user_store import get_user_locale
+    try:
+        _sess = await get_session(session_id)
+        locale = await get_user_locale((_sess or {}).get("userId"))
+    except Exception:
+        locale = "id"
     try:
         request_id = generate_request_id()
 
@@ -206,6 +242,7 @@ async def _run_pipeline(
             "preset_service_name": preset_service_name,  # Fix #49: subject tiket
             "preset_trace_ids": preset_trace_ids,
             "ticket_context": ticket_context,
+            "chat_depth": chat_depth,  # Chat by Project: low | medium | thinking
             "conversation_history": await build_conversation_history(session_id),
             "next_agent": "supervisor",
             "error": None,
@@ -235,9 +272,17 @@ async def _run_pipeline(
             or ""
         ).strip()
         if merged.get("error"):
-            answer = f"⚠️ Pipeline selesai dengan error: {merged['error']}"
+            err_head = {
+                "id": f"⚠️ Pipeline selesai dengan error: {merged['error']}",
+                "en": f"⚠️ Pipeline finished with an error: {merged['error']}",
+            }
+            answer = err_head.get(locale, err_head["id"])
         if not answer:
-            answer = "⚠️ Agent tidak menghasilkan jawaban. Coba ulangi pertanyaanmu."
+            empty_msg = {
+                "id": "⚠️ Agent tidak menghasilkan jawaban. Coba ulangi pertanyaanmu.",
+                "en": "⚠️ The agent did not produce an answer. Try asking again.",
+            }
+            answer = empty_msg.get(locale, empty_msg["id"])
 
         # ── Audit: tutup request_logs (success/failed + snapshot data mentah) ──
         if merged.get("error"):
@@ -257,6 +302,11 @@ async def _run_pipeline(
             "episode_id": merged.get("episode_id"),
             "agents_visited": merged.get("agents_visited", []),
         }
+        # Chat by Project: meta utk FE — chips saran follow-up + link tiket
+        project_result = merged.get("project_result") or {}
+        if isinstance(project_result, dict) and project_result:
+            meta["ticket_refs"] = project_result.get("ticket_refs") or []
+            meta["suggestions"] = project_result.get("suggestions") or []
         await add_message(session_id, "assistant", answer, meta=meta)
 
         for chunk in _chunks(answer, TOKEN_CHUNK_SIZE):
@@ -265,7 +315,33 @@ async def _run_pipeline(
         publish(session_id, {"type": "done", "data": ""})
         logger.info(f"Chat pipeline done session={session_id} agents={merged.get('agents_visited')}")
     except asyncio.TimeoutError:
-        fallback = "⚠️ Analisis melebihi batas waktu (120 detik). Coba pertanyaan yang lebih spesifik."
+        # Fix #116: pesan timeout berdiagnosis — bila telemetri menunjukkan
+        # panggilan LLM lambat/timeout selama request ini, sebut penyebabnya.
+        # Pesan generik hanya untuk penyebab tak dikenal (butuh cek log backend).
+        from services.llm_usage import slowest_failure_since
+        culprit = await slowest_failure_since(started_at)
+        if culprit:
+            lat = culprit.get("latency_ms")
+            lat_txt = f"{lat / 1000:.0f}s" if isinstance(lat, (int, float)) else "?"
+            diag = {
+                "id": (
+                    "⚠️ Analisis melebihi batas waktu (120 detik) karena respons LLM lambat/timeout — "
+                    f"panggilan `{culprit.get('agent') or 'llm'}` ({culprit.get('model')}) memakan ~{lat_txt}. "
+                    "Coba lagi (free-tier sering pulih) atau gunakan model/provider yang lebih cepat di Management → API Keys."
+                ),
+                "en": (
+                    "⚠️ Analysis exceeded the time limit (120 seconds) due to a slow/timed-out LLM call — "
+                    f"`{culprit.get('agent') or 'llm'}` ({culprit.get('model')}) took ~{lat_txt}. "
+                    "Try again (free tiers often recover) or switch to a faster model/provider in Management → API Keys."
+                ),
+            }
+            fallback = diag.get(locale, diag["id"])
+        else:
+            generic = {
+                "id": "⚠️ Analisis melebihi batas waktu (120 detik). Coba pertanyaan yang lebih spesifik.",
+                "en": "⚠️ Analysis exceeded the time limit (120 seconds). Try a more specific question.",
+            }
+            fallback = generic.get(locale, generic["id"])
         try:
             await add_message(session_id, "assistant", fallback, meta={"timeout": True})
         except Exception:
@@ -277,7 +353,8 @@ async def _run_pipeline(
         try:
             await add_message(
                 session_id, "assistant",
-                f"⚠️ Terjadi error internal saat analisis: {str(e)[:200]}",
+                ({"id": f"⚠️ Terjadi error internal saat analisis: {str(e)[:200]}",
+                  "en": f"⚠️ An internal error occurred during analysis: {str(e)[:200]}"}.get(locale)),
                 meta={"error": True},
             )
         except Exception:
@@ -285,6 +362,9 @@ async def _run_pipeline(
         await update_request_log(request_id, merged or {}, "failed", error=str(e)[:500])
         publish(session_id, {"type": "error", "data": str(e)[:200]})
     finally:
+        # Tandai selesai dulu → /active langsung False meski registry
+        # masih terpasang selama jeda drain reader (anti re-attach race, Fix #114)
+        mark_done(session_id)
         publish_sentinel(session_id, DONE)
         # Beri waktu reader mengosongkan antrian sebelum unregister
         await asyncio.sleep(1.0)
@@ -298,9 +378,30 @@ async def create_chat_session(
     body: CreateSessionRequest,
     current_user: dict = Depends(get_current_user),
 ):
+    project_doc = None
+    if body.projectId:
+        # Chat by Project: guard owner/member workspace + auto-title bermakna
+        project_doc = await _require_project_member(body.projectId, current_user)
     session = await create_session(
         str(current_user["_id"]), body.projectId, body.ticketId, body.title
     )
+    # Auto-title sesi project (bila user tidak memberi judul): "Chat Project · <nama> · <tgl>"
+    if (
+        project_doc is not None
+        and not (body.title or "").strip()
+        and (session.get("title") or "") in ("", "Chat baru")
+    ):
+        from datetime import datetime, timezone as _tz
+
+        pname = project_doc.get("name") or "Project"
+        tgl = datetime.now(_tz.utc).strftime("%d %b %Y")
+        from services.chat_store import _now_iso, get_db, SESSIONS_COLLECTION
+
+        title = f"Chat Project · {pname} · {tgl}"
+        await get_db()[SESSIONS_COLLECTION].update_one(
+            {"_id": session["_id"]}, {"$set": {"title": title}}
+        )
+        session["title"] = title
     return _public_session(session)
 
 
@@ -326,6 +427,15 @@ async def chat_history(
 
 # ── Send + Stream ──────────────────────────────────────────────────────────────
 
+@router.get("/sessions/{session_id}/active")
+async def session_stream_active(session_id: str, current_user: dict = Depends(get_current_user)):
+    """True bila pipeline masih berjalan utk session ini (slot aktif).
+    Dipakai FE setelah refresh agar tombol Stop tampil (bukan Send) saat
+    respons server masih berjalan — Fix #114."""
+    await _owned_session(session_id, current_user)
+    return {"active": is_active(session_id)}
+
+
 @router.post("/sessions/{session_id}/send")
 async def send_chat_message(
     session_id: str,
@@ -338,6 +448,13 @@ async def send_chat_message(
     message = (body.message or "").strip()
     if len(message) < 2:
         raise HTTPException(status_code=422, detail="Pesan minimal 2 karakter")
+    chat_depth = (body.mode or "low").lower()
+    if chat_depth not in VALID_CHAT_MODES:
+        raise HTTPException(status_code=422, detail="mode harus salah satu dari: low, medium, thinking")
+    project_id = (session.get("projectId") or "") or None
+    # Chat by Project: guard owner/member workspace pemilik project
+    if project_id:
+        await _require_project_member(project_id, current_user)
     if is_active(session_id):
         raise HTTPException(status_code=409, detail="Tunggu respons selesai (atau stop stream)")
 
@@ -349,10 +466,9 @@ async def send_chat_message(
     except Exception:
         unregister(session_id)  # jangan tinggalkan slot menetap bila persist gagal
         raise
-    project_id = (session.get("projectId") or "") or None
     background_tasks.add_task(
         _run_pipeline, session_id, message,
-        await _resolve_workspace_id(project_id), project_id,
+        await _resolve_workspace_id(project_id), project_id, chat_depth,
     )
     return {"messageId": str(user_msg["_id"])}
 
@@ -397,3 +513,39 @@ async def stream_chat(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ── Soft-delete session (Fix #118) ───────────────────────────────────────────
+
+@router.delete("/sessions/{session_id}", status_code=200)
+async def delete_chat_session(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Soft-delete sesi chat project (owner only).
+
+    - Sesi terikat tiket (ticketId) DITOLAK — arsip komunikasi tiket, bukan aset.
+    - Sesi yang sedang berjalan (stream aktif) DITOLAK — tunggu/hentikan dulu.
+    - Cascade flag deletedAt ke semua pesan agar history lenyap dari endpoint.
+    - Data tetap utuh di DB untuk pemulihan manual via Mongo (tanpa endpoint restore).
+    """
+    session = await _owned_session(session_id, current_user)
+    if session.get("ticketId"):
+        raise HTTPException(
+            status_code=409,
+            detail="Sesi terikat tiket tidak bisa dihapus dari sini",
+        )
+    if is_active(session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Tidak bisa menghapus sesi yang sedang berjalan — tunggu/hentikan stream dulu",
+        )
+    # Lepas registry stream kalau masih ada (defensive; biasanya sudah unregister setelah [DONE])
+    try:
+        unregister(session_id)
+    except Exception:
+        pass
+    result = await soft_delete_session(session_id, str(current_user["_id"]))
+    if result is None:
+        raise HTTPException(status_code=404, detail="Session tidak ditemukan")
+    return result

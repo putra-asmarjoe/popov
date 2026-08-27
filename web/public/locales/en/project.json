@@ -97,6 +97,12 @@
     "sessions_label": "Chat sessions",
     "no_other_sessions": "No other sessions yet",
     "new_chat": "New chat",
-    "new_button": "New"
+    "new_button": "New",
+    "agent_working": "analyzing…",
+    "send_failed": "Failed to send message",
+    "stream_disconnected": "stream disconnected — answer is saved on the server",
+    "stream_stopped": "stopped",
+    "stream_error": "Stream error",
+    "agent_composing": "composing reply…"
   }
 }

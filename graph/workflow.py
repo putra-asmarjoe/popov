@@ -14,6 +14,7 @@ from agents.span_agent import span_agent
 from agents.triage_agent import triage_agent
 from agents.knowledge_agent import knowledge_agent
 from agents.ticket_agent import ticket_agent
+from agents.project_agent import project_agent
 import logging
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,7 @@ def _route(state: AgentState) -> Union[str, List[str]]:
         "telegram_agent":  "telegram_agent",
         "span_agent":      "span_agent",
         "ticket_agent":    "ticket_agent",
+        "project_agent":   "project_agent",
         "end":             END,
     }
     return route_map.get(next_a, END)
@@ -112,6 +114,7 @@ def build_graph() -> StateGraph:
     workflow.add_node("span_agent",        span_agent)
     workflow.add_node("knowledge_agent",   knowledge_agent)  # FE-7
     workflow.add_node("ticket_agent",      ticket_agent)     # Ticket Agent (lane pengelolaan tiket)
+    workflow.add_node("project_agent",     project_agent)    # Chat by Project (lane Q&A project, fase 1 read-only)
 
     # Entry point
     workflow.set_entry_point("supervisor")
@@ -136,6 +139,9 @@ def build_graph() -> StateGraph:
 
     # Ticket Agent → telegram (konfirmasi deterministik, tanpa LLM tambahan)
     workflow.add_edge("ticket_agent", "telegram_agent")
+
+    # Project Agent → telegram (jawaban Q&A project / pengarah detail tiket)
+    workflow.add_edge("project_agent", "telegram_agent")
 
     # Correlation agent → telegram_agent
     workflow.add_edge("correlation_agent", "telegram_agent")

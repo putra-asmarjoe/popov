@@ -2,9 +2,17 @@
 
 Open-source, self-hosted **AI incident response platform**. Popov connects to your existing observability stack (Prometheus, Tempo, Loki, Alertmanager), automatically triages and investigates production incidents with a LangGraph multi-agent pipeline, and delivers one actionable report — with root cause — to Telegram or a built-in web workspace with ticketing.
 
-> 🚧 Popov is under active development. It runs in production inside its origin team's ecosystem, but APIs and features may still change. See [Project Status](#project-status).
+> 🔒 **Your data never leaves your infrastructure.** No telemetry. No phone home. No third-party with access to your production logs.
+
+![License](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)
+![Python](https://img.shields.io/badge/python-3.9+-green)
+![React](https://img.shields.io/badge/react-19-61dafb)
+![Status](https://img.shields.io/badge/status-active%20development-orange)
+
+> 🚧 **Status:** Popov is under active development. It runs in production inside its origin team's ecosystem, but APIs and features may still change. See [Project Status](#project-status).
 
 ---
+
 
 ## The Problem
 
@@ -39,6 +47,15 @@ It is not a metrics database or a dashboard replacement — it sits **on top of*
 - **Continue the conversation** — reports come with dynamic follow-up buttons and a 30-minute diagnostic session, so you can drill down ("show health", "check traces") without retyping anything.
 - **Track resolution** — detected alerts can auto-create tickets (1 ticket : N linked alerts) in a realtime ticketing UI with status chain, assignees, progress logs, and 🤖 auto badges. You can also manage tickets by chatting with the agent ("close this ticket", "set severity to low").
 - **Control costs** — data-collector agents never call an LLM (<500-token summaries); only ~7 well-defined points use the LLM, all tracked per agent/model/token via `llm_usage`.
+
+## Data Privacy & Sovereignty
+
+Popov is designed with one principle: **your incident data never leaves your infrastructure.**
+
+- **No telemetry** — Popov does not collect or transmit usage data
+- **No phone home** — zero outbound calls to Popov servers
+- **No third-party access** — your logs, alerts, and incident history stay on your servers
+- **No vendor lock-in** — your data lives in your own MongoDB, your own storage 
 
 ## Key Features
 
@@ -297,7 +314,6 @@ See [`deploy/README.md`](deploy/README.md) for the full step-by-step guide (priv
 > - Expect breaking API and schema changes.
 > - Single-replica constraints (Telegram long-polling, watchdog singleton) limit horizontal scaling for now.
 > - Test coverage exists for the agent pipeline and prompt rendering (pytest), but the project has no CI badges or release cadence yet.
-> - Documentation is partly internal-facing (`SUMMARY*.md`, `devdocs/`).
 
 Good fit today: small-to-medium engineering teams that already run Prometheus/Tempo/Loki, want automated triage and investigation, and are comfortable self-hosting and tolerating some churn. Not yet pitched for large enterprise fleets.
 

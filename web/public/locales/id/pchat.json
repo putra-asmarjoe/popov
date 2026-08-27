@@ -1,0 +1,24 @@
+{
+  "sidebar_title": "Chat",
+  "new_chat": "Chat project baru",
+  "pick_project": "Pilih project",
+  "sidebar_empty": "Belum ada chat project",
+  "back": "Kembali",
+  "title_fallback": "Chat project",
+  "no_session": "Sesi tidak ditemukan atau tidak bisa diakses.",
+  "input_placeholder": "Tanya apa saja tentang project ini… (tiket, aktivitas, error, knowledge)",
+  "send": "Kirim",
+  "stop": "Hentikan stream",
+  "delete_session": "Hapus sesi",
+  "delete_session_aria": "Opsi lain",
+  "delete_confirm_title": "Hapus sesi?",
+  "delete_confirm_description": "Hapus sesi \"{{title}}\"? Pesan di chat akan diarsipkan dan tidak tampil lagi di daftar ini.",
+  "delete_confirm_cancel": "Batal",
+  "delete_confirm_action": "Hapus",
+  "delete_failed": "Gagal menghapus sesi",
+  "mode_hint": {
+    "low": "Cepat: fakta dikumpulkan langsung dari database",
+    "medium": "Seimbang: menambah tawaran investigasi lebih dalam",
+    "thinking": "Insight penuh: menjalankan analisis insiden lengkap (lebih lambat, boros token)"
+  }
+}

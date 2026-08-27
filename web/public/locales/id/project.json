@@ -97,6 +97,12 @@
     "sessions_label": "Sesi chat",
     "no_other_sessions": "Belum ada sesi lain",
     "new_chat": "Chat baru",
-    "new_button": "Baru"
+    "new_button": "Baru",
+    "agent_working": "sedang menganalisis…",
+    "send_failed": "Gagal mengirim pesan",
+    "stream_disconnected": "koneksi stream terputus — jawaban tersimpan di server",
+    "stream_stopped": "dihentikan",
+    "stream_error": "Stream error",
+    "agent_composing": "menyusun jawaban…"
   }
 }

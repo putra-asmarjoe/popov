@@ -1,19 +1,20 @@
 import { useEffect } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
+import { useTranslation } from "react-i18next"
 import { api, apiErrorMessage } from "@/lib/api"
 import { useChatStore } from "@/store/chat.store"
 import type { ChatSession } from "@/types/chat"
 
 // ── Queries ───────────────────────────────────────────────────────────────────
 
-export function useChatSessions(projectId: string | null) {
+export function useChatSessions(projectId: string | null, limit = 20) {
   const setSessions = useChatStore((s) => s.setSessions)
   const query = useQuery({
-    queryKey: ["chat", "sessions", projectId],
+    queryKey: ["chat", "sessions", projectId, limit],
     queryFn: async () => {
       const { data } = await api.get("/chat/sessions", {
-        params: projectId ? { projectId } : {},
+        params: { ...(projectId ? { projectId } : {}), limit },
       })
       return data.sessions as ChatSession[]
     },
@@ -53,9 +54,13 @@ export function useChatMessages(sessionId: string | null) {
 export function useCreateChatSession(projectId: string | null) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (vars?: { title?: string; ticketId?: string | null }) => {
+    mutationFn: async (vars?: {
+      title?: string
+      ticketId?: string | null
+      projectId?: string // Chat by Project: override project tujuan (sidebar [+ baru])
+    }) => {
       const { data } = await api.post("/chat/sessions", {
-        projectId,
+        projectId: vars?.projectId ?? projectId,
         ticketId: vars?.ticketId ?? null,
         title: vars?.title ?? "Chat baru",
       })
@@ -76,4 +81,20 @@ export function useChatStream() {
   const sendMessage = useChatStore((s) => s.sendMessage)
   const stopStream = useChatStore((s) => s.stopStream)
   return { sendMessage, stopStream }
+}
+
+/** Fix #118: soft-delete sesi chat (hanya sesi project, bukan tiket). */
+export function useDeleteChatSession() {
+  const { t } = useTranslation("pchat")
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (sessionId: string) => {
+      const { data } = await api.delete(`/chat/sessions/${sessionId}`)
+      return data
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["chat", "sessions"] })
+    },
+    onError: (e) => toast.error(apiErrorMessage(e, t("delete_failed"))),
+  })
 }

@@ -355,6 +355,35 @@ async def get_watchdog_alert(alert_id: str) -> Optional[dict]:
         return None
 
 
+async def list_recent_watchdog_alerts(
+    workspace_id: Optional[str],
+    *,
+    since_hours: float = 3.0,
+    limit: int = 20,
+) -> list:
+    """Alert watchdog terbaru dalam window N jam (read-only, utk chat project).
+    Scoped workspace; None workspace → kosong (tanpa fallback global). Urut terbaru."""
+    if not workspace_id:
+        return []
+    since = (datetime.now(timezone.utc) - timedelta(hours=max(0.1, since_hours))).isoformat()
+    query: Dict[str, Any] = {"workspace_id": str(workspace_id), "sent_at": {"$gte": since}}
+    try:
+        cursor = (
+            get_db()[WATCHDOG_ALERT_COLLECTION]
+            .find(query)
+            .sort("sent_at", -1)
+            .limit(max(1, min(limit, 50)))
+        )
+        docs = []
+        async for doc in cursor:
+            doc["_id"] = str(doc["_id"])
+            docs.append(doc)
+        return docs
+    except Exception as e:
+        logger.error(f"Failed to list recent watchdog alerts ws={workspace_id}: {e}")
+        return []
+
+
 async def update_watchdog_alert_message(alert_id: str, message: str) -> bool:
     """
     Patch pesan alert tersimpan (Fix #105) — nomor tiket baru diketahui SETELAH

@@ -30,19 +30,30 @@ const PROVIDERS = [
   { id: "opencode", label: "OpenCode Zen" },
 ] as const
 
-/** Chip hasil uji koneksi — solid, tema-aware (hijau sukses / merah gagal). */
+/** Default base URL per provider — single source of truth di FE untuk auto-fill.
+ *  Selaras dengan default di `services/llm_factory.py` backend. Tetap bisa diedit manual. */
+const DEFAULT_BASE_URLS: Record<string, string> = {
+  openai: "https://api.openai.com/v1",
+  openrouter: "https://openrouter.ai/api/v1",
+  google: "https://generativelanguage.googleapis.com/v1beta/openai",
+  opencode: "https://opencode.ai/zen/v1",
+}
+
+/** Chip hasil uji koneksi — solid, tema-aware (hijau sukses / merah gagal).
+ *  Pecah pesan panjang ke baris baru (break-words + whitespace-pre-line) sehingga
+ *  badge mengikuti lebar modal — tidak melebar, tidak terpotong. */
 function TestResultChip({ text }: { text: string }) {
   const ok = text.startsWith("✅")
   return (
-    <span
+    <div
       title={text}
       className={cn(
-        "inline-flex max-w-full items-center gap-1.5 truncate rounded-full px-2.5 py-1 font-mono text-[11px]",
+        "max-w-full whitespace-pre-line break-words rounded-md px-2.5 py-1 font-mono text-[11px]",
         ok ? "bg-status-resolved text-status-resolved-fg" : "bg-destructive text-destructive-foreground",
       )}
     >
       {text}
-    </span>
+    </div>
   )
 }
 
@@ -68,6 +79,39 @@ export function ApiKeyForm() {
   const [testing, setTesting] = useState<"llm" | "embed" | null>(null)
   const [lastTest, setLastTest] = useState<"llm" | "embed" | null>(null)
   const [testResult, setTestResult] = useState<string | null>(null)
+  // Test koneksi tersimpan langsung dari baris list — tanpa buka modal
+  const [rowTesting, setRowTesting] = useState<string | null>(null)
+  const [rowResult, setRowResult] = useState<{ id: string; text: string } | null>(null)
+
+  const runSavedTest = async (
+    id: string,
+    kind: "llm" | "embed",
+    ep: string,
+    mdl: string,
+  ) => {
+    if (!ep || !mdl) return
+    setRowTesting(id)
+    setRowResult(null)
+    try {
+      // apiKey/baseUrl kosong → backend pakai nilai TERsimpan utk provider ini
+      const { data: res } = await api.post(
+        kind === "llm" ? "/config/llm/test" : "/config/llm/test-embedding",
+        { provider: ep, model: mdl, baseUrl: "", apiKey: "" },
+      )
+      if (res.ok) {
+        setRowResult({
+          id,
+          text: `✅ OK · ${res.latency_ms}ms` + (res.dim ? ` · dim=${res.dim}` : ""),
+        })
+      } else {
+        setRowResult({ id, text: `❌ ${res.error ?? "failed"}` })
+      }
+    } catch (e) {
+      setRowResult({ id, text: `❌ ${apiErrorMessage(e, t("apikeys.test_failed_fallback"))}` })
+    } finally {
+      setRowTesting(null)
+    }
+  }
 
   // Modal LLM (tambah/edit kredensial provider)
   const [llmModal, setLlmModal] = useState<{
@@ -124,16 +168,30 @@ export function ApiKeyForm() {
 
   const activateProvider = (p: string) => update.mutate({ provider: p })
 
-  const openLlmAdd = () =>
+  const closeLlmModal = () => {
+    setLlmModal(null)
+    setTestResult(null)
+    setLastTest(null)
+  }
+
+  const openLlmAdd = () => {
+    setTestResult(null)
+    setLastTest(null)
+    const defaultProvider = availableProviders[0]?.id ?? PROVIDERS[0].id
     setLlmModal({
       mode: "add",
-      provider: availableProviders[0]?.id ?? PROVIDERS[0].id,
-      baseUrl: "",
+      provider: defaultProvider,
+      // Auto-fill base URL default untuk provider pilihan — user tetap bisa edit.
+      baseUrl: DEFAULT_BASE_URLS[defaultProvider] ?? "",
       key: "",
       model: "",
     })
-  const openLlmEdit = (p: string) =>
+  }
+  const openLlmEdit = (p: string) => {
+    setTestResult(null)
+    setLastTest(null)
     setLlmModal({ mode: "edit", provider: p, baseUrl: bUrl(p), key: "", model: mModel(p) })
+  }
 
   const saveLlmModal = () => {
     if (!llmModal) return
@@ -145,14 +203,23 @@ export function ApiKeyForm() {
     if (llmModal.baseUrl.trim()) patch.baseUrls = { [llmModal.provider]: llmModal.baseUrl.trim() }
     if (llmModal.key.trim().length >= 20) patch.apiKey = { [llmModal.provider]: llmModal.key.trim() }
     if (llmModal.model.trim()) patch.models = { [llmModal.provider]: llmModal.model.trim() }
-    update.mutate(patch, { onSuccess: () => setLlmModal(null) })
+    update.mutate(patch, { onSuccess: () => closeLlmModal() })
   }
 
-  const openEmbAdd = () =>
+  const openEmbAdd = () => {
+    setTestResult(null)
+    setLastTest(null)
     setEmbModal({
       provider: data.embedding?.provider ?? "openrouter",
       model: data.embedding?.model ?? "",
     })
+  }
+
+  const closeEmbModal = () => {
+    setEmbModal(null)
+    setTestResult(null)
+    setLastTest(null)
+  }
 
   const saveEmbModal = () => {
     if (!embModal || !embModal.model.trim()) return
@@ -164,7 +231,7 @@ export function ApiKeyForm() {
           model: embModal.model.trim(),
         },
       },
-      { onSuccess: () => setEmbModal(null) },
+      { onSuccess: () => closeEmbModal() },
     )
   }
 
@@ -233,8 +300,24 @@ export function ApiKeyForm() {
                     <span className="font-mono text-[11px] text-muted-foreground">
                       {mModel(p.id) || "-"} · {data.keysMasked[p.id]}
                     </span>
+                    {rowResult?.id === p.id && !rowTesting && (
+                      <div className="mt-1.5">
+                        <TestResultChip text={rowResult.text} />
+                      </div>
+                    )}
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1 text-xs"
+                      disabled={rowTesting !== null || testing !== null || !isSet(p.id)}
+                      title={t("apikeys.test_saved_title")}
+                      onClick={() => runSavedTest(p.id, "llm", p.id, mModel(p.id))}
+                    >
+                      <PlugZap className={cn("size-3 mr-0.5", rowTesting === p.id && "animate-pulse")} />
+                      {rowTesting === p.id ? "…" : "Test"}
+                    </Button>
                     {!isActive(p.id) && (
                       <Button
                         variant="outline"
@@ -311,6 +394,11 @@ export function ApiKeyForm() {
                   <span className="font-mono text-[11px] text-muted-foreground">
                     {data.embedding.provider} · {data.embedding.model || "-"}
                   </span>
+                  {rowResult?.id === "embed-provider" && !rowTesting && (
+                    <div className="mt-1.5">
+                      <TestResultChip text={rowResult.text} />
+                    </div>
+                  )}
                 </>
               ) : (
                 <span className="text-sm text-muted-foreground">
@@ -336,6 +424,24 @@ export function ApiKeyForm() {
                     variant="ghost"
                     size="sm"
                     className="h-7 gap-1 text-xs"
+                    disabled={rowTesting !== null || testing !== null || !data.embedding.model}
+                    title={t("apikeys.test_saved_title")}
+                    onClick={() =>
+                      runSavedTest(
+                        "embed-provider",
+                        "embed",
+                        data.embedding!.provider ?? "openrouter",
+                        data.embedding!.model ?? "",
+                      )
+                    }
+                  >
+                    <PlugZap className={cn("size-3 mr-0.5", rowTesting === "embed-provider" && "animate-pulse")} />
+                    {rowTesting === "embed-provider" ? "…" : "Test"}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 gap-1 text-xs"
                     onClick={openEmbAdd}
                   >
                     <Pencil className="size-3" /> Edit
@@ -357,7 +463,7 @@ export function ApiKeyForm() {
       </div>
 
       {/* ── Modal LLM: tambah / edit kredensial provider ── */}
-      <Dialog open={llmModal !== null} onOpenChange={(o) => !o && setLlmModal(null)}>
+      <Dialog open={llmModal !== null} onOpenChange={(o) => !o && closeLlmModal()}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>
@@ -375,7 +481,22 @@ export function ApiKeyForm() {
                 <Label>Provider</Label>
                 <Select
                   value={llmModal.provider}
-                  onValueChange={(v) => setLlmModal((s) => (s ? { ...s, provider: v } : s))}
+                  onValueChange={(v) =>
+                    setLlmModal((s) => {
+                      if (!s) return s
+                      // Auto-fill base URL saat user pilih provider — hanya jika belum
+                      // pernah diedit (kosong ATAU masih sama dgn default provider lama).
+                      // Ini mencegah overwrite URL custom yang sudah diketik user.
+                      const prevDefault = DEFAULT_BASE_URLS[s.provider] ?? ""
+                      const shouldAutofill =
+                        !s.baseUrl.trim() || s.baseUrl.trim() === prevDefault
+                      return {
+                        ...s,
+                        provider: v,
+                        baseUrl: shouldAutofill ? (DEFAULT_BASE_URLS[v] ?? "") : s.baseUrl,
+                      }
+                    })
+                  }
                   disabled={llmModal.mode === "edit"}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
@@ -418,31 +539,33 @@ export function ApiKeyForm() {
                   autoComplete="off"
                 />
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5"
-                  disabled={testing !== null}
-                  onClick={() =>
-                    runTest(
-                      "llm",
-                      llmModal.provider,
-                      llmModal.model.trim() || mModel(llmModal.provider),
-                      llmModal.baseUrl.trim(),
-                      llmModal.key.trim(),
-                    )
-                  }
-                >
-                  <PlugZap className={testing === "llm" ? "size-4 animate-pulse" : "size-4"} />
-                  {testing === "llm" ? t("apikeys.testing") : t("apikeys.test_connection")}
-                </Button>
+              <div className="flex flex-col items-stretch gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    disabled={testing !== null}
+                    onClick={() =>
+                      runTest(
+                        "llm",
+                        llmModal.provider,
+                        llmModal.model.trim() || mModel(llmModal.provider),
+                        llmModal.baseUrl.trim(),
+                        llmModal.key.trim(),
+                      )
+                    }
+                  >
+                    <PlugZap className={testing === "llm" ? "size-4 animate-pulse" : "size-4"} />
+                    {testing === "llm" ? t("apikeys.testing") : t("apikeys.test_connection")}
+                  </Button>
+                </div>
                 {lastTest === "llm" && testResult && !testing && <TestResultChip text={testResult} />}
               </div>
             </div>
           )}
           <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => setLlmModal(null)}>
+            <Button variant="outline" size="sm" onClick={closeLlmModal}>
               {t("apikeys.cancel")}
             </Button>
             <Button size="sm" disabled={update.isPending} onClick={saveLlmModal}>
@@ -454,7 +577,7 @@ export function ApiKeyForm() {
       </Dialog>
 
       {/* ── Modal Embedding: pilih provider + model ── */}
-      <Dialog open={embModal !== null} onOpenChange={(o) => !o && setEmbModal(null)}>
+      <Dialog open={embModal !== null} onOpenChange={(o) => !o && closeEmbModal()}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{t("apikeys.emb_modal_title")}</DialogTitle>
@@ -486,25 +609,27 @@ export function ApiKeyForm() {
                   className="font-mono text-xs"
                 />
               </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="gap-1.5"
-                  disabled={testing !== null || !embModal.model.trim()}
-                  onClick={() =>
-                    runTest("embed", embModal.provider, embModal.model.trim(), bUrl(embModal.provider), "")
-                  }
-                >
-                  <PlugZap className={testing === "embed" ? "size-4 animate-pulse" : "size-4"} />
-                  {testing === "embed" ? t("apikeys.testing") : t("apikeys.test_embedding")}
-                </Button>
+              <div className="flex flex-col items-stretch gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    disabled={testing !== null || !embModal.model.trim()}
+                    onClick={() =>
+                      runTest("embed", embModal.provider, embModal.model.trim(), bUrl(embModal.provider), "")
+                    }
+                  >
+                    <PlugZap className={testing === "embed" ? "size-4 animate-pulse" : "size-4"} />
+                    {testing === "embed" ? t("apikeys.testing") : t("apikeys.test_embedding")}
+                  </Button>
+                </div>
                 {lastTest === "embed" && testResult && !testing && <TestResultChip text={testResult} />}
               </div>
             </div>
           )}
           <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => setEmbModal(null)}>
+            <Button variant="outline" size="sm" onClick={closeEmbModal}>
               {t("apikeys.cancel")}
             </Button>
             <Button

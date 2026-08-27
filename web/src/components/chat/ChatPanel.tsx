@@ -4,7 +4,8 @@ import { Bot, Loader2 } from "lucide-react"
 import { ChatInput } from "@/components/chat/ChatInput"
 import { ChatMessages } from "@/components/chat/ChatMessages"
 import { useChatMessages, useChatSessions, useCreateChatSession } from "@/hooks/useChatStream"
-import { useChatStore } from "@/store/chat.store"
+import { useChatStore, recentlyFinalized } from "@/store/chat.store"
+import { api } from "@/lib/api"
 import type { TicketContext } from "@/types/chat"
 
 /**
@@ -50,6 +51,34 @@ export function ChatPanel({
   useEffect(() => {
     if (ticketSession) setActiveSession(ticketSession)
   }, [ticketSession, setActiveSession])
+
+  // Fix #114: setelah refresh, pipeline server mungkin masih berjalan —
+  // cek status sesi → ikut stream (tombol Stop tampil, bukan Send).
+  // Streaming state di-scope per sessionId — bukan global.
+  const attachStream = useChatStore((s) => s.attachStream)
+  const sid = ticketSession?.id
+  const isStreaming = useChatStore((s) => s.streaming[sid ?? ""]?.isStreaming ?? false)
+  useEffect(() => {
+    if (!sid || isStreaming) return
+    if (recentlyFinalized()) return // baru selesai — jangan attach ulang ke stream mati
+    let cancelled = false
+    api
+      .get(`/chat/sessions/${sid}/active`)
+      .then(({ data }) => {
+        if (
+          !cancelled &&
+          data?.active &&
+          !useChatStore.getState().streaming[sid]?.isStreaming &&
+          !recentlyFinalized()
+        ) {
+          attachStream(sid)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [sid, isStreaming, attachStream])
 
   // Konteks tiket untuk prefix pesan (buildEnrichedMessage di chat.store)
   useEffect(() => {

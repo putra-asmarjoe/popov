@@ -124,4 +124,12 @@ class AgentState(TypedDict):
     # Diisi listener/webhook; telegram_agent membalas via channel ini saja.
     origin_notif_id: Optional[str]
 
+    # Chat by Project — lane project_agent (read-only fase 1).
+    # chat_depth: "low" (ringan, default) | "medium" (+saran investigasi) | "thinking"
+    #   (pipeline insiden penuh — routing diputuskan supervisor, bukan agent ini).
+    # project_result: hasil gather deterministik utk meta FE
+    #   {type, ticket_refs?: [{ticketNumber,ticketId}], suggestions?: [str]}
+    chat_depth: Optional[str]
+    project_result: Optional[dict]
+
 

@@ -90,6 +90,22 @@ async def update_locale(user_id: str, locale: str) -> bool:
     return result.matched_count > 0
 
 
+async def get_user_locale(user_id: Optional[str]) -> str:
+    """Preferensi bahasa user ("en"/"id") utk pesan fallback backend (Fix #113).
+    user_id bukan ObjectId / tidak ditemukan → "id" (perilaku legacy pesan ID)."""
+    try:
+        from bson import ObjectId
+        if not user_id or len(str(user_id)) != 24:
+            return "id"
+        doc = await get_db()[USERS_COLLECTION].find_one(
+            {"_id": ObjectId(str(user_id))}, {"locale_preference": 1}
+        )
+        loc = (doc or {}).get("locale_preference") or "id"
+        return loc if loc in ("en", "id") else "id"
+    except Exception:
+        return "id"
+
+
 # ── CRUD ──────────────────────────────────────────────────────────────────────
 
 async def ensure_user_indexes() -> None:

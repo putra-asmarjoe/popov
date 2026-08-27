@@ -14,11 +14,35 @@ logger = logging.getLogger(__name__)
 
 # Fix #53: pesan profesional saat LLM tidak tersedia — dipakai correlation fallback
 # & telegram_agent (semua branch LLM). Arahkan user cek config/limit, bukan bingung.
-LLM_UNAVAILABLE_NOTE = (
-    "\n\n_⚠️ *LLM tidak tersedia saat ini* — analisis AI tidak dapat dihasilkan. "
-    "Periksa konfigurasi LLM (provider, model, API key) atau batas kredit pada "
-    "dashboard penyedia layanan Anda, lalu kirim ulang pertanyaan._"
-)
+# Fix #113: bilingual — locale dari preferensi user (localePreference), fallback "id".
+_LLM_UNAVAILABLE_TEXTS = {
+    "id": (
+        "\n\n_⚠️ *LLM tidak tersedia saat ini* — analisis AI tidak dapat dihasilkan. "
+        "Periksa konfigurasi LLM (provider, model, API key) atau batas kredit pada "
+        "dashboard penyedia layanan Anda, lalu kirim ulang pertanyaan._"
+    ),
+    "en": (
+        "\n\n_⚠️ *LLM is currently unavailable* — AI analysis could not be generated. "
+        "Check your LLM configuration (provider, model, API key) or credit limit on "
+        "your provider dashboard, then resend your question._"
+    ),
+}
+
+
+def llm_unavailable_note(locale: str = "id") -> str:
+    return _LLM_UNAVAILABLE_TEXTS.get(locale, _LLM_UNAVAILABLE_TEXTS["id"])
+
+
+async def llm_unavailable_note_for(state: dict) -> str:
+    """Resolusi locale dari sender.user_id di AgentState (web chat punya Mongo user_id;
+    Telegram biasanya tidak → fallback "id")."""
+    from services.user_store import get_user_locale
+    uid = (state.get("sender") or {}).get("user_id") or ""
+    return llm_unavailable_note(await get_user_locale(uid))
+
+
+# Backward-compat: pemakaian lama tanpa state (dihindari untuk kode baru)
+LLM_UNAVAILABLE_NOTE = llm_unavailable_note("id")
 
 
 def infra_diag_steps(title: str) -> str:
@@ -237,9 +261,9 @@ explain from the ticket description what might be happening; stay honest about d
                 f"Service terkait: {tc.get('serviceName') or service_name}.\n"
                 f"Deskripsi: {tc.get('description') or 'tidak ada'}\n"
                 f"{diag}"
-            ) + LLM_UNAVAILABLE_NOTE
+            ) + await llm_unavailable_note_for(state)
         else:
-            analysis = f"Correlation Analysis Gagal: {str(e)}" + LLM_UNAVAILABLE_NOTE
+            analysis = f"Correlation Analysis Gagal: {str(e)}" + await llm_unavailable_note_for(state)
         fallback_result = {
             "analysis": analysis,
             "root_cause_assessment": "unknown",

@@ -26,8 +26,18 @@ def register(session_id: str) -> "asyncio.Queue[str]":
     return queue
 
 
+def mark_done(session_id: str) -> None:
+    """Tandai pipeline selesai SEBELUM sentinel DONE dibaca reader (Fix #114).
+    Menutup race: FE finalize → cek /active → masih registered (jeda unregister)
+    → attach ulang ke stream kosong → indikator menggantung selamanya."""
+    entry = _registry.get(session_id)
+    if entry is not None:
+        entry["done"] = True
+
+
 def is_active(session_id: str) -> bool:
-    return session_id in _registry
+    entry = _registry.get(session_id)
+    return entry is not None and not entry.get("done", False)
 
 
 def try_set_reader(session_id: str) -> bool:
