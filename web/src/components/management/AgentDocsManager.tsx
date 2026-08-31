@@ -1,7 +1,8 @@
 import { lazy, Suspense, useState } from "react"
 import { useTranslation } from "react-i18next"
+import i18n from "@/lib/i18n"
 import { toast } from "sonner"
-import { FileText, RefreshCw, ScrollText, Trash2 } from "lucide-react"
+import { FileText, ScrollText, Trash2 } from "lucide-react"
 import { api, apiErrorMessage } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
@@ -38,7 +39,7 @@ export function AgentDocsManager() {
   const { t } = useTranslation("management")
   const [category, setCategory] = useState("general")
   const { data: docs, isLoading } = useAgentDocs(category)
-  const { create, update, remove, reload } = useAgentDocMutations()
+  const { create, update, remove } = useAgentDocMutations()
 
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [editorMode, setEditorMode] = useState<"tulis" | "preview">("tulis")
@@ -132,11 +133,8 @@ export function AgentDocsManager() {
           />
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={() => reload.mutate()}>
-            <RefreshCw className={cn("size-3.5", reload.isPending && "animate-spin")} /> Reload
-          </Button>
           <Button size="sm" className="gap-1.5" onClick={openCreate}>
-            <FileText className="size-4" /> Buat dokumen
+            <FileText className="size-4" /> {t("agent_docs.create_document")}
           </Button>
         </div>
       </div>
@@ -155,7 +153,7 @@ export function AgentDocsManager() {
             )}
             onClick={() => setCategory(c.id)}
           >
-            {c.label}
+            {t(c.label)}
           </button>
         ))}
       </div>
@@ -165,7 +163,7 @@ export function AgentDocsManager() {
         {(docs ?? []).length === 0 ? (
           <div className="flex flex-col items-center gap-2 p-10 text-center text-muted-foreground">
             <ScrollText className="size-8 opacity-40" />
-            <p className="text-sm">{t("agent_docs.empty_category", { category: CATEGORY_LABEL[category] ?? category })}</p>
+            <p className="text-sm">{t("agent_docs.empty_category", { category: t(CATEGORY_LABEL[category] ?? category) })}</p>
           </div>
         ) : (
           (docs ?? []).map((doc) => (
@@ -175,7 +173,7 @@ export function AgentDocsManager() {
                 <p className="truncate font-mono text-xs font-medium">{doc.key}</p>
                 <p className="text-[11px] text-muted-foreground">
                   {formatBytes(doc.body_len)} ·{" "}
-                  {new Date(doc.updatedAt ?? "").toLocaleString("id-ID")}
+                  {new Date(doc.updatedAt ?? "").toLocaleString(i18n.language === "en" ? "en-US" : "id-ID")}
                 </p>
               </div>
               {metaBadge(doc) && (
@@ -184,10 +182,10 @@ export function AgentDocsManager() {
                 </Badge>
               )}
               <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => openPreview(doc)}>
-                Baca
+                {t("agent_docs.read")}
               </Button>
               <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => openEdit(doc)}>
-                Edit
+                {t("agent_docs.edit")}
               </Button>
               <Button
                 variant="ghost"
@@ -210,8 +208,7 @@ export function AgentDocsManager() {
               {editor?.mode === "create" ? t("agent_docs.create_title") : t("agent_docs.edit_title", { key: editor?.key ?? "" })}
             </DialogTitle>
             <DialogDescription>
-              Kategori {editor ? CATEGORY_LABEL[editor.category] ?? editor.category : ""} — meta JSON +
-              body markdown. Meta harus JSON valid.
+              {t("agent_docs.dialog_description_services")}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -336,7 +333,7 @@ export function AgentDocsManager() {
                 setConfirmDelete(null)
               }}
             >
-              Ya, hapus
+              {t("agent_docs.confirm_delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

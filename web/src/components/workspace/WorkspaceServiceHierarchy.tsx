@@ -1,14 +1,18 @@
-import { lazy, Suspense, useMemo, useState } from "react"
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
+  ChevronDown,
+  ChevronRight,
   CircleCheck,
   CircleDashed,
   Database,
   Eye,
   FilePlus2,
   FileText,
+  Library,
   Lock,
   Pencil,
+  PlugZap,
   Plus,
   Trash2,
 } from "lucide-react"
@@ -35,7 +39,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Textarea } from "@/components/ui/textarea"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -53,10 +56,10 @@ import {
 } from "@/hooks/useManagement"
 import { useWorkspaceServiceGroups } from "@/hooks/useServicesLib"
 import { useAuth } from "@/hooks/useAuth"
+import { useLinkKnowledge, useWorkspaceKnowledge } from "@/hooks/useKnowledge"
+import { useProjects } from "@/hooks/useWorkspaces"
+import { KnowledgeViewDialog } from "@/components/shared/KnowledgeViewDialog"
 
-const MarkdownView = lazy(() =>
-  import("@/components/shared/MarkdownView").then((m) => ({ default: m.MarkdownView })),
-)
 const ServiceKnowledgeDialogLazy = lazy(() =>
   import("@/components/shared/ServiceKnowledgeDialog").then((m) => ({
     default: m.ServiceKnowledgeDialog,
@@ -111,10 +114,46 @@ export function WorkspaceServiceHierarchy({
     libraryServiceId: string
     serviceId: string
     autoCreate?: boolean
+    initialEditId?: string
+    initialEditName?: string
+    initialEditFolder?: string
   } | null>(null)
-  const [viewDoc, setViewDoc] = useState<{ name: string; content: string } | null>(null)
-  const [activatingFor, setActivatingFor] = useState<string | null>(null)
+  const [viewDoc, setViewDoc] = useState<{ name: string; folder?: string; content: string; meta?: Record<string, any> } | null>(null)
+  const [activeKnowledgeId, setActiveKnowledgeId] = useState<string | null>(null)
+  const [viewKnowledgeItems, setViewKnowledgeItems] = useState<{ knowledgeLibraryId: string; name: string; folder: string }[]>([])
+  const [knowledgeExpanded, setKnowledgeExpanded] = useState<Set<string>>(new Set())
 
+  // Project selection for create dialog
+  const { data: allProjects } = useProjects(workspaceId)
+  const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set())
+  const prevProjectsRef = useRef<string[]>([])
+  useEffect(() => {
+    if (allProjects && prevProjectsRef.current.length === 0 && allProjects.length > 0) {
+      setSelectedProjectIds(new Set(allProjects.map((p) => p.id)))
+    }
+    prevProjectsRef.current = allProjects?.map((p) => p.id) ?? []
+  }, [allProjects])
+
+  async function openView(knowledgeLibraryId: string, name: string, items?: { knowledgeLibraryId: string; name: string; folder: string }[]) {
+    try {
+      setViewDoc({ name, content: "" })
+      setActiveKnowledgeId(knowledgeLibraryId)
+      if (items) setViewKnowledgeItems(items)
+      const { data } = await api.get(`/knowledge/library/${knowledgeLibraryId}`)
+      setViewDoc({ name, folder: data.folder, content: data.content ?? "", meta: data.meta })
+    } catch (e) {
+      setViewDoc(null)
+      setActiveKnowledgeId(null)
+      toast.error(apiErrorMessage(e, t("hierarchy.owner_only_read_error")))
+    }
+  }
+
+  async function navigateKnowledge(knowledgeLibraryId: string) {
+    const item = viewKnowledgeItems.find((k) => k.knowledgeLibraryId === knowledgeLibraryId)
+    if (!item) return
+    await openView(knowledgeLibraryId, item.name)
+  }
+  const [activatingFor, setActivatingFor] = useState<string | null>(null)
   // FE-8.6 fix v2: satu tombol pintar — entri library dibuat OTOMATIS bila belum ada,
   // lalu panel kelola langsung terbuka (tidak ada langkah "Aktifkan" manual lagi).
   async function openKnowledgeManager(serviceId: string) {
@@ -122,6 +161,19 @@ export function WorkspaceServiceHierarchy({
     if (existing) {
       setKnowledgeFor({ libraryServiceId: existing, serviceId })
       return
+    }
+    // FIX: cek apakah service sudah ada di library global (bukan punya kita)
+    // sebelum coba buat baru — hindari error "sudah ada"
+    try {
+      const { data: myServices } = await api.get("/services/library")
+      const found = (myServices.items ?? []).find((s: any) => s.serviceId === serviceId)
+      if (found) {
+        qc.invalidateQueries({ queryKey: ["services"] })
+        setKnowledgeFor({ libraryServiceId: found.id, serviceId })
+        return
+      }
+    } catch {
+      // lanjut buat baru
     }
     try {
       setActivatingFor(serviceId)
@@ -134,13 +186,9 @@ export function WorkspaceServiceHierarchy({
       setActivatingFor(null)
     }
   }
-  const [editDoc, setEditDoc] = useState<{
-    id: string
-    name: string
-    folder: string
-    content: string
-  } | null>(null)
-  const unlinkKb = useUnlinkKnowledgeFlexible()
+  const { data: wsRefs } = useWorkspaceKnowledge(workspaceId)
+  const linkWs = useLinkKnowledge(workspaceId)
+  const wsLinkedIds = useMemo(() => new Set((wsRefs ?? []).map((r) => r.libraryId)), [wsRefs])
 
   // Join: knowledge per service_id dari semua project (grouped endpoint)
   const knowledgeByServiceId = useMemo(() => {
@@ -175,8 +223,6 @@ export function WorkspaceServiceHierarchy({
     }
     return map
   }, [groups, meId])
-
-  const invalidateAll = () => qc.invalidateQueries({ queryKey: ["services"] })
 
   function openEdit(item: WsRegistryItem) {
     setEditor({
@@ -229,50 +275,10 @@ export function WorkspaceServiceHierarchy({
       )
     } else {
       create.mutate(
-        { service_id: editor.service_id, label: editor.label, ...dbPayload },
+        { service_id: editor.service_id, label: editor.label, ...dbPayload, project_ids: Array.from(selectedProjectIds) },
         { onSuccess: () => setEditor(null) },
       )
     }
-  }
-
-  async function openView(knowledgeLibraryId: string, name: string) {
-    try {
-      setViewDoc({ name, content: "" })
-      const { data } = await api.get(`/knowledge/library/${knowledgeLibraryId}`)
-      setViewDoc({ name, content: data.content ?? "" })
-    } catch (e) {
-      setViewDoc(null)
-      toast.error(apiErrorMessage(e, t("hierarchy.owner_only_read_error")))
-    }
-  }
-
-  async function openEditDoc(k: KnowledgeEntry) {
-    try {
-      const { data } = await api.get(`/knowledge/library/${k.knowledgeLibraryId}`)
-      setEditDoc({
-        id: k.knowledgeLibraryId,
-        name: data.name ?? k.name,
-        folder: data.folder ?? k.folder,
-        content: data.content ?? "",
-      })
-    } catch (e) {
-      toast.error(apiErrorMessage(e, t("hierarchy.owner_only_edit_error")))
-    }
-  }
-
-  function saveEditDoc() {
-    if (!editDoc || !editDoc.name.trim() || !editDoc.content.trim()) return
-    api
-      .patch(`/knowledge/library/${editDoc.id}`, {
-        name: editDoc.name,
-        folder: editDoc.folder,
-        content: editDoc.content,
-      })
-      .then(() => {
-        setEditDoc(null)
-        invalidateAll()
-      })
-      .catch((e) => toast.error(apiErrorMessage(e, t("hierarchy.update_failed"))))
   }
 
   const editorValid =
@@ -319,6 +325,7 @@ export function WorkspaceServiceHierarchy({
                     title={it.db_config ? t("hierarchy.test_connection_title") : t("hierarchy.fill_db_first")}
                     onClick={() => testConnection.mutate(it.registry_id)}
                   >
+                    <PlugZap className="mr-1 size-3" />
                     {testConnection.isPending ? "…" : "Test"}
                   </Button>
                   {isAdmin && (
@@ -371,53 +378,58 @@ export function WorkspaceServiceHierarchy({
 
                 {/* ── Knowledge terhubung (tenant, knowledge_library) ── */}
                 <div className="border-t px-3 py-2">
-                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <button
+                    type="button"
+                    className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+                    onClick={() => setKnowledgeExpanded((prev) => {
+                      const next = new Set(prev)
+                      if (next.has(it.service_id)) next.delete(it.service_id)
+                      else next.add(it.service_id)
+                      return next
+                    })}
+                  >
+                    {knowledgeExpanded.has(it.service_id)
+                      ? <ChevronDown className="size-3" />
+                      : <ChevronRight className="size-3" />}
                     {t("hierarchy.knowledge_section", { count: knowledge.length })}
-                  </p>
-                  {knowledge.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">
-                      {t("hierarchy.knowledge_empty")}
-                    </p>
-                  ) : (
-                    <div className="space-y-1">
-                      {dedupe(knowledge).map((k) => {
-                        const kbMine = k.ownerId === meId
-                        const canUnlink = k.libraryServiceId === ownLibSvcByServiceId[it.service_id]
-                        return (
-                          <div key={`${k.refId}-${k.knowledgeLibraryId}`}
-                            className="flex items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-accent/40">
-                            <FileText className="size-3 shrink-0 text-muted-foreground" />
-                            <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{k.name}</span>
-                            <Badge variant="secondary" className="shrink-0 text-[9px]">{k.folder}</Badge>
-                            {!kbMine && <Lock className="size-2.5 shrink-0 text-muted-foreground" />}
-                            <Button variant="ghost" size="icon" className="size-6" title={t("hierarchy.view_doc")}
-                              onClick={() => openView(k.knowledgeLibraryId, k.name)}>
-                              <Eye className="size-3" />
-                            </Button>
-                            {kbMine && (
-                              <>
-                                <Button variant="ghost" size="icon" className="size-6" title={t("hierarchy.edit_doc")}
-                                  onClick={() => openEditDoc(k)}>
-                                  <Pencil className="size-3" />
+                  </button>
+                  {knowledgeExpanded.has(it.service_id) && (
+                    <>
+                      {knowledge.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          {t("hierarchy.knowledge_empty")}
+                        </p>
+                      ) : (
+                        <div className="space-y-1">
+                          {dedupe(knowledge).map((k) => {
+                            const kbMine = k.ownerId === meId || k.ownerId?.startsWith("system:") || isAdmin
+                            return (
+                              <div key={`${k.refId}-${k.knowledgeLibraryId}`}
+                                className="flex items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-accent/40">
+                                <FileText className="size-3 shrink-0 text-muted-foreground" />
+                                <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{k.name}</span>
+                                <Badge variant="secondary" className="shrink-0 text-[9px]">{k.folder}</Badge>
+                                {!kbMine && <Lock className="size-2.5 shrink-0 text-muted-foreground" />}
+                                <Button variant="ghost" size="icon" className="size-6" title={t("hierarchy.view_doc")}
+                                  onClick={() => openView(k.knowledgeLibraryId, k.name, dedupe(knowledge).map((k) => ({ knowledgeLibraryId: k.knowledgeLibraryId, name: k.name, folder: k.folder })))}>
+                                  <Eye className="size-3" />
                                 </Button>
-                                {canUnlink && (
-                                  <Button variant="ghost" size="icon"
-                                    className="size-6 text-destructive hover:text-destructive"
-                                    title={t("hierarchy.unlink_from_service")}
-                                    onClick={() =>
-                                      unlinkKb.mutate({
-                                        serviceLibraryId: ownLibSvcByServiceId[it.service_id],
-                                        refId: k.refId,
-                                      })}>
-                                    <Trash2 className="size-3" />
+                                {isAdmin && !wsLinkedIds.has(k.knowledgeLibraryId) && (
+                                  <Button variant="ghost" size="icon" className="size-6" title="Juga jadi Workspace Knowledge"
+                                    disabled={linkWs.isPending}
+                                    onClick={() => linkWs.mutate(k.knowledgeLibraryId)}>
+                                    <Library className="size-3" />
                                   </Button>
                                 )}
-                              </>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
+                                {wsLinkedIds.has(k.knowledgeLibraryId) && (
+                                  <Badge variant="outline" className="text-[9px] px-1">ws</Badge>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </>
                   )}
                   <Button size="sm" variant="outline"
                     className="mt-2 h-6 gap-1 px-2 text-[11px]"
@@ -450,7 +462,7 @@ export function WorkspaceServiceHierarchy({
               <div className="space-y-1.5">
                 <Label>{t("hierarchy.service_id_label")}</Label>
                 <Input
-                  placeholder="nama-deployment-k8s"
+                  placeholder={t("hierarchy.service_id_placeholder", { ns: "workspace" })}
                   value={editor.service_id}
                   onChange={(e) =>
                     !editor.item &&
@@ -507,6 +519,55 @@ export function WorkspaceServiceHierarchy({
                   </div>
                 )}
               </div>
+              {/* Project selection — only on create */}
+              {!editor?.item && allProjects && allProjects.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs">{t("hierarchy.link_projects_label")}</Label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-xs text-muted-foreground"
+                      onClick={() => {
+                        const allIds = allProjects.map((p) => p.id)
+                        const allSelected = allIds.length === selectedProjectIds.size
+                        setSelectedProjectIds(allSelected ? new Set() : new Set(allIds))
+                      }}
+                    >
+                      {selectedProjectIds.size === allProjects.length
+                        ? t("hierarchy.deselect_all")
+                        : t("hierarchy.select_all")}
+                    </Button>
+                  </div>
+                  <div className="max-h-40 overflow-y-auto rounded-lg border p-2 space-y-0.5">
+                    {allProjects.map((p) => (
+                      <label
+                        key={p.id}
+                        className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted"
+                      >
+                        <input
+                          type="checkbox"
+                          className="size-3.5 accent-primary"
+                          checked={selectedProjectIds.has(p.id)}
+                          onChange={(e) => {
+                            setSelectedProjectIds((prev) => {
+                              const next = new Set(prev)
+                              if (e.target.checked) next.add(p.id)
+                              else next.delete(p.id)
+                              return next
+                            })
+                          }}
+                        />
+                        <span className="font-medium">{p.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    {t("hierarchy.link_projects_hint", { count: selectedProjectIds.size })}
+                  </p>
+                </div>
+              )}
             </div>
           )}
           <DialogFooter>
@@ -549,57 +610,24 @@ export function WorkspaceServiceHierarchy({
             serviceId={knowledgeFor.libraryServiceId}
             serviceLabel={knowledgeFor.serviceId}
             meId={meId}
+            isAdmin={isAdmin}
             onClose={() => setKnowledgeFor(null)}
+            initialEditId={knowledgeFor.initialEditId}
+            initialEditName={knowledgeFor.initialEditName}
+            initialEditFolder={knowledgeFor.initialEditFolder}
+            workspaceId={workspaceId}
           />
         </Suspense>
       )}
 
       {/* View markdown */}
-      <Dialog open={!!viewDoc} onOpenChange={(o) => !o && setViewDoc(null)}>
-        <DialogContent className="max-w-2xl overflow-y-auto max-h-[85vh]">
-          <DialogHeader>
-            <DialogTitle className="font-mono text-sm">{viewDoc?.name}</DialogTitle>
-          </DialogHeader>
-          {viewDoc && !viewDoc.content ? (
-            <Skeleton className="h-48 w-full" />
-          ) : (
-            <Suspense fallback={<Skeleton className="h-48 w-full" />}>
-              <div className="min-h-24 rounded-md border bg-muted/30 p-4">
-                <MarkdownView content={viewDoc?.content ?? ""} />
-              </div>
-            </Suspense>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Edit inline dokumen sendiri */}
-      <Dialog open={!!editDoc} onOpenChange={(o) => !o && setEditDoc(null)}>
-        <DialogContent className="max-w-xl overflow-y-auto max-h-[88vh]">
-          <DialogHeader>
-            <DialogTitle className="font-mono text-sm">{t("hierarchy.edit_doc_title", { name: editDoc?.name ?? "" })}</DialogTitle>
-            <DialogDescription>{t("hierarchy.edit_doc_description")}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <Label className="text-xs">{t("hierarchy.doc_name_label")}</Label>
-              <Input className="h-8 font-mono text-xs" value={editDoc?.name ?? ""}
-                onChange={(e) => editDoc && setEditDoc({ ...editDoc, name: e.target.value })} />
-            </div>
-            <Textarea
-              rows={12}
-              className="min-h-[240px] max-h-[50vh] resize-y overflow-y-auto font-mono text-xs leading-relaxed"
-              value={editDoc?.content ?? ""}
-              onChange={(e) => editDoc && setEditDoc({ ...editDoc, content: e.target.value })}
-            />
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setEditDoc(null)}>{t("action.cancel", { ns: "common" })}</Button>
-            <Button onClick={saveEditDoc} disabled={!editDoc?.name.trim() || !editDoc?.content.trim()}>
-              {t("hierarchy.save_changes")}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <KnowledgeViewDialog
+        doc={viewDoc}
+        onClose={() => { setViewDoc(null); setActiveKnowledgeId(null) }}
+        items={viewKnowledgeItems}
+        activeKnowledgeId={activeKnowledgeId ?? undefined}
+        onNavigate={navigateKnowledge}
+      />
     </div>
   )
 }
@@ -609,20 +637,4 @@ function dedupe(list: KnowledgeEntry[]): KnowledgeEntry[] {
   return list.filter((k) =>
     seen.has(k.knowledgeLibraryId) ? false : (seen.add(k.knowledgeLibraryId), true),
   )
-}
-
-function useUnlinkKnowledgeFlexible() {
-  const { t } = useTranslation("workspace")
-  const qc = useQueryClient()
-  return {
-    mutate: (vars: { serviceLibraryId: string; refId: string }) => {
-      api
-        .delete(`/services/library/${vars.serviceLibraryId}/knowledge/${vars.refId}`)
-        .then(() => {
-          toast.success(t("hierarchy.unlinked_toast"))
-          qc.invalidateQueries({ queryKey: ["services"] })
-        })
-        .catch((e) => toast.error(apiErrorMessage(e, t("hierarchy.unlink_failed"))))
-    },
-  }
 }

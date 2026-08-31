@@ -33,54 +33,115 @@ async def build_service_knowledge_inventory(
 
     Bila detail=True, bacakan bagian penting (meta: criticality, thresholds,
     escalation) untuk service doc. Deterministik, tanpa LLM, hemat token.
-    """
-    from services.doc_loader import (
-        get_connection_doc,
-        get_observability_doc,
-        get_playbooks_for_service,
-        get_schema_doc,
-        get_service_doc,
-    )
 
+    Workspace-scoped: jika workspace_id diberikan, HANYA tampilkan grounding docs
+    yang linked ke workspace via agent_doc_refs.
+    """
     lines: list[str] = []
 
-    # 1) Grounding docs (agent_docs DB)
-    svc = await get_service_doc(service_id)
-    if svc:
-        meta = svc.get("meta") or {}
-        body = svc.get("body") or ""
-        lines.append(f"• 📄 *Service doc* `{meta.get('id') or service_id}` (criticality `{meta.get('criticality', 'N/A')}`)")
-        if detail:
-            esc = meta.get("escalation") or {}
-            thr = meta.get("thresholds") or {}
-            lines.append(f"  - Collections: {meta.get('collections') or '-'}")
-            lines.append(f"  - Threshold: warning `{thr.get('error_count_warning')}` / critical `{thr.get('error_count_critical')}`")
-            lines.append(f"  - Eskalasi: primary `{esc.get('primary', '-')}` · slack `{esc.get('slack_channel', '-')}`")
-            lines.append(f"  - Auto-remediation: {', '.join(meta.get('auto_remediation_allowed') or []) or '-'}")
-        if "## Learned Patterns" in body:
-            lines.append("  - ➕ Berisi *Learned Patterns* (auto-generated)")
+    if workspace_id:
+        # Workspace-scoped: gunakan linked docs saja
+        from services.doc_loader import get_linked_docs_for_workspace, _doc_matches_service
+        linked_docs = await get_linked_docs_for_workspace(workspace_id)
 
-    conn = await get_connection_doc(service_id)
-    if conn:
-        lines.append(f"• 🔗 *Connection doc* `{conn.get('meta', {}).get('id') or service_id}`")
+        svc = None
+        conn = None
+        schema = None
+        obs = None
+        playbooks = []
 
-    primary_collection = (svc.get("meta") or {}).get("collections", {}).get("primary") if svc else None
-    if primary_collection:
-        schema = await get_schema_doc(primary_collection)
+        for cat_key, doc in linked_docs.items():
+            category = cat_key.split("/")[0]
+            if not _doc_matches_service(doc, service_id):
+                continue
+            if category == "services" and not svc:
+                svc = doc
+            elif category == "connections" and not conn:
+                conn = doc
+            elif category == "schemas" and not schema:
+                primary = (svc or {}).get("meta", {}).get("collections", {}).get("primary")
+                if primary and doc.get("meta", {}).get("collection") == primary:
+                    schema = doc
+            elif category == "observability" and not obs:
+                obs = doc
+            elif category == "playbooks":
+                playbooks.append(doc)
+
+        if svc:
+            meta = svc.get("meta") or {}
+            body = svc.get("body") or ""
+            lines.append(f"• 📄 *Service doc* `{meta.get('id') or service_id}` (criticality `{meta.get('criticality', 'N/A')}`)")
+            if detail:
+                esc = meta.get("escalation") or {}
+                thr = meta.get("thresholds") or {}
+                lines.append(f"  - Collections: {meta.get('collections') or '-'}")
+                lines.append(f"  - Threshold: warning `{thr.get('error_count_warning')}` / critical `{thr.get('error_count_critical')}`")
+                lines.append(f"  - Eskalasi: primary `{esc.get('primary', '-')}` · slack `{esc.get('slack_channel', '-')}`")
+                lines.append(f"  - Auto-remediation: {', '.join(meta.get('auto_remediation_allowed') or []) or '-'}")
+            if "## Learned Patterns" in body:
+                lines.append("  - ➕ Berisi *Learned Patterns* (auto-generated)")
+
+        if conn:
+            lines.append(f"• 🔗 *Connection doc* `{conn.get('meta', {}).get('id') or service_id}`")
+
         if schema:
-            lines.append(f"• 🗄️ *Schema doc* `{schema.get('meta', {}).get('collection') or primary_collection}`")
+            lines.append(f"• 🗄️ *Schema doc* `{schema.get('meta', {}).get('collection') or service_id}`")
 
-    obs = await get_observability_doc(service_id)
-    if obs:
-        lines.append(f"• 📊 *Observability doc* `{obs.get('meta', {}).get('id') or service_id}`")
+        if obs:
+            lines.append(f"• 📊 *Observability doc* `{obs.get('meta', {}).get('id') or service_id}`")
 
-    playbooks = await get_playbooks_for_service(service_id)
-    if playbooks:
-        names = ", ".join(
-            (p.get("meta") or {}).get("id") or (p.get("meta") or {}).get("title") or "?"
-            for p in playbooks
+        if playbooks:
+            names = ", ".join(
+                (p.get("meta") or {}).get("id") or (p.get("meta") or {}).get("title") or "?"
+                for p in playbooks
+            )
+            lines.append(f"• 📖 *Playbooks* ({len(playbooks)}): {names}")
+    else:
+        # Global fallback (backward compatibility)
+        from services.doc_loader import (
+            get_connection_doc,
+            get_observability_doc,
+            get_playbooks_for_service,
+            get_schema_doc,
+            get_service_doc,
         )
-        lines.append(f"• 📖 *Playbooks* ({len(playbooks)}): {names}")
+
+        svc = await get_service_doc(service_id)
+        if svc:
+            meta = svc.get("meta") or {}
+            body = svc.get("body") or ""
+            lines.append(f"• 📄 *Service doc* `{meta.get('id') or service_id}` (criticality `{meta.get('criticality', 'N/A')}`)")
+            if detail:
+                esc = meta.get("escalation") or {}
+                thr = meta.get("thresholds") or {}
+                lines.append(f"  - Collections: {meta.get('collections') or '-'}")
+                lines.append(f"  - Threshold: warning `{thr.get('error_count_warning')}` / critical `{thr.get('error_count_critical')}`")
+                lines.append(f"  - Eskalasi: primary `{esc.get('primary', '-')}` · slack `{esc.get('slack_channel', '-')}`")
+                lines.append(f"  - Auto-remediation: {', '.join(meta.get('auto_remediation_allowed') or []) or '-'}")
+            if "## Learned Patterns" in body:
+                lines.append("  - ➕ Berisi *Learned Patterns* (auto-generated)")
+
+        conn = await get_connection_doc(service_id)
+        if conn:
+            lines.append(f"• 🔗 *Connection doc* `{conn.get('meta', {}).get('id') or service_id}`")
+
+        primary_collection = (svc.get("meta") or {}).get("collections", {}).get("primary") if svc else None
+        if primary_collection:
+            schema = await get_schema_doc(primary_collection)
+            if schema:
+                lines.append(f"• 🗄️ *Schema doc* `{schema.get('meta', {}).get('collection') or primary_collection}`")
+
+        obs = await get_observability_doc(service_id)
+        if obs:
+            lines.append(f"• 📊 *Observability doc* `{obs.get('meta', {}).get('id') or service_id}`")
+
+        playbooks = await get_playbooks_for_service(service_id)
+        if playbooks:
+            names = ", ".join(
+                (p.get("meta") or {}).get("id") or (p.get("meta") or {}).get("title") or "?"
+                for p in playbooks
+            )
+            lines.append(f"• 📖 *Playbooks* ({len(playbooks)}): {names}")
 
     # 2) Knowledge library ter-link (via service_library → service_knowledge_refs)
     linked = await _linked_knowledge_list(service_id, project_id)
@@ -115,7 +176,11 @@ async def _linked_knowledge_list(service_id: str, project_id: Optional[str] = No
         from services.mongodb_client import get_db
 
         db = get_db()
-        libs = await db["service_library"].find({"serviceId": service_id}, {"_id": 1}).to_list(50)
+        # Normalize: serviceId di DB pakai underscore, service_name dari ticket pakai hyphen
+        norm_service_id = service_id.replace("-", "_")
+        libs = await db["service_library"].find(
+            {"serviceId": {"$in": [service_id, norm_service_id]}}, {"_id": 1}
+        ).to_list(50)
 
         # filter ke item yang ter-link project (jika ada konteks project)
         if project_id:
@@ -123,7 +188,7 @@ async def _linked_knowledge_list(service_id: str, project_id: Optional[str] = No
                 {"projectId": project_id}, {"libraryServiceId": 1}
             ).to_list(200)
             linked_ids = {str(r["libraryServiceId"]) for r in refs}
-            libs = [l for l in libs if str(l["_id"]) in linked_ids]
+            libs = [lib for lib in libs if str(lib["_id"]) in linked_ids]
             if not libs:
                 # tidak ada library item ter-link → tidak ada knowledge project
                 return []

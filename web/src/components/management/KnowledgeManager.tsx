@@ -1,9 +1,9 @@
 import { AgentDocsManager } from "@/components/management/AgentDocsManager"
 
 /**
- * KnowledgeManager — konsolidasi tab Docs + Knowledge (Fix #58).
- * Hanya menyisakan sub-view Grounding (Sistem); view tenant (Knowledge Service)
- * dihapus dari UI — dikelola per-workspace di Settings → Services.
+ * KnowledgeManager — Grounding (Sistem) only.
+ * Knowledge Service (tenant) CRUD moved: Management is the sole place for
+ * knowledge_library via KnowledgeLibrary (mode=management).
  */
 export function KnowledgeManager() {
   return (

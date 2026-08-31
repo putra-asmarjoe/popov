@@ -6,6 +6,7 @@ export interface KnowledgeItem {
   name: string
   folder: KnowledgeFolder
   content?: string
+  meta?: Record<string, any>
   sizeBytes?: number
   createdAt?: string
   updatedAt?: string
@@ -28,4 +29,21 @@ export interface WorkspaceKnowledgeRef {
   addedBy: string
   addedAt?: string
   content?: string
+}
+
+export interface AgentDoc {
+  category: string
+  key: string
+  body_len: number
+  updatedAt?: string
+  meta?: Record<string, any>
+}
+
+export interface AgentDocRef {
+  id: string
+  workspaceId: string
+  docCategory: string
+  docKey: string
+  addedBy: string
+  createdAt: string
 }

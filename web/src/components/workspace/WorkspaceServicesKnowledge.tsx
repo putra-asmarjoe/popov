@@ -50,61 +50,37 @@ export function WorkspaceServicesKnowledge({ wsId, isAdmin }: { wsId: string; is
 
   const { data: wsRegistry } = useWsRegistryList(wsId)
 
-  // FE-8.7: opsi picker gabungan — library pribadi + registry workspace (milik siapa pun)
+  // Opsi picker: HANYA dari workspace registry (tab Services), bukan library pribadi.
+  // Hanya tampilkan service yang BELUM ter-link ke project yang dipilih.
   interface PickOption {
     key: string
     serviceId: string
     label?: string
-    source: "library" | "registry"
-    libraryId?: string
-    registryId?: string
+    registryId: string
   }
   const pickOptions: PickOption[] = useMemo(() => {
-    if (!addOpenFor) return []
-    const linkedHere = new Set(
-      groups?.find((g) => g.projectId === addOpenFor)?.services.map((x) => x.libraryServiceId) ?? [],
-    )
+    if (!addOpenFor || !wsRegistry) return []
     const linkedSvcIds = new Set(
       groups?.find((g) => g.projectId === addOpenFor)?.services.map((x) => x.serviceId) ?? [],
     )
     const out: PickOption[] = []
-    for (const sv of myServices ?? []) {
-      if (!linkedHere.has(sv.id)) {
-        out.push({ key: `lib-${sv.id}`, serviceId: sv.serviceId, label: sv.label, source: "library", libraryId: sv.id })
-      }
-    }
-    for (const r of wsRegistry ?? []) {
+    for (const r of wsRegistry) {
       if (linkedSvcIds.has(r.service_id)) continue
-      if (out.some((o) => o.serviceId === r.service_id)) continue // sudah ditawarkan lewat library
-      out.push({ key: `reg-${r.registry_id}`, serviceId: r.service_id, label: r.label, source: "registry", registryId: r.registry_id })
+      out.push({ key: `reg-${r.registry_id}`, serviceId: r.service_id, label: r.label, registryId: r.registry_id })
     }
     return out
-  }, [groups, myServices, wsRegistry, addOpenFor])
-
-  const linkableFor = useMemo(() => {
-    if (!addOpenFor) return []
-    const linked = new Set(
-      groups?.find((g) => g.projectId === addOpenFor)?.services.map((s) => s.libraryServiceId) ?? [],
-    )
-    return (myServices ?? []).filter((s) => !linked.has(s.id))
-  }, [groups, myServices, addOpenFor])
+  }, [groups, wsRegistry, addOpenFor])
 
   useEffect(() => {
-    if (addOpenFor) setAddMode(linkableFor.length === 0 ? "create" : "picker")
+    if (addOpenFor) setAddMode(pickOptions.length === 0 ? "create" : "picker")
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addOpenFor])
+  }, [addOpenFor, pickOptions])
 
   async function handlePick(option: PickOption) {
     if (!addOpenFor) return
-    if (option.source === "library" && option.libraryId) {
-      link.mutate(
-        { projectId: addOpenFor, libraryServiceId: option.libraryId },
-        { onSuccess: () => setAddOpenFor(null) },
-      )
-      return
-    }
-    // registry-asal: pastikan ada entri library milik saya, lalu link
+    // Registry service: mirror to my library first, then link
     try {
+      // Cek apakah sudah ada di library pribadi
       let libId: string | undefined = (myServices ?? []).find(
         (m) => m.serviceId === option.serviceId,
       )?.id
@@ -147,7 +123,7 @@ export function WorkspaceServicesKnowledge({ wsId, isAdmin }: { wsId: string; is
         </p>
       ) : (
         <div className="space-y-3">
-          {groups.map((g) => (
+          {groups.filter((g) => g.projectId !== "__registry__").map((g) => (
             <div key={g.projectId} className="rounded-lg border">
               <div className="flex flex-wrap items-center justify-between gap-1 border-b px-3 py-2">
                 <p className="text-xs font-semibold">{g.projectName}</p>
@@ -240,7 +216,7 @@ export function WorkspaceServicesKnowledge({ wsId, isAdmin }: { wsId: string; is
                     <Boxes className="size-3.5 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 flex-1 truncate font-mono text-xs">{opt.serviceId}</span>
                     <Badge variant="outline" className="shrink-0 text-[9px]">
-                      {opt.source === "registry" ? t("services_knowledge.badge_registry") : t("services_knowledge.badge_library")}
+                      {t("services_knowledge.badge_registry")}
                     </Badge>
                   </button>
                 ))}

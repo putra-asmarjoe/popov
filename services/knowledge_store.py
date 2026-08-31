@@ -1,7 +1,8 @@
 """
-Knowledge store — FE-7 Knowledge Workspace + Library Pribadi.
+Knowledge store — Knowledge Management + Workspace Knowledge + Library Pribadi.
 Collections (popovagent_db):
-- knowledge_library:        konten single-source milik satu user (ownerId).
+- knowledge_library:        konten single-source milik satu user (ownerId) — Management only.
+- workspace_knowledge:      knowledge spesifik workspace (workspaceId + ownerId).
 - workspace_knowledge_refs: link workspace → item library (konten TIDAK disalin).
 
 Kepemilikan ketat: hanya owner yang boleh mutasi library; ws-admin + owner
@@ -15,16 +16,27 @@ from typing import Any, Dict, List, Optional
 from bson import ObjectId
 
 from services.mongodb_client import get_db
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 LIBRARY_COLLECTION = "knowledge_library"
+WORKSPACE_KB_COLLECTION = "workspace_knowledge"
 REFS_COLLECTION = "workspace_knowledge_refs"
 
 ALLOWED_FOLDERS = ("general", "services", "playbooks", "schemas", "connections", "observability")
 MAX_CONTENT_BYTES = 200_000
 MIN_CONTENT_CHARS = 50
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_\-]{1,63}$")
+
+
+def _validate_embedding_limit(content: str, action: str = "save", max_chars: Optional[int] = None) -> None:
+    """Raise ValueError if content exceeds embedding max_chars limit."""
+    limit = max_chars or settings.embedding_max_chars
+    if len(content) > limit:
+        raise ValueError(
+            f"Content terlalu panjang ({len(content)} chars). Maksimal: {limit} chars."
+        )
 
 
 def _now_iso() -> str:
@@ -70,6 +82,7 @@ def _public_item(doc: Dict[str, Any], include_content: bool = False, usage_count
         "ownerId": doc.get("ownerId", ""),
         "name": doc.get("name", ""),
         "folder": doc.get("folder", "general"),
+        "meta": doc.get("meta") or {},
         "sizeBytes": len((doc.get("content") or "").encode("utf-8")),
         "createdAt": doc.get("createdAt"),
         "updatedAt": doc.get("updatedAt"),
@@ -88,27 +101,30 @@ def _public_ref(doc: Dict[str, Any], item: Optional[Dict[str, Any]], ws_name: st
         "libraryId": doc.get("libraryId", ""),
         "name": (item or {}).get("name", "?"),
         "folder": (item or {}).get("folder", "?"),
+        "meta": (item or {}).get("meta") or {},
         "updatedAt": (item or {}).get("updatedAt"),
         "addedBy": doc.get("addedBy", ""),
-        "addedAt": doc.get("addedAt"),
+        "addedAt": doc.get("createdAt"),
     }
 
 
 # ── Library (milik owner tunggal) ─────────────────────────────────────────────
 
-async def create_item(owner_id: str, name: str, folder: str, content: str) -> Dict[str, Any]:
+async def create_item(owner_id: str, name: str, folder: str, content: str, meta: Optional[Dict[str, Any]] = None, max_chars: Optional[int] = None) -> Dict[str, Any]:
     name = slugify_name(name)
     if not NAME_RE.match(name):
         raise ValueError("Nama tidak valid (huruf kecil/angka/-/_ , 2-64 karakter)")
     if folder not in ALLOWED_FOLDERS:
         raise ValueError(f"Folder harus salah satu dari {ALLOWED_FOLDERS}")
     content = validate_content(content)
+    _validate_embedding_limit(content, max_chars=max_chars)
 
     doc = {
         "ownerId": owner_id,
         "name": name,
         "folder": folder,
         "content": content,
+        "meta": meta or {},
         "createdAt": _now_iso(),
         "updatedAt": _now_iso(),
     }
@@ -116,6 +132,12 @@ async def create_item(owner_id: str, name: str, folder: str, content: str) -> Di
     result = await db[LIBRARY_COLLECTION].insert_one(doc)
     doc["_id"] = result.inserted_id
     logger.info(f"Knowledge item created '{folder}/{name}' by {owner_id}")
+    # Gap 1 Fase 2: fire-and-forget embedding
+    try:
+        from services.knowledge_embed import fire_and_forget_embed
+        fire_and_forget_embed(content, LIBRARY_COLLECTION, {"_id": result.inserted_id})
+    except Exception:
+        pass
     return doc
 
 
@@ -135,10 +157,38 @@ async def list_items_for_owner(owner_id: str) -> List[Dict[str, Any]]:
     return [_public_item(i, usage_count=counts.get(str(i["_id"]), 0)) for i in items]
 
 
-async def update_item(item_id: str, owner_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Update nama/folder/konten. HANYA owner (dipaksa di sini, bukan cuma di router)."""
+async def list_management_library() -> List[Dict[str, Any]]:
+    """Library pusat (Management) — semua item milik admin (untuk picker workspace read-only)."""
+    db = get_db()
+    admins = [doc async for doc in db["users"].find({"role": "admin"}, {"_id": 1})]
+    admin_ids = [str(a["_id"]) for a in admins]
+    if not admin_ids:
+        return []
+    cursor = db[LIBRARY_COLLECTION].find({"ownerId": {"$in": admin_ids}}).sort("updatedAt", -1)
+    items = [doc async for doc in cursor]
+    counts = await _usage_counts([str(i["_id"]) for i in items])
+    return [_public_item(i, usage_count=counts.get(str(i["_id"]), 0)) for i in items]
+
+
+async def _can_modify_doc(doc: Optional[Dict[str, Any]], user_id: str) -> bool:
+    if doc is None:
+        return False
+    doc_owner = doc.get("ownerId", "")
+    if doc_owner == user_id:
+        return True
+    if doc_owner.startswith("system:"):
+        ws_id = doc_owner.split(":", 1)[1]
+        from services.workspace_store import find_workspace_by_id, get_membership
+        ws = await find_workspace_by_id(ws_id)
+        if ws and (get_membership(ws, user_id) is not None or str(ws.get("ownerId", "")) == user_id):
+            return True
+    return False
+
+
+async def update_item(item_id: str, owner_id: str, updates: Dict[str, Any], max_chars: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """Update nama/folder/konten. HANYA owner atau member workspace pengelola system doc."""
     doc = await get_item(item_id)
-    if doc is None or doc.get("ownerId") != owner_id:
+    if not await _can_modify_doc(doc, owner_id):
         return None
     set_fields: Dict[str, Any] = {"updatedAt": _now_iso()}
     if "name" in updates and updates["name"] is not None:
@@ -152,8 +202,18 @@ async def update_item(item_id: str, owner_id: str, updates: Dict[str, Any]) -> O
         set_fields["folder"] = updates["folder"]
     if "content" in updates and updates["content"] is not None:
         set_fields["content"] = validate_content(updates["content"])
+        _validate_embedding_limit(set_fields["content"], max_chars=max_chars)
+    if "meta" in updates and updates["meta"] is not None:
+        set_fields["meta"] = updates["meta"]
     db = get_db()
     await db[LIBRARY_COLLECTION].update_one({"_id": doc["_id"]}, {"$set": set_fields})
+    # Gap 1 Fase 2: re-embed if content changed
+    if "content" in set_fields:
+        try:
+            from services.knowledge_embed import fire_and_forget_embed
+            fire_and_forget_embed(set_fields["content"], LIBRARY_COLLECTION, {"_id": doc["_id"]})
+        except Exception:
+            pass
     return await get_item(item_id)
 
 
@@ -180,7 +240,7 @@ async def list_usage(item_id: str) -> List[Dict[str, Any]]:
 async def delete_item(item_id: str, owner_id: str) -> bool:
     """Hapus item library + semua referensi workspace (cascade — WAJIB lewat confirm UI)."""
     doc = await get_item(item_id)
-    if doc is None or doc.get("ownerId") != owner_id:
+    if not await _can_modify_doc(doc, owner_id):
         return False
     db = get_db()
     removed_refs = await db[REFS_COLLECTION].delete_many({"libraryId": item_id})
@@ -272,3 +332,116 @@ async def remove_ref(ws_id: str, ref_id: str) -> bool:
         invalidate_cache()
         return True
     return False
+
+
+# ── Workspace Knowledge (CRUD spesifik workspace) ─────────────────────────────
+
+def _public_workspace_item(doc: Dict[str, Any], include_content: bool = False) -> Dict[str, Any]:
+    out = {
+        "id": str(doc["_id"]),
+        "workspaceId": doc.get("workspaceId", ""),
+        "ownerId": doc.get("ownerId", ""),
+        "name": doc.get("name", ""),
+        "folder": doc.get("folder", "general"),
+        "sizeBytes": len((doc.get("content") or "").encode("utf-8")),
+        "createdAt": doc.get("createdAt"),
+        "updatedAt": doc.get("updatedAt"),
+    }
+    if include_content:
+        out["content"] = doc.get("content", "")
+    return out
+
+
+async def create_workspace_item(ws_id: str, owner_id: str, name: str, folder: str, content: str) -> Dict[str, Any]:
+    """Buat knowledge baru yang spesifik milik workspace."""
+    name = slugify_name(name)
+    if not NAME_RE.match(name):
+        raise ValueError("Nama tidak valid (huruf kecil/angka/-/_ , 2-64 karakter)")
+    if folder not in ALLOWED_FOLDERS:
+        raise ValueError(f"Folder harus salah satu dari {ALLOWED_FOLDERS}")
+    content = validate_content(content)
+    _validate_embedding_limit(content)
+
+    doc = {
+        "workspaceId": ws_id,
+        "ownerId": owner_id,
+        "name": name,
+        "folder": folder,
+        "content": content,
+        "createdAt": _now_iso(),
+        "updatedAt": _now_iso(),
+    }
+    db = get_db()
+    result = await db[WORKSPACE_KB_COLLECTION].insert_one(doc)
+    doc["_id"] = result.inserted_id
+    logger.info(f"Workspace knowledge created '{folder}/{name}' ws={ws_id} by {owner_id}")
+    from services.workspace_knowledge import invalidate_cache
+    invalidate_cache(ws_id)
+    # Gap 1 Fase 2: fire-and-forget embedding
+    try:
+        from services.knowledge_embed import fire_and_forget_embed
+        fire_and_forget_embed(content, WORKSPACE_KB_COLLECTION, {"_id": result.inserted_id})
+    except Exception:
+        pass
+    return doc
+
+
+async def get_workspace_item(item_id: str) -> Optional[Dict[str, Any]]:
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        return None
+    return await get_db()[WORKSPACE_KB_COLLECTION].find_one({"_id": oid})
+
+
+async def list_workspace_items(ws_id: str) -> List[Dict[str, Any]]:
+    """Daftar knowledge spesifik workspace (TANPA konten)."""
+    db = get_db()
+    cursor = db[WORKSPACE_KB_COLLECTION].find({"workspaceId": ws_id}).sort("updatedAt", -1)
+    items = [doc async for doc in cursor]
+    return [_public_workspace_item(i) for i in items]
+
+
+async def update_workspace_item(item_id: str, owner_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Update workspace knowledge — hanya owner."""
+    doc = await get_workspace_item(item_id)
+    if doc is None or doc.get("ownerId") != owner_id:
+        return None
+    set_fields: Dict[str, Any] = {"updatedAt": _now_iso()}
+    if "name" in updates and updates["name"] is not None:
+        name = slugify_name(updates["name"])
+        if not NAME_RE.match(name):
+            raise ValueError("Nama tidak valid")
+        set_fields["name"] = name
+    if "folder" in updates and updates["folder"] is not None:
+        if updates["folder"] not in ALLOWED_FOLDERS:
+            raise ValueError("Folder tidak valid")
+        set_fields["folder"] = updates["folder"]
+    if "content" in updates and updates["content"] is not None:
+        set_fields["content"] = validate_content(updates["content"])
+        _validate_embedding_limit(set_fields["content"])
+    db = get_db()
+    await db[WORKSPACE_KB_COLLECTION].update_one({"_id": doc["_id"]}, {"$set": set_fields})
+    from services.workspace_knowledge import invalidate_cache
+    invalidate_cache(doc.get("workspaceId"))
+    # Gap 1 Fase 2: re-embed if content changed
+    if "content" in set_fields:
+        try:
+            from services.knowledge_embed import fire_and_forget_embed
+            fire_and_forget_embed(set_fields["content"], WORKSPACE_KB_COLLECTION, {"_id": doc["_id"]})
+        except Exception:
+            pass
+    return await get_workspace_item(item_id)
+
+
+async def delete_workspace_item(item_id: str, owner_id: str) -> bool:
+    """Hapus workspace knowledge — hanya owner."""
+    doc = await get_workspace_item(item_id)
+    if doc is None or doc.get("ownerId") != owner_id:
+        return False
+    db = get_db()
+    await db[WORKSPACE_KB_COLLECTION].delete_one({"_id": doc["_id"]})
+    from services.workspace_knowledge import invalidate_cache
+    invalidate_cache(doc.get("workspaceId"))
+    logger.info(f"Workspace knowledge deleted '{doc.get('name')}' ws={doc.get('workspaceId')} by {owner_id}")
+    return True

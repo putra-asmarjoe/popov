@@ -1,14 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
+import { useTranslation } from "react-i18next"
 import { api, apiErrorMessage } from "@/lib/api"
 
 export const DOC_CATEGORIES = [
-  { id: "general", label: "Umum" },
-  { id: "services", label: "Services" },
-  { id: "playbooks", label: "Playbooks" },
-  { id: "schemas", label: "Schemas" },
-  { id: "connections", label: "Koneksi" },
-  { id: "observability", label: "Observability" },
+  { id: "general", label: "agent_docs.category.general" },
+  { id: "services", label: "agent_docs.category.services" },
+  { id: "playbooks", label: "agent_docs.category.playbooks" },
+  { id: "schemas", label: "agent_docs.category.schemas" },
+  { id: "connections", label: "agent_docs.category.connections" },
+  { id: "observability", label: "agent_docs.category.observability" },
 ] as const
 
 export type DocCategory = (typeof DOC_CATEGORIES)[number]["id"]
@@ -51,9 +52,10 @@ export function useAgentDoc(category: string, key: string | null) {
 }
 
 export function useAgentDocMutations() {
+  const { t } = useTranslation("management")
   const qc = useQueryClient()
   const invalidate = () => qc.invalidateQueries({ queryKey: ["agent-docs"] })
-  const onError = (e: unknown) => toast.error(apiErrorMessage(e, "Operasi dokumen gagal"))
+  const onError = (e: unknown) => toast.error(apiErrorMessage(e, t("agent_docs.op_failed")))
 
   const create = useMutation({
     mutationFn: async (input: {
@@ -63,7 +65,7 @@ export function useAgentDocMutations() {
       body?: string
     }) => (await api.post("/docs/agent-docs", input)).data,
     onSuccess: () => {
-      toast.success("Dokumen dibuat")
+      toast.success(t("agent_docs.created"))
       invalidate()
     },
     onError,
@@ -81,7 +83,7 @@ export function useAgentDocMutations() {
       body?: string
     }) => (await api.patch(`/docs/agent-docs/${category}/${key}`, patch)).data,
     onSuccess: () => {
-      toast.success("Dokumen diperbarui")
+      toast.success(t("agent_docs.updated"))
       invalidate()
     },
     onError,
@@ -91,7 +93,7 @@ export function useAgentDocMutations() {
     mutationFn: async ({ category, key }: { category: string; key: string }) =>
       (await api.delete(`/docs/agent-docs/${category}/${key}`)).data,
     onSuccess: () => {
-      toast.success("Dokumen dihapus")
+      toast.success(t("agent_docs.deleted"))
       invalidate()
     },
     onError,
@@ -100,10 +102,10 @@ export function useAgentDocMutations() {
   const reload = useMutation({
     mutationFn: async () => (await api.post("/docs/agent-docs/reload")).data,
     onSuccess: (data: { source?: string }) => {
-      toast.success(`Grounding docs di-reload (sumber: ${data.source ?? "db"})`)
+      toast.success(t("agent_docs.reloaded", { source: data.source ?? "db" }))
       invalidate()
     },
-    onError: (e: unknown) => toast.error(apiErrorMessage(e, "Reload gagal")),
+    onError: (e: unknown) => toast.error(apiErrorMessage(e, t("agent_docs.reload_failed"))),
   })
 
   return { create, update, remove, reload }

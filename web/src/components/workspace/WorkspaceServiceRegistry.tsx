@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Database, Pencil, Plus, Trash2 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/table"
 import type { WsRegistryItem } from "@/hooks/useManagement"
 import { useWsRegistryMutations, useWsServiceRegistry } from "@/hooks/useManagement"
+import { useProjects } from "@/hooks/useWorkspaces"
 
 /**
  * WorkspaceServiceRegistry (Fix #41) — migrasi ⚙️ Monitoring Global ke level workspace.
@@ -42,6 +43,17 @@ export function WorkspaceServiceRegistry({ workspaceId }: { workspaceId: string 
   const { data: items, isLoading } = useWsServiceRegistry(workspaceId)
   const { create, update, remove, testConnection } = useWsRegistryMutations(workspaceId)
   const [editor, setEditor] = useState<EditorState | null>(null)
+
+  // Project selection
+  const { data: allProjects } = useProjects(workspaceId)
+  const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(new Set())
+  const prevProjectsRef = useRef<string[]>([])
+  useEffect(() => {
+    if (allProjects && prevProjectsRef.current.length === 0 && allProjects.length > 0) {
+      setSelectedProjectIds(new Set(allProjects.map((p) => p.id)))
+    }
+    prevProjectsRef.current = allProjects?.map((p) => p.id) ?? []
+  }, [allProjects])
 
   const openCreate = () =>
     setEditor({
@@ -80,7 +92,12 @@ export function WorkspaceServiceRegistry({ workspaceId }: { workspaceId: string 
       )
     } else {
       create.mutate(
-        { service_id: editor.service_id, label: editor.label, ...dbPayload },
+        {
+          service_id: editor.service_id,
+          label: editor.label,
+          ...dbPayload,
+          project_ids: Array.from(selectedProjectIds),
+        },
         { onSuccess: () => setEditor(null) },
       )
     }
@@ -192,7 +209,7 @@ export function WorkspaceServiceRegistry({ workspaceId }: { workspaceId: string 
             <div className="space-y-1.5">
               <Label>{t("registry.service_id_label")}</Label>
               <Input
-                placeholder="nama-deployment-k8s"
+                placeholder={t("registry.service_id_placeholder", { ns: "workspace" })}
                 value={editor?.service_id ?? ""}
                 onChange={(e) =>
                   editor && !editor.item &&
@@ -262,6 +279,55 @@ export function WorkspaceServiceRegistry({ workspaceId }: { workspaceId: string 
                 </div>
               )}
             </div>
+            {/* Project selection — only on create, not edit */}
+            {!editor?.item && allProjects && allProjects.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label className="text-xs">{t("registry.link_projects_label")}</Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 text-xs text-muted-foreground"
+                    onClick={() => {
+                      const allIds = allProjects.map((p) => p.id)
+                      const allSelected = allIds.length === selectedProjectIds.size
+                      setSelectedProjectIds(allSelected ? new Set() : new Set(allIds))
+                    }}
+                  >
+                    {selectedProjectIds.size === allProjects.length
+                      ? t("registry.deselect_all")
+                      : t("registry.select_all")}
+                  </Button>
+                </div>
+                <div className="max-h-40 overflow-y-auto rounded-lg border p-2 space-y-0.5">
+                  {allProjects.map((p) => (
+                    <label
+                      key={p.id}
+                      className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted"
+                    >
+                      <input
+                        type="checkbox"
+                        className="size-3.5 accent-primary"
+                        checked={selectedProjectIds.has(p.id)}
+                        onChange={(e) => {
+                          setSelectedProjectIds((prev) => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(p.id)
+                            else next.delete(p.id)
+                            return next
+                          })
+                        }}
+                      />
+                      <span className="font-medium">{p.name}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  {t("registry.link_projects_hint", { count: selectedProjectIds.size })}
+                </p>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setEditor(null)}>{t("action.cancel", { ns: "common" })}</Button>

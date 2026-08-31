@@ -19,11 +19,21 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from services.mongodb_client import get_db
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 COLLECTION = "agent_docs"
 CATEGORIES = ("services", "playbooks", "schemas", "connections", "observability", "general")
+
+
+def _validate_embedding_limit(body: str) -> None:
+    """Raise ValueError if body exceeds embedding max_chars limit."""
+    max_chars = settings.embedding_max_chars
+    if len(body) > max_chars:
+        raise ValueError(
+            f"content_too_long|max_chars={max_chars}|actual={len(body)}"
+        )
 
 _cache: Optional[Dict[str, Dict[str, dict]]] = None
 _cache_loaded = False
@@ -55,6 +65,7 @@ async def upsert_doc(category: str, key: str, meta: Dict[str, Any], body: str) -
     key = (key or "").strip().lower()
     if not key:
         raise ValueError("key tidak boleh kosong")
+    _validate_embedding_limit(body or "")
     db = get_db()
     await db[COLLECTION].update_one(
         {"category": category, "key": key},
@@ -62,6 +73,12 @@ async def upsert_doc(category: str, key: str, meta: Dict[str, Any], body: str) -
         upsert=True,
     )
     invalidate_cache()
+    # Gap 1 Fase 2: fire-and-forget embedding
+    try:
+        from services.knowledge_embed import fire_and_forget_embed
+        fire_and_forget_embed(body or "", COLLECTION, {"category": category, "key": key})
+    except Exception:
+        pass
     return await get_doc(category, key)
 
 
@@ -82,12 +99,20 @@ async def update_doc(category: str, key: str, updates: Dict[str, Any]) -> Option
         set_fields["meta"] = updates["meta"]
     if "body" in updates and updates["body"] is not None:
         set_fields["body"] = str(updates["body"])
+        _validate_embedding_limit(set_fields["body"])
     if not set_fields:
         return await get_doc(category, key)
     result = await get_db()[COLLECTION].update_one(
         {"category": category, "key": key.strip().lower()}, {"$set": set_fields}
     )
     invalidate_cache()
+    # Gap 1 Fase 2: re-embed if body changed
+    if "body" in set_fields:
+        try:
+            from services.knowledge_embed import fire_and_forget_embed
+            fire_and_forget_embed(set_fields["body"], COLLECTION, {"category": category, "key": key.strip().lower()})
+        except Exception:
+            pass
     if result.matched_count == 0:
         return None
     return await get_doc(category, key)
