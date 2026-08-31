@@ -142,6 +142,7 @@ SCOPES = {
     "tickets:write": {"description": "Create/update tickets", "public": False},
     "tickets:delete": {"description": "Soft delete tickets", "public": False},
     "alerts:write": {"description": "Ingest alerts from external systems", "public": True},
+    "deploy:write": {"description": "Ingest deploy events from CI/CD pipelines", "public": True},
     "users:read": {"description": "List workspace users", "public": False},
     "chat:read": {"description": "View chat sessions", "public": False},
     "chat:write": {"description": "Send chat messages", "public": False},

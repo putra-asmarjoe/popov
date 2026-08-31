@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { Copy, KeyRound, Pencil, PlugZap, Plus, Trash2, X } from "lucide-react"
 import { api, apiErrorMessage } from "@/lib/api"
@@ -35,6 +35,7 @@ import {
   useStackProjectLinks,
   type ObservabilityTarget,
   type ObservabilityTargetCreateInput,
+  type ObsStackKind,
 } from "@/hooks/useManagement"
 import { useAuth } from "@/hooks/useAuth"
 import { useProjects } from "@/hooks/useWorkspaces"
@@ -364,6 +365,7 @@ function CreateStackDialog({
   const { create, update } = useObservabilityTargetMutations()
   const testUrl = useTestTargetUrl()
   const testCentralLog = useTestCentralLog()
+  const { data: allProjects } = useProjects(fixedWorkspaceId ?? null)
   const isEdit = !!editing
   const [name, setName] = useState(editing?.name ?? "")
   const [workspaceId, setWorkspaceId] = useState("")
@@ -381,8 +383,21 @@ function CreateStackDialog({
   const [spanCollection, setSpanCollection] = useState(editing?.span_collection || "span_logs")
   const [httpCollection, setHttpCollection] = useState(editing?.http_collection || "http_logs")
   const [webhookMode, setWebhookMode] = useState(editing?.webhook_mode ?? false)
+  // Project linking: default all projects selected on create, pre-select on edit
+  const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(
+    () => new Set(editing?.project_ids ?? (allProjects?.map((p) => p.id) ?? []))
+  )
   // Hasil cek koneksi terakhir, terikat ke kind yang dicek
   const [check, setCheck] = useState<{ kind: ObsKind; status: "pending" | "ok" | "fail"; msg?: string } | null>(null)
+
+  // Update selectedProjectIds when projects load (for create mode default)
+  const prevProjectsRef = useRef<string[]>([])
+  useEffect(() => {
+    if (!isEdit && allProjects && prevProjectsRef.current.length === 0 && allProjects.length > 0) {
+      setSelectedProjectIds(new Set(allProjects.map((p) => p.id)))
+    }
+    prevProjectsRef.current = allProjects?.map((p) => p.id) ?? []
+  }, [isEdit, allProjects])
 
   const isOtel = kind === "otel"
   const currentMeta = OBS_KINDS.find((k) => k.id === kind)!
@@ -474,7 +489,7 @@ function CreateStackDialog({
             <Label htmlFor="obs-url">{t("observability.endpoint_label")}</Label>
             <Select
               value={kind}
-              disabled={isEdit}
+              disabled={isEdit && !!editing?.kind}  // kind bisa diubah hanya bila stack belum punya kind
               onValueChange={(v) => { setKind(v as ObsKind); setCheck(null) }}
             >
               <SelectTrigger id="obs-kind" className="w-full sm:w-52">
@@ -610,6 +625,55 @@ function CreateStackDialog({
               {t("observability.webhook_label")}
             </Label>
           )}
+          {/* Project linking */}
+          {(allProjects ?? []).length > 0 && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label>{t("observability.link_projects_label")}</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 text-xs text-muted-foreground"
+                  onClick={() => {
+                    const allIds = allProjects?.map((p) => p.id) ?? []
+                    const allSelected = allIds.length === selectedProjectIds.size
+                    setSelectedProjectIds(allSelected ? new Set() : new Set(allIds))
+                  }}
+                >
+                  {selectedProjectIds.size === (allProjects?.length ?? 0)
+                    ? t("observability.deselect_all")
+                    : t("observability.select_all")}
+                </Button>
+              </div>
+              <div className="max-h-40 overflow-y-auto rounded-lg border p-2 space-y-0.5">
+                {allProjects?.map((p) => (
+                  <label
+                    key={p.id}
+                    className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted"
+                  >
+                    <input
+                      type="checkbox"
+                      className="size-3.5 accent-primary"
+                      checked={selectedProjectIds.has(p.id)}
+                      onChange={(e) => {
+                        setSelectedProjectIds((prev) => {
+                          const next = new Set(prev)
+                          if (e.target.checked) next.add(p.id)
+                          else next.delete(p.id)
+                          return next
+                        })
+                      }}
+                    />
+                    <span className="font-medium">{p.name}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {t("observability.link_projects_hint", { count: selectedProjectIds.size })}
+              </p>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>{t("observability.cancel")}</Button>
@@ -631,6 +695,9 @@ function CreateStackDialog({
             onClick={async () => {
               if (isEdit && editing) {
                 const patch: ObservabilityTargetCreateInput = { name: name.trim() }
+                // Fix: stack lama (sebelum field kind ada) bisa di-set kind-nya saat edit
+                if (!editing.kind) patch.kind = kind as ObsStackKind
+                patch.project_ids = Array.from(selectedProjectIds)
                 if (isOtel) {
                   patch.log_db_type = logDbType
                   patch.log_db_name = logDbName.trim()
@@ -646,11 +713,13 @@ function CreateStackDialog({
                 }
                 await update.mutateAsync({ observ_id: editing.observ_id, ...patch })
               } else {
+                const projectIds = Array.from(selectedProjectIds)
                 const payload = isOtel
                   ? {
                       name,
                       kind: "otel" as const,
                       workspace_id: fixedWorkspaceId || workspaceId || undefined,
+                      project_ids: projectIds,
                       log_db_type: logDbType,
                       log_db_uri: logDbUri.trim(),
                       log_db_name: logDbName.trim(),
@@ -659,7 +728,9 @@ function CreateStackDialog({
                     }
                   : {
                       name,
+                      kind: kind as ObsStackKind,
                       workspace_id: fixedWorkspaceId || workspaceId || undefined,
+                      project_ids: projectIds,
                       prometheus_url: urls.prometheus.trim(),
                       tempo_url: urls.tempo.trim(),
                       alertmanager_url: urls.alertmanager.trim(),

@@ -566,6 +566,7 @@ class RegistryUpsert(BaseModel):
     db_name: Optional[str] = None
     db_collection: Optional[str] = None
     project_ids: Optional[list[str]] = None
+    service_type: Optional[str] = None       # api | worker | database | gateway
 
 
 class RegistryPatch(BaseModel):
@@ -575,6 +576,7 @@ class RegistryPatch(BaseModel):
     db_name: Optional[str] = None
     db_collection: Optional[str] = None
     enabled: Optional[bool] = None
+    service_type: Optional[str] = None       # api | worker | database | gateway | None
 
 
 async def _ws_or_404(ws_id: str):
@@ -621,6 +623,7 @@ async def create_ws_registry(
                 **({"collection": body.db_collection} if body.db_collection else {}),
             } if body.db_uri and body.db_name else None,
             created_by=uid,  # FE-8.7: auto-mirror ke library pribadi pembuat
+            service_type=body.service_type,  # Gap 3: api|worker|database|gateway
         )
     except ValueError as e:
         raise HTTPException(422, str(e))
@@ -667,6 +670,8 @@ async def update_ws_registry(
             "db": body.db_name or "",
             **({"collection": body.db_collection} if body.db_collection else {}),
         }
+    if body.service_type is not None:
+        patch["service_type"] = body.service_type
     ok = await update_item(registry_id, patch)
     if not ok:
         raise HTTPException(404, "registry tidak ditemukan / tidak ada perubahan")

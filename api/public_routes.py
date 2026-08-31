@@ -39,6 +39,12 @@ PUBLIC_ENDPOINTS: Dict[str, Dict[str, Any]] = {
         "rate_limit": 200,
         "description": "Inject knowledge directly into service knowledge base",
     },
+    # Deploy Event (Gap 4) — CI/CD signal for non-K8s deploy detection
+    "POST /api/pub/v1/deploy-event": {
+        "scopes": ["deploy:write"],
+        "rate_limit": 200,
+        "description": "Ingest deploy events from CI/CD pipelines (GitHub Actions, GitLab CI)",
+    },
     # Future endpoints — uncomment to enable:
     # "POST /api/pub/v1/ingest/alert": {
     #     "scopes": ["alerts:write"],
