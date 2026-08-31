@@ -36,7 +36,7 @@ Popov is a single deployable system made of three cooperating parts:
 | Part | What it is |
 |---|---|
 | **Agent pipeline** | A [LangGraph](https://github.com/langchain-ai/langgraph) multi-agent backend (Python/FastAPI) that routes intents, triages silently, runs selective investigations across logs/metrics/traces/spans, and produces an LLM-written root cause assessment. |
-| **Web platform** | A React SPA with workspaces, projects, realtime ticketing, an in-app chat with the agent (SSE streaming), knowledge libraries, and admin management for stacks, notification channels, LLM keys, and memory. |
+| **Web platform** | A React SPA with workspaces, projects, realtime ticketing, an in-app chat with the agent (SSE streaming), a War Room incident dashboard, knowledge libraries, and admin management for stacks, notification channels, LLM keys, and memory. |
 | **Watchdog worker** | A dedicated background process that polls your observability targets (or receives Alertmanager webhooks), deduplicates alerts, triages them, opens tickets, and broadcasts to Telegram channels. |
 
 It is not a metrics database or a dashboard replacement — it sits **on top of** the observability stack you already run.
@@ -44,12 +44,15 @@ It is not a metrics database or a dashboard replacement — it sits **on top of*
 ## What Popov Helps You Do
 
 - **Detect proactively** — a watchdog polls Prometheus/Alertmanager/Tempo per project (or receives Alertmanager webhook pushes, <5s latency), with content-based fingerprinting to suppress duplicate alerts.
-- **Triage before you're paged** — a silent triage stage (<30s) correlates four signals: error rate vs baseline, active alerts, recent deployments (via Loki Kubernetes events), and historical episodes. If a deploy happened in the last hour, "regression after deploy" becomes the leading hypothesis.
-- **Investigate selectively, not blindly** — based on the hypothesis, only the relevant data collectors fan out in parallel: error logs (MongoDB/MySQL per service), Prometheus metrics/HPA, Tempo traces, OpenTelemetry spans from a central log DB, DB health checks.
+- **Triage before you're paged** — a silent triage stage (<30s) correlates four signals: error rate vs baseline, active alerts, recent deployments (via Loki Kubernetes events), and historical episodes. If a deploy happened in the last hour, "regression after deploy" becomes the leading hypothesis. Non-Kubernetes stacks (VM/PaaS) get the same hypothesis by reporting deploys through a CI/CD API.
+- **Investigate selectively, not blindly** — based on the hypothesis, only the relevant data collectors fan out in parallel: error logs (MongoDB/MySQL per service), Prometheus metrics/HPA, Tempo traces, OpenTelemetry spans from a central log DB, DB health checks. The fan-out adapts to confidence, service type, and triage skip-hints — narrower when confident, wider when uncertain.
 - **Get a root cause, not a data dump** — a single Correlation Agent call synthesizes all four pillars plus grounding docs and learned patterns into a severity + root cause (`service-fault` / `downstream` / `unknown`) with remediation suggestions.
 - **Keep institutional memory** — every incident becomes an episodic memory entry ("Second Brain") with vector embeddings; future investigations retrieve similar past episodes and their ✅/❌ human feedback. A pattern miner clusters recurring episodes into auto-generated Learned Patterns.
-- **Continue the conversation** — reports come with dynamic follow-up buttons and a 30-minute diagnostic session, so you can drill down ("show health", "check traces") without retyping anything.
+- **Continue the conversation** — reports come with dynamic follow-up buttons and a 30-minute diagnostic session (Telegram), and the web chat offers actionable follow-up chips that run a deeper check in one click.
 - **Track resolution** — detected alerts can auto-create tickets (1 ticket : N linked alerts) in a realtime ticketing UI with status chain, assignees, progress logs, and 🤖 auto badges. You can also manage tickets by chatting with the agent ("close this ticket", "set severity to low").
+- **Confirm the fix worked** — when a ticket moves to in-progress, Popov schedules an automatic re-check ~10 minutes later: error rate and database health, with a ✅/⚠️ confirmation notification. No more waiting for someone to say "it's fixed".
+- **Run a command center, not just a ticket list** — the War Room view turns a project into an incident operations dashboard: open tickets, a live alert feed, stack health, and investigation timelines side by side, with the classic ticket list one toggle away.
+- **See inside the investigation** — click any AI reply to view the full agent trace as a graph: every step in order, how long it took, and a summary of what each produced. Slow steps are highlighted.
 - **Control costs** — data-collector agents never call an LLM (<500-token summaries); only ~7 well-defined points use the LLM, all tracked per agent/model/token via `llm_usage`.
 
 ## Data Privacy & Sovereignty
@@ -65,23 +68,29 @@ Popov is designed with one principle: **your incident data never leaves your inf
 
 ### AI Investigation Pipeline
 - Intent supervisor with 4 matching strategies plus an LLM fallback for ambiguous requests
-- Silent triage → hypothesis-driven selective fan-out (2–3 collectors instead of everything)
+- Silent triage → hypothesis-driven selective fan-out (2–3 collectors instead of everything), adaptive to confidence, service type, and triage skip-hints
+- Deploy-aware triage: recent deploys detected via Loki K8s events — or via a CI/CD deploy-event API for non-Kubernetes stacks
 - LLM root cause analysis grounded in your own service docs (RAG) and past episodes
 - Episodic memory with hybrid search (metadata + embeddings, local TF fallback), feedback loop, and auto-resolution of stale episodes
+- Episode enrichment: resolved tickets feed back real time-to-resolution, resolution steps, and consulted knowledge into the memory
 - HDBSCAN-based pattern mining → `Learned Patterns` injected into future analyses
+- Post-fix verification: automatic re-check of error rate and DB health ~10 minutes after a ticket moves to in-progress, with ✅/⚠️ confirmations
 - File-driven prompts (`prompts/*.md`, English, hot-reloadable via API)
 
 ### Incident Management & Collaboration
 - Workspaces, projects, members, roles (admin/member) with JWT auth
 - Realtime ticketing (WebSocket): full lifecycle `new → open → in_progress → needs_review → resolved → closed`, reopen, assignees, append-only progress log, deep-linkable tickets
 - Auto-tickets from alerts with fingerprint dedup and configurable re-open window (`TICKET_ALERT_DEDUP_HOURS`)
-- In-app agent chat bound to each ticket, with streaming SSE responses and multi-turn history
+- **War Room** — an incident operations dashboard per project: open tickets, live alert feed, stack health, and episode timelines in one view, with a Classic/War Room toggle (session memory)
+- In-app agent chat bound to each ticket, with streaming SSE responses, multi-turn history, actionable follow-up chips, and a visual agent trace (per-step durations and summaries) on every AI reply
 - Two-layer knowledge system: personal library ↔ workspace/project/service links, consumed by the agent as grounding
 
 ### Integrations
 - **Telegram**: multi-bot, multi-channel per workspace; interactive buttons; diagnostic sessions; alert broadcasts
+- **Email (SMTP)**: second notification channel alongside Telegram — the same alerts delivered to both in one broadcast, with delivery logs and encrypted credentials
 - **Alertmanager**: per-tenant webhook ingestion with token auth (sha256) and 30-min dedup window
 - **Observability stacks per project**: register multiple Prometheus/Tempo/Alertmanager/Loki endpoints and bind them to projects (fallback chain: project → workspace default → global env)
+- **Public API & API keys**: scoped API keys (web vs public) with per-key rate limiting, a public knowledge-ingest endpoint with upsert, and `POST /api/pub/v1/deploy-event` so CI/CD systems can report deploys on non-Kubernetes stacks
 - **Bring-your-own-key LLM**: OpenAI, OpenRouter, Google Gemini, or OpenCode Zen — keys stored encrypted (Fernet) in the DB, managed from the UI
 
 ## How It Works
@@ -115,6 +124,7 @@ Web chat                    ──►  Supervisor (intent routing)
                                  │           + follow-up buttons + diagnostic session
                                  ▼
                                  Ticket created/linked ──► resolved in web UI
+                                  │  + auto re-check ~10 min later (✅/⚠️)
 ```
 
 ## Architecture
@@ -308,7 +318,7 @@ See [`deploy/README.md`](deploy/README.md) for the full step-by-step guide (priv
 - **Frontend:** React 19, TypeScript, Vite, Tailwind CSS v4, shadcn/ui, Zustand, TanStack Query, native WebSocket + SSE
 - **Data:** MongoDB (primary store + audit/memory), optional MySQL for service log sources
 - **Observability integrations:** Prometheus, Alertmanager, Grafana Tempo, Loki
-- **Notifications:** Telegram Bot API
+- **Notifications:** Telegram Bot API + SMTP (email)
 - **Deployment:** Docker, Kubernetes manifests (DigitalOcean-tested)
 
 ## Project Status
@@ -317,7 +327,7 @@ See [`deploy/README.md`](deploy/README.md) for the full step-by-step guide (priv
 >
 > - Expect breaking API and schema changes.
 > - Single-replica constraints (Telegram long-polling, watchdog singleton) limit horizontal scaling for now.
-> - Test coverage exists for the agent pipeline and prompt rendering (pytest), but the project has no CI badges or release cadence yet.
+> - Test coverage exists for the agent pipeline and prompt rendering (pytest); the project ships periodic release candidates (current: **v0.2.0-rc183**) but does not have CI badges yet.
 
 Good fit today: small-to-medium engineering teams that already run Prometheus/Tempo/Loki, want automated triage and investigation, and are comfortable self-hosting and tolerating some churn. Not yet pitched for large enterprise fleets.
 
@@ -326,7 +336,7 @@ Good fit today: small-to-medium engineering teams that already run Prometheus/Te
 Implemented plans live in `devdocs/`; near-term directions visible in the codebase include:
 
 - Moving the Telegram listener out of the API process so the API can scale beyond one replica
-- Additional notification channels (schema-ready: Slack, Discord, WhatsApp)
+- Slack, Discord, and WhatsApp notification channels (schema-ready; Telegram + email shipped in rc183)
 - Restore flow for soft-deleted projects (currently archive-only)
 
 ## 💡 Motivation
