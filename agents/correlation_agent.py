@@ -117,29 +117,71 @@ _GAP_DESCRIPTIONS = {
 }
 
 
-def _compute_data_gaps(state: dict, locale: str = "id") -> tuple[list[str], list[str]]:
+# suggested_action per node (label chip / button) — bilingual
+_GAP_ACTIONS = {
+    "id": {
+        "metrics_agent": "Cek error rate & HPA metrics",
+        "mongo_agent":   "Cek application logs",
+        "trace_agent":   "Lihat distributed traces",
+        "health_agent":  "Uji koneksi database",
+        "span_agent":    "Periksa detail span",
+    },
+    "en": {
+        "metrics_agent": "Check error rate & HPA metrics",
+        "mongo_agent":   "Check application logs",
+        "trace_agent":   "View distributed traces",
+        "health_agent":  "Test database connections",
+        "span_agent":    "Inspect span details",
+    },
+}
+
+# Priority per hypothesis — node paling relevan dapat prioritas lebih tinggi (1 = paling penting)
+_GAP_PRIORITY = {
+    "regression_post_deploy": {"mongo_agent": 1, "trace_agent": 2},
+    "downstream_timeout":     {"trace_agent": 1, "health_agent": 2},
+    "hpa_maxout":             {"metrics_agent": 1, "mongo_agent": 2},
+    "db_connection":          {"health_agent": 1, "mongo_agent": 2},
+    "traffic_spike":          {"metrics_agent": 1, "trace_agent": 2},
+    "unknown":                {"mongo_agent": 1, "metrics_agent": 2, "trace_agent": 3},
+}
+
+
+def _compute_data_gaps(state: dict, locale: str = "id") -> list[dict]:
     """
     Bandingkan lanes yang SEHARUSNYA dijalankan (planned_nodes) vs yang BENAR-BENAR
-    dijalankan (agents_visited). Return (gap_descriptions, gap_nodes) — sinkron index.
+    dijalankan (agents_visited). Gap 5: return list[dict] terstruktur.
 
-    CHATFLOW V2.1: tuple memisahkan teks human-readable dari nama node graph.
+    Setiap item:
+      {node, description, reason, suggested_action, priority}
+    gap_nodes di-derive dari sini (g["node"]) — backward compat utk loop router.
     """
     planned = set(state.get("planned_nodes") or [])
     visited = set(state.get("agents_visited") or [])
     missing = planned - visited
     texts = _GAP_DESCRIPTIONS.get(locale, _GAP_DESCRIPTIONS["id"])
+    actions = _GAP_ACTIONS.get(locale, _GAP_ACTIONS["en"])
+    hypothesis = (state.get("triage_result") or {}).get("hypothesis", "unknown")
+    prios = _GAP_PRIORITY.get(hypothesis, _GAP_PRIORITY["unknown"])
 
-    gap_descriptions = []
-    gap_nodes = []
+    gaps: list[dict] = []
     for node in missing:
-        desc = texts.get(node)
-        if desc:
-            gap_descriptions.append(desc)
-            gap_nodes.append(node)
-    return gap_descriptions, gap_nodes
+        if node not in texts:
+            continue
+        txt = texts[node]
+        desc, _, reason = txt.partition(" (")
+        if reason:
+            reason = reason.rstrip(")")
+        gaps.append({
+            "node": node,
+            "description": desc.strip(),
+            "reason": reason or "",
+            "suggested_action": actions.get(node, desc.strip()),
+            "priority": prios.get(node, 99),
+        })
+    return gaps
 
 
-def _compute_confidence(state: dict, gap_descriptions: list[str]) -> float:
+def _compute_confidence(state: dict, data_gaps: list) -> float:
     """
     Heuristic confidence (tanpa LLM):
     - Penalti per gap (maks -30%)
@@ -155,7 +197,7 @@ def _compute_confidence(state: dict, gap_descriptions: list[str]) -> float:
 
     base = 1.0
     if planned:
-        gap_ratio = len(gap_descriptions) / max(len(planned), 1)
+        gap_ratio = len(data_gaps) / max(len(planned), 1)
         base -= gap_ratio * 0.30
     if hypothesis == "unknown":
         base -= 0.20
@@ -164,7 +206,7 @@ def _compute_confidence(state: dict, gap_descriptions: list[str]) -> float:
     return round(max(0.0, min(1.0, base)), 2)
 
 
-def _compute_suggested_next(state: dict, gap_descriptions: list[str], confidence: float,
+def _compute_suggested_next(state: dict, data_gaps: list, confidence: float,
                             locale: str = "id") -> list[str]:
     """
     Bila confidence >= threshold & tidak ada gap → [].
@@ -172,7 +214,7 @@ def _compute_suggested_next(state: dict, gap_descriptions: list[str], confidence
     """
     from state.constants import CONFIDENCE_THRESHOLD
 
-    if confidence >= CONFIDENCE_THRESHOLD and not gap_descriptions:
+    if confidence >= CONFIDENCE_THRESHOLD and not data_gaps:
         return []
 
     hypothesis = (state.get("triage_result") or {}).get("hypothesis", "unknown")
@@ -363,9 +405,10 @@ explain from the ticket description what might be happening; stay honest about d
 
         # ── CHATFLOW V2.1 (Tahap 1): gap, confidence, suggested_next — tanpa LLM ──
         # locale sudah di-resolve di awal fungsi (utk reply_language + teks V2.1).
-        gap_descriptions, gap_nodes = _compute_data_gaps(state, locale)
-        confidence = _compute_confidence(state, gap_descriptions)
-        suggested_next = _compute_suggested_next(state, gap_descriptions, confidence, locale)
+        data_gaps = _compute_data_gaps(state, locale)
+        gap_nodes = [g["node"] for g in data_gaps]
+        confidence = _compute_confidence(state, data_gaps)
+        suggested_next = _compute_suggested_next(state, data_gaps, confidence, locale)
         # Increment loop counter DI SINI (node), bukan di router — router pure.
         loop_count = state.get("internal_loop_count", 0)
         if confidence < CONFIDENCE_THRESHOLD and loop_count < AUTO_LOOP_MAX:
@@ -377,7 +420,7 @@ explain from the ticket description what might be happening; stay honest about d
             "second_brain_context": second_brain_context,
             "agents_visited": agents_visited,
             "investigation_confidence": confidence,
-            "data_gaps": gap_descriptions,
+            "data_gaps": data_gaps,
             "gap_nodes": gap_nodes,
             "suggested_next": suggested_next,
             "internal_loop_count": loop_count,
@@ -431,7 +474,8 @@ explain from the ticket description what might be happening; stay honest about d
             "trace_available": state.get("trace_available", False),
         }
         # CHATFLOW V2.1: fallback juga hitung gap/confidence (transparansi walau LLM gagal)
-        fb_gaps, fb_gap_nodes = _compute_data_gaps(state, locale)
+        fb_gaps = _compute_data_gaps(state, locale)
+        fb_gap_nodes = [g["node"] for g in fb_gaps]
         fb_conf = _compute_confidence(state, fb_gaps)
         fb_next = _compute_suggested_next(state, fb_gaps, fb_conf, locale)
         fb_loop = state.get("internal_loop_count", 0)

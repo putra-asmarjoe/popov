@@ -80,6 +80,16 @@ async def triage_agent(state: AgentState) -> dict:
                 check_deploy_via_loki(service, minutes=60, loki_url_override=loki_override),
                 timeout=3.0,
             )
+            # Gap 4: fallback non-K8s — Loki miss → cek deploy_events (sinyal CI/CD, TTL 2 jam)
+            if not detected:
+                from services.deploy_event_store import check_deploy_recent
+                detected, info = await asyncio.wait_for(
+                    check_deploy_recent(service, minutes=60),
+                    timeout=2.0,
+                )
+                if detected and info:
+                    info = {**info, "source": "deploy_events_fallback"}
+                    logger.info(f"[Triage] deploy detected via deploy_events_fallback svc={service} version={info.get('version')}")
             return detected, info
         except Exception as e:
             logger.debug(f"Triage deploy check failed: {e}")
@@ -200,8 +210,22 @@ async def triage_agent(state: AgentState) -> dict:
 
     logger.info(f"Triage done service='{service}' hypothesis='{hypothesis}' confidence={confidence:.2f} deploy={deploy_detected} alert={has_alert}")
 
+    # Gap 3 Fase 5: lookup service_type dari registry (Opsi A — triage async, planner tetap sync)
+    service_type = None
+    try:
+        from services.workspace_service_registry import get_by_service
+        svc = state.get("service_name") or service
+        ws_id = state.get("workspace_id")
+        if ws_id and svc:
+            reg = await get_by_service(ws_id, svc) or await get_by_service(ws_id, svc.replace("-", "_"))
+            if reg:
+                service_type = reg.get("service_type") or None
+    except Exception as e:
+        logger.warning(f"Triage service_type lookup failed (non-fatal): {e}")
+
     return {
         "triage_result": triage_result,
         "next_agent": "mongo_agent",
+        "service_type": service_type,
         "agents_visited": agents_visited,
     }

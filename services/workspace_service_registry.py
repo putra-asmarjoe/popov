@@ -47,6 +47,16 @@ def _collection():
     return get_db()[WS_SERVICE_REGISTRY_COLLECTION]
 
 
+def _validate_service_type(service_type: Optional[str]) -> Optional[str]:
+    """Validasi service_type: api | worker | database | gateway | None (backward compat)."""
+    if service_type is None:
+        return None
+    st = (str(service_type).strip().lower() or None)
+    if st and st not in ("api", "worker", "database", "gateway"):
+        raise ValueError(f"service_type tidak valid: '{st}' (api|worker|database|gateway)")
+    return st
+
+
 def validate_service_id(service_id: str) -> str:
     sid = (service_id or "").strip().lower()
     if not sid or len(sid) > 64 or not all(c.isalnum() or c in "_-" for c in sid):
@@ -129,15 +139,18 @@ async def create_item(
     label: str = "",
     db_config: Optional[Dict[str, Any]] = None,
     created_by: Optional[str] = None,
+    service_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     sid = validate_service_id(service_id)
     validated_db = _validate_db_config(db_config)
+    validated_type = _validate_service_type(service_type)
     doc = {
         "registry_id": generate_registry_id(),
         "workspace_id": workspace_id,
         "service_id": sid,
         "label": (label or "").strip(),
         "db_config": validated_db,
+        "service_type": validated_type,
         "enabled": True,
         "created_at": _now(),
         "updated_at": _now(),
@@ -176,6 +189,8 @@ async def update_item(registry_id: str, patch: Dict[str, Any]) -> bool:
     if "db_config" in patch:
         validated = _validate_db_config(patch.get("db_config"))
         set_fields["db_config"] = validated  # None = hapus koneksi
+    if "service_type" in patch:
+        set_fields["service_type"] = _validate_service_type(patch.get("service_type"))
     if len(set_fields) <= 1:
         return False
     result = await _collection().update_one({"registry_id": registry_id}, {"$set": set_fields})

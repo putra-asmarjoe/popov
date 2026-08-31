@@ -51,6 +51,10 @@ def route_after_correlation(state: AgentState) -> List[str]:
     return ["response_agent"]
 
 
+# Gap 5 Fase 3: node yang boleh di-trigger langsung via action chip "investigate:<node>"
+DIRECT_FANOUT_NODES = {"mongo_agent", "metrics_agent", "trace_agent", "health_agent"}
+
+
 def _route(state: AgentState) -> Union[str, List[str]]:
     """Conditional edge: baca next_agent dari state. Selective fan-out via Investigation Planner (FASE 4B) + span jika preset."""
     next_a = state.get("next_agent", "end")
@@ -60,29 +64,14 @@ def _route(state: AgentState) -> Union[str, List[str]]:
         logger.warning(f"Routing to end due to error: {error}")
         return END
 
+    # Gap 5: chip "investigate:<node>" → direct route ke collector, bypass planner/NLU
+    if state.get("routing_flag") == "direct_fanout" and next_a in DIRECT_FANOUT_NODES:
+        logger.info(f"[Route] direct fan-out → {next_a} (investigate chip)")
+        return [next_a]
+
     if next_a == "mongo_agent":
-        # FASE 4B: Selective fan-out berdasarkan triage_result.hypothesis (planner), fallback unknown
-        # FASE 4A: tetap sertakan span jika preset_trace_ids dan trace dibutuhkan
-        try:
-            from agents.investigation_planner import plan
-            planned = plan(state)
-            nodes = planned["nodes"]
-            # Planner sudah handle span jika preset + needs_trace, tapi double-check untuk DRY
-            if state.get("preset_trace_ids") and "span_agent" not in nodes:
-                # Hanya tambah span jika hipotesis butuh trace (planner sudah handle, ini fallback)
-                hyp = (state.get("triage_result") or {}).get("hypothesis", "unknown")
-                if hyp in ("regression_post_deploy", "downstream_timeout", "traffic_spike", "unknown"):
-                    if "trace_agent" in nodes:  # jika trace ada, span relevan
-                        nodes.append("span_agent")
-                        logger.info(f"Fan-out selective + span (hyp={hyp}, preset={state.get('preset_trace_ids')})")
-            logger.info(f"Planner fan-out {planned['reason']} → {nodes}")
-            return nodes
-        except Exception as e:
-            logger.warning(f"Planner failed, fallback full fan-out: {e}")
-            nodes = ["mongo_agent", "metrics_agent", "trace_agent"]
-            if state.get("preset_trace_ids"):
-                nodes.append("span_agent")
-            return nodes
+        # Gap 3 Fase 1: planner_node yang jalankan plan() dan persist planned_nodes ke state
+        return ["planner_node"]
 
     route_map = {
         "triage_agent":    "triage_agent",
@@ -96,6 +85,45 @@ def _route(state: AgentState) -> Union[str, List[str]]:
         "end":             END,
     }
     return route_map.get(next_a, END)
+
+
+def planner_node(state: AgentState) -> dict:
+    """Gap 3 Fase 1: jalankan plan() (adaptive fan-out) dan PERSIST planned_nodes ke AgentState.
+    Conditional edge tidak bisa mutasi state (langgraph 0.6 rebuild per step) —
+    maka plan() dipindah ke node nyata yang return planned_nodes/planner_reason."""
+    agents_visited = state.get("agents_visited", []) + ["planner_node"]
+    try:
+        from agents.investigation_planner import plan
+        planned = plan(state)
+        nodes = planned["nodes"]
+        reason = planned["reason"]
+    except Exception as e:
+        logger.warning(f"[Planner] failed, fallback full fan-out: {e}")
+        nodes = ["mongo_agent", "metrics_agent", "trace_agent"]
+        reason = f"fallback full fan-out ({e})"
+    # Fase 4A: span jika preset_trace_ids + trace dibutuhkan (fallback, plan() sudah handle)
+    if state.get("preset_trace_ids") and "span_agent" not in nodes:
+        hyp = (state.get("triage_result") or {}).get("hypothesis", "unknown")
+        if hyp in ("regression_post_deploy", "downstream_timeout", "traffic_spike", "unknown"):
+            if "trace_agent" in nodes:
+                nodes.append("span_agent")
+                reason += " + span (preset_trace_ids)"
+    return {
+        "planned_nodes": nodes,
+        "planner_reason": reason,
+        "next_agent": "mongo_agent",
+        "agents_visited": agents_visited,
+    }
+
+
+def _route_fanout(state: AgentState) -> List[str]:
+    """Conditional edge dari planner_node → fan-out collector berdasarkan planned_nodes."""
+    nodes = state.get("planned_nodes") or []
+    if not nodes:
+        nodes = ["mongo_agent", "metrics_agent", "trace_agent"]
+        logger.warning(f"[Planner] planned_nodes kosong, fallback full fan-out → {nodes}")
+    logger.info(f"[Planner] fan-out {state.get('planner_reason','?')} → {nodes}")
+    return nodes
 
 
 def _route_span_agent(state: AgentState) -> str:
@@ -152,8 +180,10 @@ def build_graph() -> StateGraph:
 
     # Supervisor → conditional routing (triage untuk incident, fan-out untuk mongo_agent intent)
     workflow.add_conditional_edges("supervisor", _route)
-    # Triage → fan-out selective (planner)
+    # Triage → planner_node (Gap 3: plan() + persist planned_nodes) → fan-out selective
     workflow.add_conditional_edges("triage_agent", _route)
+    workflow.add_node("planner_node", planner_node)
+    workflow.add_conditional_edges("planner_node", _route_fanout)
 
     # Fan-in: Semua parallel observability agents → knowledge_agent (FE-7) → correlation
     workflow.add_edge("mongo_agent",       "knowledge_agent")

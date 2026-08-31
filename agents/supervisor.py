@@ -298,6 +298,25 @@ async def supervisor_agent(state: AgentState) -> dict:
     # State optional — default "low" bila kosong/invalid.
     chat_depth = (state.get("chat_depth") or "low").lower()
 
+    # Gap 5 Fase 3: action chip "investigate:<node>" → direct route ke collector, bypass NLU.
+    # span_agent TIDAK di whitelist — route setelah span tanpa konteks putus (ke response_agent).
+    intent_raw = state.get("intent", "")
+    if intent_raw.startswith("investigate:"):
+        node = intent_raw.split(":", 1)[1].strip().lower()
+        if node in ("mongo_agent", "metrics_agent", "trace_agent", "health_agent"):
+            logger.info(f"[Supervisor] investigate chip → direct route {node}")
+            svc = state.get("service_name") or ""
+            return {
+                "next_agent": node,
+                "routing_flag": "direct_fanout",
+                "intent": intent_raw,
+                "service_name": svc,
+                "collection_name": f"logs_{svc}" if svc else "",
+                "agents_visited": agents_visited,
+                "routing_strategy": None,
+                "error": None,
+            }
+
     # ── Offer Session: user menanggapi tawaran agent sebelumnya ──────────────
     # (Tahap 1-3). Keyed sender.session_id (web chat). Proses SEBELUM routing lain
     # agar "ya/tidak/isi-param" ditangkap & dieksekusi, bukan masuk jalur analisis.

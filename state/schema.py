@@ -90,8 +90,10 @@ class AgentState(TypedDict):
     # Triage — Fase 3 (silent, <30s)
     triage_result: Optional[dict]      # {hypothesis, confidence, severity, deploy_detected, deploy_info, focus_hints, skip_hints, second_brain_context}
 
-    # Planner — Fase 4B (selective fan-out, log only)
-    planned_nodes: Optional[List[str]]  # ["mongo_agent","trace_agent"] — diisi workflow _route untuk audit
+    # Planner — Fase 4B + Gap 3 (selective fan-out, audit + loop)
+    planned_nodes: Optional[List[str]]  # ["mongo_agent","trace_agent"] — diisi planner_node (Gap 3 Fase 1)
+    planner_reason: Optional[str]       # Gap 3: alasan keputusan planner (audit log)
+    service_type: Optional[str]         # Gap 3 Fase 5: api|worker|database|gateway dari registry (diisi triage)
 
     # Fase 6B — LLM fallback routing
     routing_flag: Optional[str]        # None | "low_confidence_routing"
