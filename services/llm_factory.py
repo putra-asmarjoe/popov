@@ -7,7 +7,7 @@ Sumber konfigurasi (prioritas):
   2. Fallback bootstrap: settings (.env/code default) bila DB kosong.
 
 Provider didukung: openai, openrouter, google, opencode (OpenCode Zen gateway).
-Dipakai oleh telegram_agent, correlation_agent, supervisor (Strategy 5),
+Dipakai oleh response_agent, correlation_agent, supervisor (Strategy 5),
 dan pattern_miner_service — satu-satunya tempat branching provider.
 
 Fix #51: max_tokens dibatasi (3000) — cegah 402 kredit OpenRouter.

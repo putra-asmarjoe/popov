@@ -1,6 +1,10 @@
 # Popov
 
-Open-source, self-hosted **AI incident response platform**. Popov connects to your existing observability stack (Prometheus, Tempo, Loki, Alertmanager), automatically triages and investigates production incidents with a LangGraph multi-agent pipeline, and delivers one actionable report — with root cause — to Telegram or a built-in web workspace with ticketing.
+Open-source, self-hosted **the intelligence behind operations**. 
+
+Popov connects your existing observability stack — Prometheus, Tempo, Loki, and Alertmanager — with knowledge, ticketing, and AI agents to help teams understand, investigate, and resolve operational problems.
+
+Today, Popov focuses on production incidents: automatically triaging signals, investigating with a LangGraph multi-agent pipeline, and delivering a single actionable report with root cause and recommended actions — wherever your team works, via Telegram, email, or the built-in web workspace.
 
 > 🔒 **Your data never leaves your infrastructure.** No telemetry. No phone home. No third-party with access to your production logs.
 

@@ -98,7 +98,7 @@ async def _process_intent(
     """Run the langgraph pipeline for a given intent.
 
     ctx (Fix #40): {token, chat_id, notif_id, workspace_id} dari channel asal pesan —
-    dipakai utk notice error/timeout DAN disuntik ke state agar telegram_agent
+    dipakai utk notice error/timeout DAN disuntik ke state agar response_agent
     membalas via channel yang sama (origin_notif_id).
     """
     ctx = ctx or {}
@@ -189,8 +189,10 @@ class ChannelPoller:
     def __init__(self, channel: dict):
         self.channel = dict(channel)
         self.notif_id = channel.get("notif_id", "?")
-        self.token = ((channel.get("config") or {}).get("telegram") or {}).get("bot_token") or ""
-        self.target_chat_id = str(((channel.get("config") or {}).get("telegram") or {}).get("chat_id") or "")
+        from services.notification_store import extract_telegram_creds
+        self.token, self.target_chat_id = extract_telegram_creds(channel)
+        self.token = self.token or ""
+        self.target_chat_id = str(self.target_chat_id or "")
         self.workspace_id = channel.get("workspace_id")
         self.offset: Optional[int] = None
         self.timeout = 25  # seconds (long poll)
@@ -283,8 +285,10 @@ class ChannelPoller:
         if not doc or doc.get("enabled") is False:
             return None
         self.channel = doc
-        self.token = ((doc.get("config") or {}).get("telegram") or {}).get("bot_token") or ""
-        self.target_chat_id = str(((doc.get("config") or {}).get("telegram") or {}).get("chat_id") or "")
+        from services.notification_store import extract_telegram_creds
+        self.token, self.target_chat_id = extract_telegram_creds(doc)
+        self.token = self.token or ""
+        self.target_chat_id = str(self.target_chat_id or "")
         return doc
 
     # ── Update processing ────────────────────────────────────────────────────

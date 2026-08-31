@@ -115,8 +115,9 @@ async def _get_embedding(text: str) -> Optional[list[float]]:
     model = cfg["model"]
     dim = cfg["dim"]
     timeout_ms = cfg["timeout_ms"]
-    # potong teks agar pas context model (liquid 512 tokens ≈ 1800 char)
-    text = (text or "")[:1800].strip()
+    max_chars = cfg.get("max_chars") or settings.embedding_max_chars
+    # potong teks agar pas context model (configurable via EMBEDDING_MAX_CHARS)
+    text = (text or "")[:max_chars].strip()
     if not text or not api_key or not base_url:
         return None
     try:
@@ -180,6 +181,8 @@ async def write_episode_bg(state: dict, episode_id: str) -> None:
         tmp_state = {"metrics_summary": metrics_sum, "mongo_summary": mongo_sum, "trace_summary": trace_sum, "service_name": state.get("service_name") or "", "intent": state.get("intent") or ""}
         embed_text = _build_query_text(tmp_state)
 
+        ticket_context = state.get("ticket_context") or {}
+        knowledge_ctx = state.get("knowledge_context") or ""
         doc = {
             "episode_id": episode_id,
             "request_id": state.get("request_id"),
@@ -207,7 +210,18 @@ async def write_episode_bg(state: dict, episode_id: str) -> None:
             "created_at": now,
             "workspace_id": state.get("workspace_id") or None,   # MT isolation (SCALE plan MT-3)
             "observ_id": state.get("observ_id") or None,
-            "schema_version": 2,
+            # Gap 2 — link + outcome (diisi saat enrichment, None by default)
+            "ticket_id": ticket_context.get("ticket_id") or state.get("ticket_id") or None,
+            "knowledge_context": knowledge_ctx[:2000] if knowledge_ctx else None,  # audit trail utk knowledge_refs
+            "resolution_actions": None,
+            "actual_ttr_minutes": None,
+            "knowledge_refs_used": None,
+            "doc_context_used": None,
+            "what_confirmed_it": None,
+            "what_was_misleading": None,
+            "enriched_at": None,
+            "enrichment_version": None,
+            "schema_version": 3,
             "embedding": None,
             "embedding_model": None,
             "embedding_dim": None,

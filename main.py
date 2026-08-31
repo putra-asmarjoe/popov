@@ -16,6 +16,8 @@ from api.notification_channels import router as notification_channels_router  # 
 from api.knowledge import router as knowledge_router  # FE-7 (menggantikan ingest)
 from api.services_lib import router as services_lib_router  # FE-8
 from api.agent_docs import router as agent_docs_router  # grounding docs DB (admin CRUD)
+from api.ingest import router as ingest_router  # public ingest endpoints
+from api.api_keys import router as api_keys_router  # API key management
 from services.mongodb_client import close as close_mongo
 from services.telegram_listener import start_polling
 from services.request_log import ensure_indexes
@@ -48,6 +50,12 @@ async def lifespan(app: FastAPI):
         await ensure_notification_indexes()
     except Exception as e:
         logging.getLogger(__name__).warning(f"notification_targets indexes not ensured: {e}")
+    # Email channel: index collection notification_delivery_logs
+    try:
+        from services.notification_delivery_logs import ensure_delivery_log_indexes
+        await ensure_delivery_log_indexes()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"notification_delivery_logs indexes not ensured: {e}")
     # FE-1: index users.email unique (auth)
     try:
         from services.user_store import ensure_user_indexes
@@ -84,6 +92,12 @@ async def lifespan(app: FastAPI):
         await ensure_chat_indexes()
     except Exception as e:
         logging.getLogger(__name__).warning(f"Chat indexes not ensured: {e}")
+    # API Keys: index api_keys workspaceId, key_hash unique
+    try:
+        from services.api_key_store import ensure_indexes as ensure_api_key_indexes
+        await ensure_api_key_indexes()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"API Key indexes not ensured: {e}")
     # FE-7: index knowledge library + refs workspace
     try:
         from services.knowledge_store import ensure_knowledge_indexes
@@ -102,6 +116,12 @@ async def lifespan(app: FastAPI):
         await ensure_agent_docs_indexes()
     except Exception as e:
         logging.getLogger(__name__).warning(f"Agent docs indexes not ensured: {e}")
+    # Agent doc refs — index workspace+category+key unique
+    try:
+        from services.agent_doc_refs_store import ensure_indexes as ensure_agent_doc_refs_indexes
+        await ensure_agent_doc_refs_indexes()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Agent doc refs indexes not ensured: {e}")
     # Offer Session — index tawaran aksi lanjutan (Tahap 1-3)
     try:
         from services.offer_session import ensure_offer_indexes
@@ -120,13 +140,6 @@ async def lifespan(app: FastAPI):
         await load_llm_config_from_db()
     except Exception as e:
         logging.getLogger(__name__).warning(f"LLM config load dari DB gagal (fallback settings): {e}")
-    # Warm cache grounding docs (agent_docs) di startup — agent TIDAK buka DB saat request
-    # (list_all_services/build_agent_context baca cache; reload_docs() utk invalidate manual).
-    try:
-        from services.doc_loader import load_all_docs
-        await load_all_docs()
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"Doc loader warm-up gagal (fallback file): {e}")
     polling_task = asyncio.create_task(start_polling())
     # Fix #107: event tap — relay realtime lintas-proses. Watchdog worker menulis
     # event ke `realtime_events` (MongoDB); task ini mem-publish-nya ke bus proses
@@ -154,14 +167,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Popov - Incident Response Agent",
+    title="Popov - The Intelligence Behind Operations",
     description="LangGraph multi-agent: MongoDB reader + Telegram notifier",
-    version="0.1.0",
+    version="0.2.0rc161",
     lifespan=lifespan,
 )
 
+# ── Internal API (priv) — Web Keys (JWT auth) ────────────────────────────────
 app.include_router(router, prefix="/api/v1")
-# Layer 2: Alertmanager push webhook per-tenant (SCALE_ESCALATION_PLAN)
 from api.webhook import router as webhook_router  # noqa: E402
 app.include_router(webhook_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
@@ -175,6 +188,10 @@ app.include_router(notification_channels_router, prefix="/api/v1")
 app.include_router(knowledge_router, prefix="/api/v1")
 app.include_router(services_lib_router, prefix="/api/v1")
 app.include_router(agent_docs_router, prefix="/api/v1")
+app.include_router(api_keys_router, prefix="/api/v1")  # API key management (internal only)
+
+# ── Public API (pub) — External API Keys (pk_pub_*) ──────────────────────────
+app.include_router(ingest_router, prefix="/api/pub/v1")  # public ingest endpoints
 
 
 # ── FE-6: serve SPA (web/dist) — satu container, satu domain ──────────────────

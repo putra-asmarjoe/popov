@@ -72,6 +72,7 @@ async def maybe_create_watchdog_ticket(
     alert_id: Optional[str],
     workspace_id: Optional[str] = None,
     observ_id: Optional[str] = None,
+    alert_text: Optional[str] = None,  # formatted alert detail (from process_service_alerts)
 ) -> List[Dict[str, Any]]:
     """Buat tiket dari alert watchdog di SEMUA project match (Fix #40).
 
@@ -142,9 +143,8 @@ async def maybe_create_watchdog_ticket(
                     content_fp=base_fp,
                     workspace_id=str(workspace_id) if workspace_id else None,
                     observ_id=observ_id,
-                    note=(
-                        f"🔔 New alert linked: {alert_name} ({alert_severity})"
-                    ),
+                    # note dihapus: linked alert hanya masuk ticket_alerts (Linked Alerts),
+                    # tidak membuat entry Progress Log
                 )
                 # Web bell: paritas dgn Telegram — semua member workspace (Fix #89)
                 link_no = f"{project.get('key', '?')}-{linkable.get('ticketNumber', '?')}"
@@ -174,9 +174,11 @@ async def maybe_create_watchdog_ticket(
                     WATCHDOG_ACTOR,
                     title=f"[ALERT] {service}: {alert_name}",
                     description=(
-                        f"Ticket auto-created by Popov Watchdog for service '{service}'.\n\n"
-                        f"Alerts: {len(alerts)}. Source: observability (Prometheus/Tempo/Alertmanager).\n"
-                        f"First alert: {alert_name} (severity {alert_severity})."
+                        alert_text or (
+                            f"Ticket auto-created by Popov Watchdog for service '{service}'.\n\n"
+                            f"Alerts: {len(alerts)}. Source: observability (Prometheus/Tempo/Alertmanager).\n"
+                            f"First alert: {alert_name} (severity {alert_severity})."
+                        )
                     ),
                     kind="infrastructure",
                     severity=_ticket_severity(alerts),

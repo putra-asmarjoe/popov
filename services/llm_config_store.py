@@ -263,6 +263,7 @@ async def get_embedding_cfg() -> Optional[dict]:
             "base_url": base_url,
             "dim": int(settings.embedding_dim),
             "timeout_ms": int(settings.embedding_timeout_ms),
+            "max_chars": int(emb.get("maxChars") or settings.embedding_max_chars),
             "is_openrouter": prov == "openrouter",
         }
     # fallback legacy (BYOK belum diatur) — baca settings.embedding_*
@@ -277,6 +278,7 @@ async def get_embedding_cfg() -> Optional[dict]:
                 "base_url": base_url,
                 "dim": int(settings.embedding_dim),
                 "timeout_ms": int(settings.embedding_timeout_ms),
+                "max_chars": int(settings.embedding_max_chars),
                 "is_openrouter": settings.embedding_provider.lower() == "openrouter",
             }
     return None

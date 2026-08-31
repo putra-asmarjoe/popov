@@ -1,7 +1,7 @@
 # Popov Agent — Kubernetes Deployment Guide
 
 This guide walks you through building the Docker image and deploying
-**Popov - Incident Response Agent** to a Kubernetes cluster, step by step,
+**Popov - The Intelligence Behind Operations** to a Kubernetes cluster, step by step,
 in the exact order required.
 
 Follow the steps **top to bottom** — later steps depend on earlier ones.

@@ -122,9 +122,20 @@ def aggregate_clusters(episodes: List[dict], labels: List[int]) -> Tuple[List[di
         rc_counter = Counter(ep.get("root_cause") or "unknown" for ep in eps)
         probable, cnt = rc_counter.most_common(1)[0]
         pct = cnt / n if n else 0
-        # avg_resolution: tidak ada field resolution, gunakan perbedaan timestamp? fallback None
-        # Coba hitung durasi jika ada created_at vs timestamp? Saat ini tidak ada, jadi None
-        avg_res = None
+        # avg_resolution: Gap 2 — pakai actual_ttr_minutes jika tersedia
+        ttres = [ep.get("actual_ttr_minutes") for ep in eps if isinstance(ep.get("actual_ttr_minutes"), (int, float))]
+        avg_res = round(sum(ttres) / len(ttres), 1) if ttres else None
+        # common resolution actions + knowledge used (Gap 2 enrichment)
+        action_counter = Counter()
+        for ep in eps:
+            for a in (ep.get("resolution_actions") or []):
+                action_counter[a.strip()] += 1
+        knowledge_counter = Counter()
+        for ep in eps:
+            for r in (ep.get("knowledge_refs_used") or []):
+                knowledge_counter[r.strip()] += 1
+        common_resolution_actions = [a for a, _ in action_counter.most_common(5)]
+        common_knowledge_used = [r for r, _ in knowledge_counter.most_common(5)]
         # distinguishing_symptoms: frequency of hpa_status, error_rate buckets
         hpa_counter = Counter((ep.get("symptoms") or {}).get("hpa_status") or "None" for ep in eps)
         # most common hpa
@@ -175,6 +186,8 @@ def aggregate_clusters(episodes: List[dict], labels: List[int]) -> Tuple[List[di
             "probable_cause": probable,
             "probable_cause_pct": round(pct, 2),
             "avg_resolution_min": avg_res,
+            "common_resolution_actions": common_resolution_actions,
+            "common_knowledge_used": common_knowledge_used,
             "focus_hints": focus,
             "skip_hints": skip,
             "misleading_signals": misleading,
@@ -238,6 +251,10 @@ async def generate_narrative_with_llm(service: str, patterns: List[dict], unclas
             if p['misleading_signals']:
                 lines.append(f"- BUKAN penyebab: {', '.join(p['misleading_signals'])}")
             lines.append(f"- Rata-rata resolusi: {p['avg_resolution_min'] or 'belum ada data'}")
+            if p.get('common_resolution_actions'):
+                lines.append(f"- Aksi resolusi yang sering: {', '.join(p['common_resolution_actions'])}")
+            if p.get('common_knowledge_used'):
+                lines.append(f"- Knowledge yang sering dikonsultasi: {', '.join(p['common_knowledge_used'])}")
             lines.append(f"- Feedback quality: {p['feedback_quality']['correct']} correct, {p['feedback_quality']['auto_resolved']} auto_resolved, {p['feedback_quality']['pending']} pending")
             lines.append("")
         if unclassified:

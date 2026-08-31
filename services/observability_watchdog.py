@@ -460,7 +460,8 @@ async def process_service_alerts(
     # Fix #105: bahasa pesan ikut preferensi owner workspace (fallback en)
     from services.locale_pref import get_workspace_locale
 
-    t = _texts(await get_workspace_locale(workspace_id))
+    locale = await get_workspace_locale(workspace_id)
+    t = _texts(locale)
 
     text = _format_service_message(service, alerts, t)
     if tr:
@@ -497,6 +498,7 @@ async def process_service_alerts(
             alert_id,
             workspace_id=workspace_id,
             observ_id=observ_id,
+            alert_text=text,  # pass formatted alert detail for ticket description
         )
         if len(tickets) > 1:
             logger.info(f"Auto-ticket: {len(tickets)} tiket dibuat untuk '{service}' (multi-project)")
@@ -519,14 +521,17 @@ async def process_service_alerts(
     except Exception as e:
         logger.warning(f"Auto-ticket hook failed untuk '{service}': {e}")
 
-    # Notifikasi broadcast (Fix #40): union channel project-linked ∪ workspace-wide.
-    # Tanpa env fallback — 0 channel = tidak terkirim (warning).
+    # Notifikasi broadcast (Fix #40 + Email channel): union channel project-linked ∪
+    # workspace-wide, SEMUA tipe (telegram + email). FIRE-AND-FORGET — tidak menunggu
+    # return SMTP/Telegram. Tanpa env fallback — 0 channel = tidak terkirim (warning).
     sent = 0
     try:
         from services.notification_store import resolve_channels, list_channels_internal
         from services.observability_store import get_target
         from services.incident_router import resolve_projects_for_incident
-        from services.telegram_client import broadcast, build_alert_buttons
+        from services.notifier import deliver_alert, build_alert_subject
+        from services.markdown_html import markdown_to_html
+        from services.telegram_client import build_alert_buttons
 
         observ_target = None
         if observ_id:
@@ -540,31 +545,47 @@ async def process_service_alerts(
             service_name=service,
             observ_target=observ_target,
         )
-        # Union channel atas semua project match + channel workspace-wide, dedup notif_id
+        # Union channel atas semua project match + workspace-wide, dedup notif_id,
+        # lintas SEMUA channel type (telegram + email) — 1 fire kirim ke semua match.
         channels: dict = {}
         pids = [str(p["_id"]) for p in projects]
-        for pid in pids:
-            for ch in await resolve_channels(workspace_id, pid):
-                channels[ch.get("notif_id")] = ch
-        if not channels and workspace_id:
-            for ch in await resolve_channels(workspace_id, None):
-                channels.setdefault(ch.get("notif_id"), ch)
+        for ch_type in ("telegram", "email"):
+            for pid in pids:
+                for ch in await resolve_channels(workspace_id, pid, channel=ch_type):
+                    channels[ch.get("notif_id")] = ch
+            if not channels and workspace_id:
+                for ch in await resolve_channels(workspace_id, None, channel=ch_type):
+                    channels.setdefault(ch.get("notif_id"), ch)
         if not channels and not pids:
-            # konteks legacy global (tanpa ws/project) — pakai semua channel telegram enabled
-            for ch in await list_channels_internal(channel="telegram", enabled_only=True):
-                channels.setdefault(ch.get("notif_id"), ch)
+            # konteks legacy global (tanpa ws/project) — semua channel enabled semua tipe
+            for ch_type in ("telegram", "email"):
+                for ch in await list_channels_internal(channel=ch_type, enabled_only=True):
+                    channels.setdefault(ch.get("notif_id"), ch)
 
         if channels:
             markup = build_alert_buttons(service, callback_ref=alert_id)
-            sent = await broadcast(list(channels.values()), text, reply_markup=markup)
+            alert_name = (alerts[0].get("name") if alerts else None) or ""
+            subject = build_alert_subject(service, alert_name, locale)
+            html = markdown_to_html(text)
+            # FIRE-AND-FORGET: spawn task, tidak menunggu SMTP/Telegram return
+            deliver_alert(
+                list(channels.values()),
+                text,
+                html=html,
+                subject=subject,
+                telegram_reply_markup=markup,
+                alert_id=alert_id,
+                workspace_id=workspace_id,
+            )
+            sent = len(channels)
             logger.info(
-                f"[Notification] alert '{service}' dikirim ke {sent}/{len(channels)} channel "
+                f"[Notification] alert '{service}' fire-and-forget ke {len(channels)} channel "
                 f"(project match: {len(pids)})"
             )
         else:
             logger.warning(
                 f"[Notification] tidak ada channel notifikasi match untuk '{service}' — "
-                f"alert tidak terkirim ke Telegram (murni DB)"
+                f"alert tidak terkirim (murni DB)"
             )
     except Exception as e:
         logger.error(f"[Notification] broadcast gagal utk '{service}': {e}")

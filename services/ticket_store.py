@@ -9,6 +9,7 @@ Model 100% dari popov-frontend-plan.md + field tambahan:
 
 Nomor tiket atomic: projects.ticketCounter di-$inc (anti-race, tanpa collection counter).
 """
+import asyncio
 import logging
 import re
 import uuid
@@ -411,6 +412,23 @@ async def remove_assignee(ticket_id: str, user_id: str) -> Optional[Dict[str, An
     return doc
 
 
+async def link_episode_to_ticket(ticket_id: str, episode_id: str) -> bool:
+    """Simpan episode_id ke ticket document. Idempotent — tidak overwrite jika sudah ada.
+    Gap 2 Fase 3: internal linking, tanpa WebSocket broadcast (bukan user-facing change)."""
+    try:
+        db = get_db()
+        result = await db[TICKETS_COLLECTION].update_one(
+            {"_id": ObjectId(ticket_id), "episode_id": {"$exists": False}},
+            {"$set": {"episode_id": episode_id, "updatedAt": _now_iso()}},
+        )
+        if result.modified_count:
+            logger.info(f"[TicketStore] linked episode {episode_id} → ticket {ticket_id}")
+        return result.modified_count > 0
+    except Exception as e:
+        logger.warning(f"[TicketStore] link_episode_to_ticket failed ticket={ticket_id}: {e}")
+        return False
+
+
 async def change_status(
     ticket: Dict[str, Any], target: str, user: Dict[str, Any],
     *, via: Optional[str] = None,
@@ -445,6 +463,13 @@ async def change_status(
     )
     if doc is not None:
         _emit_ticket_event("ticket:status_changed", doc, status=target)
+        # Gap 2 Fase 5: enrich episode saat ticket resolved (fire-and-forget, tidak block flow)
+        if target == "resolved":
+            try:
+                from services.episode_enrichment import enrich_episode_from_ticket_async
+                asyncio.create_task(enrich_episode_from_ticket_async(str(doc["_id"])))
+            except Exception as e:
+                logger.warning(f"[TicketStore] schedule enrichment failed (non-fatal): {e}")
     return doc, None
 
 

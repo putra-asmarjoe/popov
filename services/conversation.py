@@ -22,6 +22,54 @@ TICKET_ACTION_OPTIONS = [
     "add label", "assign ticket", "add progress note", "summarize ticket condition",
 ]
 
+# ── Deteksi bahasa chat (DRY — dipakai project_agent, ticket_agent, response_agent) ──
+# "gunakan bahasa yang dipakai di chat; bila tidak terdeteksi → preferensi user"
+_ID_WORDS = (
+    "tiket", "berapa", "terbuka", "yang", "masih", "hari ini", "dibuat",
+    "masuk", "tolong", "jelaskan", "saja", "pada", "saya", "itu", "tadi",
+    "tampilkan", "buka", "ada", "tidak", "dengan",
+)
+_EN_WORDS = (
+    "the", "how", "many", "what", "open", "tickets", "today", "about",
+    "send", "detail", "please", "show", "list", "created", "are", "there",
+    "is", "me", "give", "available", "project", "these",
+)
+
+
+def detect_chat_locale(history: Optional[List[dict]], default: str = "en") -> str:
+    """Skor kata kunci Indonesia vs English dari pesan-pesan USER terakhir.
+
+    Seri (skor sama) atau kosong → default (preferensi user).
+    Pesan yang berupa INTENT TEKNIS dari chip/button (mis. "cek error pada {svc}",
+    "berikan N data {svc}", "detail trace <hex>") TIDAK dihitung — itu bukan
+    representasi bahasa user (Fix #140: chip Cek Detail kirim intent ID walau
+    user EN, supaya tidak menyesatkan deteksi).
+    """
+    if not history:
+        return default
+    id_score = en_score = 0
+    for h in history:
+        if h.get("role") != "user":
+            continue
+        text = (h.get("content") or "").lower()
+        if _is_technical_intent(text):
+            continue
+        id_score += sum(1 for w in _ID_WORDS if w in text)
+        en_score += sum(1 for w in _EN_WORDS if w in text)
+    if id_score == en_score:
+        return default
+    return "id" if id_score > en_score else "en"
+
+
+def _is_technical_intent(text: str) -> bool:
+    """True bila pesan user = intent teknis (dari chip/button, bukan bahasa natural user)."""
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return any(p in t for p in ("cek error pada", "berikan ", "detail trace ", "cek koneksi",
+                                "cek metrics", "rawlog", "health_check", "metrics:", "detail:",
+                                "cek error terakhir", "centrall log"))
+
 
 async def build_conversation_history(
     session_id: str,

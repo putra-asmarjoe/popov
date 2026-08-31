@@ -31,14 +31,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy pyproject.toml and README.md first to leverage Docker layer caching for dependencies
+# Copy pyproject.toml, README.md, and package directories for editable install
 COPY pyproject.toml README.md ./
+COPY api/ api/
+COPY graph/ graph/
+COPY state/ state/
+COPY agents/ agents/
+COPY config/ config/
+COPY services/ services/
+COPY main.py watchdog_worker.py ./
+COPY prompts/ prompts/
 
 # Install python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
 
-# Copy application source code
+# Copy remaining application source code
 COPY . .
 
 # Copy hasil build frontend dari stage 1 (FE-6: satu container, satu domain)

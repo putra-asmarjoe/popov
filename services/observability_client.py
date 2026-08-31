@@ -237,6 +237,8 @@ async def aggregate_observability(
     services: Dict[str, List[Dict[str, Any]]] = {}
     for source_name, alerts in filtered_results.items():
         for alert in alerts:
+            if alert.get("state") == "resolved":
+                continue
             svc = alert.get("service") or "unknown"
             services.setdefault(svc, []).append(alert)
 

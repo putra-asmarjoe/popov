@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from bson import ObjectId
 
+from config.settings import settings
 from services.mongodb_client import get_db
 
 logger = logging.getLogger(__name__)
@@ -390,8 +391,6 @@ async def list_refs_for_workspace_grouped(ws_id: str) -> List[Dict[str, Any]]:
     projects = await db["projects"].find(
         {"workspaceId": ws_id, "deletedAt": None}
     ).sort("createdAt", 1).to_list(100)
-    if not projects:
-        return []
     pid_by_oid = {str(p["_id"]): p for p in projects}
     refs = [d async for d in db[PROJECT_REFS_COLLECTION].find(
         {"projectId": {"$in": list(pid_by_oid.keys())}}
@@ -424,6 +423,74 @@ async def list_refs_for_workspace_grouped(ws_id: str) -> List[Dict[str, Any]]:
             "ownerId": kb.get("ownerId", ""),
         })
 
+    # FIX: resolve knowledge for workspace_service_registry services
+    # that are NOT linked via project_service_refs (direct knowledge
+    # added via ServiceKnowledgeDialog must appear in hierarchy).
+    from services.workspace_service_registry import WS_SERVICE_REGISTRY_COLLECTION
+    registry_docs = await db[WS_SERVICE_REGISTRY_COLLECTION].find(
+        {"workspace_id": ws_id}
+    ).to_list(500)
+    covered_sids = set()
+    for r in refs:
+        lib_item = item_by_id.get(r["libraryServiceId"])
+        if lib_item:
+            covered_sids.add(lib_item.get("serviceId", ""))
+    uncovered_items = []
+    sys_owner_id = f"system:{ws_id}"
+    all_related_libs = []
+
+    for rd in registry_docs:
+        sid = rd.get("service_id", "")
+        if sid and sid not in covered_sids:
+            alt_sids = list({sid, sid.replace("-", "_"), sid.replace("_", "-")})
+            libs = await db[LIBRARY_COLLECTION].find({
+                "$or": [
+                    {"serviceId": {"$in": alt_sids}},
+                    {"ownerId": sys_owner_id, "serviceId": {"$in": alt_sids}},
+                ]
+            }).to_list(50)
+            for lib in libs:
+                str_id = str(lib["_id"])
+                if not any(u["_id"] == lib["_id"] for u in uncovered_items):
+                    uncovered_items.append(lib)
+                item_by_id[str_id] = lib
+
+    if uncovered_items:
+        extra_ids = [str(i["_id"]) for i in uncovered_items]
+        alt_names = set()
+        for i in uncovered_items:
+            sname = i.get("serviceId", "")
+            alt_names.update([sname, sname.replace("-", "_"), sname.replace("_", "-")])
+        
+        all_related_libs = await db[LIBRARY_COLLECTION].find({
+            "$or": [
+                {"serviceId": {"$in": list(alt_names)}},
+                {"ownerId": sys_owner_id}
+            ]
+        }).to_list(100)
+        all_related_ids = list({str(l["_id"]) for l in all_related_libs} | set(extra_ids))
+
+        extra_klinks = [d async for d in db[KNOWLEDGE_REFS_COLLECTION].find(
+            {"serviceLibraryId": {"$in": all_related_ids}}
+        ).sort("addedAt", 1)]
+        extra_kb_oids = [o for o in (_oid(k["knowledgeLibraryId"]) for k in extra_klinks) if o]
+        if extra_kb_oids:
+            extra_kb_docs = await db["knowledge_library"].find(
+                {"_id": {"$in": extra_kb_oids}}, {"name": 1, "folder": 1, "ownerId": 1}
+            ).to_list(len(extra_kb_oids))
+            extra_kb_by_id = {str(d["_id"]): d for d in extra_kb_docs}
+            for k in extra_klinks:
+                kb = extra_kb_by_id.get(k["knowledgeLibraryId"])
+                if kb is None:
+                    continue
+                knowledge_by_svc.setdefault(k["serviceLibraryId"], []).append({
+                    "refId": str(k["_id"]),
+                    "knowledgeLibraryId": k["knowledgeLibraryId"],
+                    "name": kb.get("name", "?"),
+                    "folder": kb.get("folder", "?"),
+                    "ownerId": kb.get("ownerId", ""),
+                })
+
     grouped: Dict[str, Dict[str, Any]] = {
         pid: {"projectId": pid, "projectName": p.get("name", "?"), "services": []}
         for pid, p in pid_by_oid.items()
@@ -435,6 +502,47 @@ async def list_refs_for_workspace_grouped(ws_id: str) -> List[Dict[str, Any]]:
         pub = _public_project_ref(r, item_by_id.get(r["libraryServiceId"]))
         pub["knowledge"] = knowledge_by_svc.get(r["libraryServiceId"], [])
         g["services"].append(pub)
+    # Add registry-only services (not linked to any project) under a
+    # synthetic "__registry__" group so hierarchy can resolve their knowledge.
+    if uncovered_items:
+        unlinked_svcs = []
+        seen_unlinked_sids = set()
+        for lib in uncovered_items:
+            sid = lib.get("serviceId", "")
+            norm_sid = sid.replace("_", "-")
+            if norm_sid in seen_unlinked_sids:
+                continue
+            seen_unlinked_sids.add(norm_sid)
+
+            str_id = str(lib["_id"])
+            synthetic_ref = {
+                "_id": lib["_id"],
+                "libraryServiceId": str_id,
+                "projectId": "__registry__",
+                "addedBy": lib.get("ownerId", ""),
+                "addedAt": lib.get("createdAt"),
+            }
+            pub = _public_project_ref(synthetic_ref, lib)
+            
+            # Combine knowledge from this lib AND any related lib_id sharing the same normalized serviceId
+            alt_names = {sid, sid.replace("-", "_"), sid.replace("_", "-")}
+            combined_kbs = []
+            seen_kb_ids = set()
+            for rel_lib in all_related_libs:
+                if rel_lib.get("serviceId") in alt_names:
+                    rel_id = str(rel_lib["_id"])
+                    for kb_item in knowledge_by_svc.get(rel_id, []):
+                        if kb_item["knowledgeLibraryId"] not in seen_kb_ids:
+                            seen_kb_ids.add(kb_item["knowledgeLibraryId"])
+                            combined_kbs.append(kb_item)
+
+            pub["knowledge"] = combined_kbs
+            unlinked_svcs.append(pub)
+        grouped["__registry__"] = {
+            "projectId": "__registry__",
+            "projectName": "Registry",
+            "services": unlinked_svcs,
+        }
     return list(grouped.values())
 
 
@@ -514,7 +622,7 @@ async def build_service_context_for_agent(project_id: str, service_name: str) ->
     docs = await db["knowledge_library"].find({"_id": {"$in": oids}}).to_list(len(oids))
     parts = [f"## Knowledge Service '{service_name}'", ""]
     for d in docs[:6]:
-        body = (d.get("content") or "").strip()[:1800]
+        body = (d.get("content") or "").strip()[:settings.embedding_max_chars]
         if not body:
             continue
         parts.append(f"### {d.get('name')} ({d.get('folder')})")

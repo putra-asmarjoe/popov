@@ -159,11 +159,15 @@ async def update_request_log(
     error: Optional[str] = None,
     reply: Optional[Dict[str, Any]] = None,
     raw_documents: Optional[list] = None,
+    investigation_state: Optional[dict] = None,
+    agent_traces: Optional[list] = None,
 ) -> None:
     """
     Update dokumen request log setelah pipeline selesai.
     status: "success" | "failed".
     raw_documents: snapshot data mentah (dipotong) agar bisa dipakai utk follow-up.
+    investigation_state (CHATFLOW V2.1 Tahap 3): ringkasan investigasi utk follow_up_agent.
+    agent_traces (Per-Agent Tracing Fase 1): [{agent, order, duration_ms, summary}] per node.
     Gagal logging tidak boleh melempar exception ke pipeline.
     """
     if not request_id:
@@ -180,6 +184,11 @@ async def update_request_log(
     }
     if raw_documents:
         update["raw_documents_snapshot"] = _snapshot_documents(raw_documents)
+    if investigation_state is not None:
+        update["investigation_state"] = investigation_state
+    if agent_traces is not None:
+        update["agent_traces"] = agent_traces
+        update["agent_sequence"] = [t.get("agent") for t in agent_traces if isinstance(t, dict)]
     if reply:
         update["reply"] = reply
 
@@ -203,7 +212,7 @@ async def get_incident_history(
     Ambil riwayat request/insiden terakhir untuk service tertentu dari request_logs
     (Use Case A — Incident History Memory).
 
-    Digunakan oleh telegram_agent sebagai konteks tambahan agar agent bisa
+    Digunakan oleh response_agent sebagai konteks tambahan agar agent bisa
     mengenali pola: "service ini sudah error N kali dalam window waktu X".
     Return list ringkasan, atau [] jika gagal (tidak merusak pipeline).
     """

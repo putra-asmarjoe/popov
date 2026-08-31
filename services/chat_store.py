@@ -149,6 +149,33 @@ async def get_messages(session_id: str, limit: int = 200) -> List[Dict[str, Any]
     return [doc async for doc in cursor]
 
 
+async def update_session_title(session_id: str, title: str) -> Optional[Dict[str, Any]]:
+    """Update session title (owner only)."""
+    try:
+        oid = ObjectId(session_id)
+    except Exception:
+        return None
+    db = get_db()
+    now = _now_iso()
+    updated = await db[SESSIONS_COLLECTION].find_one_and_update(
+        {"_id": oid, "deletedAt": None},
+        {"$set": {"title": title.strip(), "updatedAt": now}},
+        return_document=True,
+    )
+    if updated is None:
+        return None
+    return {
+        "id": str(updated["_id"]),
+        "userId": updated.get("userId", ""),
+        "projectId": updated.get("projectId"),
+        "ticketId": updated.get("ticketId"),
+        "title": updated.get("title", ""),
+        "createdAt": updated.get("createdAt"),
+        "updatedAt": updated.get("updatedAt"),
+        "deletedAt": updated.get("deletedAt"),
+    }
+
+
 async def soft_delete_session(session_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     """Fix #118: soft-delete sesi chat project (owner only).
 

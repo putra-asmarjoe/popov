@@ -13,10 +13,10 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Klasifikasi jawaban ya/tidak — paham bahasa alami (kata pertama + frasa 2-kata).
-_YES_WORDS = {"ya", "iya", "y", "ok", "oke", "okey", "boleh", "siap", "yes", "gas", "lanjut", "betul", "setuju", "bisa", "silakan", "silahkan", "ayok", "mari"}
-_NO_WORDS = {"tidak", "nggak", "ngga", "ga", "gak", "no", "jangan", "skip", "cancel", "batal", "engga", "nggausah", "nggakusah", "nggakperlu", "tidakperlu", "tidakusah"}
-_YES_PHRASES = {"ya lanjut", "iya lanjut", "ya silakan", "iya silakan", "ok lanjut", "oke lanjut", "ayo lanjut", "boleh lanjut"}
-_NO_PHRASES = {"tidak usah", "tidak perlu", "nggak usah", "nggak perlu", "ngga usah", "ga usah", "gak usah", "nggak dulu", "tidak dulu", "jangan dulu", "gak perlu"}
+_YES_WORDS = {"ya", "iya", "y", "ok", "oke", "okey", "boleh", "siap", "yes", "gas", "lanjut", "betul", "setuju", "bisa", "silakan", "silahkan", "ayok", "mari", "sure", "yep", "yeah", "go", "please", "pls", "tentu", "pastinya", "lanjutkan"}
+_NO_WORDS = {"tidak", "nggak", "ngga", "ga", "gak", "no", "jangan", "skip", "cancel", "batal", "engga", "nggausah", "nggakusah", "nggakperlu", "tidakperlu", "tidakusah", "nope", "nah", "gak usah"}
+_YES_PHRASES = {"ya lanjut", "iya lanjut", "ya silakan", "iya silakan", "ok lanjut", "oke lanjut", "ayo lanjut", "boleh lanjut", "sure go ahead", "yes please", "yeah sure", "ok sure"}
+_NO_PHRASES = {"tidak usah", "tidak perlu", "nggak usah", "nggak perlu", "ngga usah", "ga usah", "gak usah", "nggak dulu", "tidak dulu", "jangan dulu", "gak perlu", "no thanks", "nope not"}
 
 
 def _first_word(text: str) -> str:
@@ -44,20 +44,23 @@ def _display(project: Dict[str, Any], ticket: Dict[str, Any]) -> str:
     return f"{project.get('key', 'TKT')}-{ticket.get('ticketNumber')}"
 
 
-def build_ticket_offer(action_executed: str, ticket: Dict[str, Any], project: Dict[str, Any]) -> Optional[dict]:
+def build_ticket_offer(action_executed: str, ticket: Dict[str, Any], project: Dict[str, Any],
+                       locale: str = "id") -> Optional[dict]:
     """Tawaran tunggal paling relevan setelah aksi tiket. Return None bila tak ada.
     - tiket resolved/closed → tawarkan reopen (tanpa param).
-    - selain itu → tawarkan tambah catatan progress (butuh 1 param: note)."""
+    - selain itu → tawarkan tambah catatan progress (butuh 1 param: note).
+    locale (Fix #145): pertanyaan bilingual en/id."""
     display = _display(project, ticket)
     status = ticket.get("status", "open")
     ticket_id = str(ticket.get("_id"))
+    texts = _OFFER_TICKET_TEXTS.get(locale, _OFFER_TICKET_TEXTS["id"])
 
     if status in ("resolved", "closed"):
         return {
             "type": "ticket_action",
             "params": {"action": "reopen", "ticket_id": ticket_id},
             "needs_param": None,
-            "question": f"Apakah kamu ingin saya buka kembali tiket {display}?",
+            "question": texts["reopen"].format(display=display),
         }
     # Jangan tawarkan add_progress lagi bila aksi barusan justru add_progress
     # (hindari pertanyaan dobel/membingungkan setelah user baru menambah catatan).
@@ -67,8 +70,21 @@ def build_ticket_offer(action_executed: str, ticket: Dict[str, Any], project: Di
         "type": "ticket_action",
         "params": {"action": "add_progress", "ticket_id": ticket_id},
         "needs_param": "note",
-        "question": f"Apakah kamu ingin saya tambahkan catatan pada Progress Log tiket {display}?",
+        "question": texts["progress"].format(display=display),
     }
+
+
+# Teks tawaran tiket — bilingual (Fix #145)
+_OFFER_TICKET_TEXTS = {
+    "id": {
+        "reopen": "Apakah kamu ingin saya buka kembali tiket {display}?",
+        "progress": "Apakah kamu ingin saya tambahkan catatan pada Progress Log tiket {display}?",
+    },
+    "en": {
+        "reopen": "Would you like me to reopen ticket {display}?",
+        "progress": "Would you like me to add a note to the Progress Log of ticket {display}?",
+    },
+}
 
 
 def build_investigate_offer(service_name: str, project_key: str = "") -> Optional[dict]:
@@ -84,9 +100,190 @@ def build_investigate_offer(service_name: str, project_key: str = "") -> Optiona
     }
 
 
+# ── Chat suggestions (chips follow-up) — bilingual, deterministik, DRY ────────
+# Dipakai chat tiket (ticket_agent/response_agent) DAN chat project (project_agent)
+# supaya bahasa & konten konsisten satu sumber.
+
+_CHAT_SUGGESTION_TEXTS = {
+    "en": {
+        "investigate": "Investigate deeper the error on {svc}",
+        "alert": "Check alert details on {svc}",
+        "open": "Show open tickets",
+        "knowledge": "What knowledge is available in this project",
+        "progress": "Add a progress note",
+        "reopen": "Reopen this ticket",
+        "status": "What is the current status?",
+        "severity": "Summarize this ticket",
+    },
+    "id": {
+        "investigate": "Investigasi lebih dalam error pada {svc}",
+        "alert": "Cek detail alert pada {svc}",
+        "open": "Tampilkan tiket yang masih terbuka",
+        "knowledge": "Knowledge apa saja pada project ini",
+        "progress": "Tambahkan catatan progress",
+        "reopen": "Buka kembali tiket ini",
+        "status": "Apa status saat ini?",
+        "severity": "Ringkas tiket ini",
+    },
+}
+
+
+def chat_suggestion(key: str, locale: str = "en", **fmt: str) -> str:
+    """Satu teks suggestion (bilingual). key = salah satu kunci di atas."""
+    texts = _CHAT_SUGGESTION_TEXTS.get(locale, _CHAT_SUGGESTION_TEXTS["en"])
+    tmpl = texts.get(key, texts["status"])
+    return tmpl.format(**fmt) if fmt else tmpl
+
+
+def build_chat_suggestions(
+    *,
+    ticket: Optional[Dict[str, Any]] = None,
+    project: Optional[Dict[str, Any]] = None,
+    service_name: str = "",
+    root_cause: str = "unknown",
+    has_open_tickets: bool = False,
+    want_knowledge: bool = False,
+    locale: str = "en",
+    max_items: int = 3,
+) -> List[str]:
+    """Chips follow-up untuk chat (tiket & project) — deterministik, bilingual.
+
+    Prioritas sesuai konteks:
+    - ticket open → "What is the current status?" / "Summarize this ticket"
+    - ticket resolved/closed → "Reopen this ticket" / "Add a progress note"
+    - insiden (root_cause ≠ unknown, service ada) → "Investigate deeper the error on X"
+    - ada tiket terbuka lain → "Show open tickets"
+    - default → "What knowledge is available in this project"
+    """
+    out: List[str] = []
+
+    if ticket and project:
+        status = (ticket.get("status") or "").lower()
+        if status in ("resolved", "closed"):
+            out.append(chat_suggestion("reopen", locale))
+            out.append(chat_suggestion("progress", locale))
+        else:
+            out.append(chat_suggestion("status", locale))
+            out.append(chat_suggestion("severity", locale))
+
+    if root_cause != "unknown" and service_name:
+        out.append(chat_suggestion("investigate", locale, svc=service_name))
+
+    if has_open_tickets:
+        out.append(chat_suggestion("open", locale))
+
+    if want_knowledge:
+        out.append(chat_suggestion("knowledge", locale))
+
+    # dedup + batas
+    seen: List[str] = []
+    for s in out:
+        if s not in seen:
+            seen.append(s)
+    return seen[:max_items]
+
+
 def render_offer_question(offer: dict) -> str:
     """Kalimat penutup tawaran (web chat) — cukup pertanyaannya, balasan natural sudah dipahami."""
     return (offer.get("question") or "").strip()
+
+
+# ── CHATFLOW V2.1 (Tahap 2): chips kontekstual berbasis temuan ────────────────
+# Berbeda dari build_chat_suggestions (generik), chips ini dihasilkan dari temuan
+# aktual investigasi: deploy detection, Second Brain similarity, trace downstream,
+# data_gaps. Return list[str] — KOMPATIBEL dgn pipeline meta.suggestions & FE
+# (ChatSuggestions render string[]), jadi TANPA perubahan frontend.
+
+_CONTEXTUAL_CHIP_TEXTS = {
+    "id": {
+        "deploy": "Cek deployment {time}",
+        "deploy_intent": "cek log deployment {svc} {time}",
+        "similar": "Bandingkan insiden serupa",
+        "similar_intent": "tampilkan insiden serupa dengan {svc}",
+        "downstream": "Cek downstream service",
+        "downstream_intent": "cek koneksi downstream {svc}",
+        "metrics": "Cek metrics error rate",
+        "metrics_intent": "cek error rate {svc} 1 jam terakhir",
+        "span": "Lihat detail span",
+        "span_intent": "lihat detail span {svc}",
+        "ticket": "Detail tiket",
+        "ticket_intent": "tampilkan detail tiket ini",
+    },
+    "en": {
+        "deploy": "Check deployment {time}",
+        "deploy_intent": "check deployment log {svc} {time}",
+        "similar": "Compare similar incidents",
+        "similar_intent": "show similar incidents for {svc}",
+        "downstream": "Check downstream service",
+        "downstream_intent": "check downstream connection {svc}",
+        "metrics": "Check error rate metrics",
+        "metrics_intent": "check error rate {svc} last 1 hour",
+        "span": "View span detail",
+        "span_intent": "view span detail {svc}",
+        "ticket": "Ticket detail",
+        "ticket_intent": "show ticket details",
+    },
+}
+
+
+def build_contextual_suggestions(state: Dict[str, Any], reply_language: str = "English") -> List[str]:
+    """Chips berbasis temuan investigasi (CHATFLOW V2.1 Tahap 2).
+
+    Fallback ke build_chat_suggestions bila tidak ada temuan spesifik.
+    Return list[str] (label chip) — intent teks chip = label itu sendiri, dikirim
+    sebagai pesan saat user klik (pola yang sama dgn chips existing di Fix #138/#139).
+    """
+    lang_id = reply_language.lower() == "bahasa indonesia"
+    texts = _CONTEXTUAL_CHIP_TEXTS.get("id" if lang_id else "en", _CONTEXTUAL_CHIP_TEXTS["en"])
+    service = state.get("service_name", "")
+    suggestions: List[str] = []
+
+    # — Chip dari deploy detection (triage_result) —
+    triage = state.get("triage_result") or {}
+    if triage.get("hypothesis") == "regression_post_deploy":
+        deploy_time = str(triage.get("deploy_time") or "").strip()
+        suggestions.append(texts["deploy"].format(time=deploy_time).strip())
+        # intent spesifik disimpan ke state terpisah? Tidak — chip label jadi intent
+        # (konsisten dgn chips existing yang label = pesan). Detail tetap bisa via LLM.
+
+    # — Chip dari Second Brain (episode serupa) —
+    knowledge_ctx = (state.get("knowledge_context") or "").lower()
+    if "similar episode" in knowledge_ctx or "insiden serupa" in knowledge_ctx:
+        suggestions.append(texts["similar"])
+
+    # — Chip dari trace timeout / downstream —
+    trace_summary = (state.get("trace_summary") or "").lower()
+    if "timeout" in trace_summary or "downstream" in trace_summary:
+        suggestions.append(texts["downstream"])
+
+    # — Chip dari data_gaps (Tahap 1) — ambil 1 gap paling atas saja —
+    for gap in (state.get("data_gaps") or [])[:1]:
+        gap_low = gap.lower()
+        if "metrics" in gap_low:
+            suggestions.append(texts["metrics"])
+        elif "span" in gap_low or "trace" in gap_low:
+            suggestions.append(texts["span"])
+
+    # — Fallback ke chips generik bila tidak ada temuan spesifik —
+    if not suggestions:
+        return build_chat_suggestions(
+            service_name=service,
+            root_cause=state.get("root_cause_assessment") or "unknown",
+            has_open_tickets=False,
+            want_knowledge=True,
+            locale=("id" if lang_id else "en"),
+            max_items=3,
+        )
+
+    # — Selalu tambah chip tiket di akhir —
+    suggestions.append(texts["ticket"])
+
+    # dedup + batas (maksimal 4)
+    seen: List[str] = []
+    for s in suggestions:
+        if s not in seen:
+            seen.append(s)
+    return seen[:4]
 
 
 def render_offer_buttons(offer: dict) -> list:

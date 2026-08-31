@@ -39,7 +39,15 @@ _TICKET_KEYWORDS = [
     "status", "progress", "note", "catatan", "label", "tag",
     "severity", "prioritas", "assign", "tetapkan",
     "ubah", "ganti", "update",
+    # Fix #146: typo umum ("asign" → assign) — tanpa ini intent jatuh ke insiden
+    "asign", "asignee", "assiign",
 ]
+
+# Pertanyaan tentang MEMBER yang bisa di-assign — bukan perintah assign (Fix #146)
+_MEMBER_QUERY_KEYWORDS = (
+    "who can i assign", "siapa yang bisa", "who can assign", "who is available",
+    "who can i", "siapa saja", "daftar member", "list members", "available members",
+)
 
 VALID_STATUS = {"open", "in_progress", "needs_review", "resolved", "closed"}
 VALID_SEVERITY = {"critical", "high", "medium", "low"}
@@ -49,6 +57,10 @@ QUESTION_KEYWORDS = (
     "apa yang", "kenapa", "mengapa", "bagaimana", "jelaskan", "ceritakan",
     "ringkas", "ringkasan", "informasi", "status tiket", "detail tiket",
     "kondisi", "tolong jelaskan", "bantu jelaskan",
+    # chip "check ticket detail" (Fix #139) — kirim dari chat tiket, harus route ke summary
+    "check tiket", "check ticket", "cek tiket", "periksa tiket",
+    "explain this ticket", "explain the ticket", "what's happening", "what is happening",
+    "check this ticket", "what happened",
 )
 
 
@@ -56,6 +68,14 @@ def is_ticket_question(intent: str) -> bool:
     """True bila intent adalah PERTANYAAN tentang tiket (→ ringkasan), bukan aksi."""
     low = _clean_intent(intent).lower()
     return any(kw in low for kw in QUESTION_KEYWORDS)
+
+
+def is_member_query(intent: str) -> bool:
+    """True bila user bertanya siapa yang bisa di-assign (bukan perintah assign).
+    Fix #146: "who can i assign this ticket?" sebelumnya di-parse sebagai aksi assign
+    dgn nama member → error 'member not found'."""
+    low = _clean_intent(intent).lower()
+    return any(kw in low for kw in _MEMBER_QUERY_KEYWORDS)
 
 
 def _clean_intent(intent: str) -> str:

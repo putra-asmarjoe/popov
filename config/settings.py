@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     embedding_timeout_ms: int = 3000
     # Opsional override URL (kosong = pakai default provider)
     embedding_api_url: str = ""
+    embedding_max_chars: int = 8000   # max chars to embed (truncation limit)
 
     # Observability
     prometheus_url: str = ""
@@ -91,6 +92,17 @@ class Settings(BaseSettings):
 
     # App
     app_debug: bool = False
+
+    # Knowledge Agent — Gap 1: relevance-based retrieval tuning
+    knowledge_max_total_chars: int = 8000    # total character budget for knowledge_context
+    knowledge_max_item_chars: int = 2000     # per-doc truncation limit
+    knowledge_top_k: int = 5                 # max docs from vector search
+    knowledge_threshold: float = 0.3         # min cosine similarity score (0.0–1.0)
+    knowledge_min_query_len: int = 10        # below this → keyword fallback
+
+    # API Key Rate Limits (per hour, in-memory sliding window)
+    api_key_rate_limit_web: int = 1000       # default rate limit for web keys
+    api_key_rate_limit_public: int = 200     # default rate limit for public keys
 
     # Time-window query log (observability & detail observability):
     # hanya ambil data maksimal N jam ke belakang, sehingga error lama (berhari-hari

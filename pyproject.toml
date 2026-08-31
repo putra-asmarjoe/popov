@@ -1,7 +1,7 @@
 [project]
 name = "popov-incident-response-agent"
-version = "0.1.0"
-description = "Popov - Incident Response Agent: LangGraph multi-agent monitoring, triage & RCA (MongoDB + Telegram)"
+version = "0.2.0rc161"
+description = "Popov - The Intelligence Behind Operations: LangGraph multi-agent monitoring, triage & RCA (MongoDB + Telegram)"
 requires-python = ">=3.9"
 
 dependencies = [
@@ -24,6 +24,8 @@ dependencies = [
     "passlib[bcrypt]>=1.7.4", # FE-1: hash password
     "bcrypt>=4.0.0,<4.1.0",   # pin: 4.1+ tidak kompatibel dgn passlib 1.7.4
     "cryptography>=42.0.0",   # BYOK (Fix #54): Fernet encrypt/decrypt key LLM/embedding di DB
+    "aiosmtplib>=2.0.0",      # Email channel: async SMTP client
+    "markdown>=3.5.0",        # Email channel: Markdown → HTML body
 ]
 
 [project.optional-dependencies]
