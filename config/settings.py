@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     embedding_api_url: str = ""
     embedding_max_chars: int = 8000   # max chars to embed (truncation limit)
     deploy_event_ttl_hours: int = 2   # Gap 4: TTL deploy_events (auto-cleanup MongoDB)
+    verification_delay_minutes: int = 10  # epic Gap 5: delay re-check setelah ticket in_progress/needs_review
+    verification_interval_sec: int = 60   # epic Gap 5: watchdog scan interval
 
     # Observability
     prometheus_url: str = ""

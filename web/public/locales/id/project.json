@@ -6,7 +6,8 @@
     "workspace_not_found": "Workspace tidak ditemukan",
     "project_not_found": "Project tidak ditemukan",
     "go_home": "Ke beranda",
-    "panel_title": "Detail & Chat tiket"
+    "panel_title": "Detail & Chat tiket",
+    "overview": "Overview"
   },
   "table": {
     "header_title": "Judul",
@@ -60,7 +61,8 @@
     "section_description": "Deskripsi",
     "section_tags": "Tags",
     "section_progress": "Progress Log",
-    "section_alerts": "Linked Alerts"
+    "section_alerts": "Linked Alerts",
+    "open_warroom": "War Room"
   },
   "progress": {
     "empty": "Belum ada catatan progress.",
@@ -117,5 +119,62 @@
     "trace_label": "agent terlacak",
     "trace_no_data": "Tidak ada data keluaran yang tercatat untuk agent ini.",
     "trace_panel_title": "Jejak agent"
+  },
+  "warroom": {
+    "warroom": "War Room",
+    "back": "Kembali ke tiket",
+    "updated": "diperbarui",
+    "hypothesis": "Hipotesis",
+    "confidence": "Keyakinan",
+    "top_gap": "Kesenjangan data utama",
+    "correlation_summary": "Ringkasan korelasi",
+    "unknown": "tidak diketahui",
+    "ran": "dijalankan",
+    "skipped": "dilewati",
+    "no_data": "tidak ada data tercatat",
+    "pillar_mongo": "Log Mongo",
+    "pillar_metrics": "Metrik",
+    "pillar_trace": "Trace",
+    "pillar_span": "Span OTel",
+    "pillar_skipped_hint": "Pilar dilewati planner — tidak diinvestigasi",
+    "second_brain": "Second Brain — episode serupa",
+    "ttr": "untuk resolve",
+    "timeline": "Timeline investigasi",
+    "timeline_steps": "langkah",
+    "investigations": "Investigasi",
+    "investigation_hint": "Setiap reply/bubble adalah satu run investigasi.",
+    "open_in_chat": "Buka di chat",
+    "data_gaps_title": "Kesenjangan data & langkah selanjutnya",
+    "data_gaps": "Kesenjangan data",
+    "suggested_next": "Disarankan berikutnya",
+    "empty_title": "Belum ada data investigasi",
+    "empty_body": "Tiket ini belum diinvestigasi pipeline agent. Jalankan investigasi dari tab chat.",
+    "empty_action": "Kembali ke chat tiket",
+    "partial_banner": "Detail investigasi penuh tidak tersedia untuk run ini (channel non-chat) — menampilkan ringkasan episode."
+  },
+  "overview": {
+    "back": "Kembali ke project",
+    "updated": "diperbarui",
+    "open_tickets": "Tiket terbuka",
+    "alerts": "Alert",
+    "alerts_empty": "Tidak ada alert di window ini",
+    "stack_health": "Kesehatan stack",
+    "stacks_empty": "Belum ada observability target",
+    "health": {
+      "ok": "ok",
+      "degraded": "degraded",
+      "error": "error",
+      "unknown": "unknown"
+    },
+    "stale": "basi",
+    "episodes": "Episode",
+    "resolved": "resolve",
+    "episodes_empty": "Tidak ada episode dalam 30 hari terakhir",
+    "tickets_empty_filter": "Tidak ada tiket yang cocok dengan filter"
+  },
+  "view": {
+    "label": "Mode tampilan project",
+    "classic": "Classic",
+    "warroom": "War Room"
   }
 }

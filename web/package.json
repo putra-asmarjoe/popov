@@ -1,7 +1,7 @@
 {
   "name": "popov-web",
   "private": true,
-  "version": "0.2.0-rc161",
+  "version": "0.2.0-rc183",
   "type": "module",
   "scripts": {
     "dev": "concurrently --kill-others -n API,WEB -c green,yellow \"npm run dev:backend\" \"npm run dev:frontend\"",

@@ -19,6 +19,7 @@ from api.agent_docs import router as agent_docs_router  # grounding docs DB (adm
 from api.ingest import router as ingest_router  # public ingest endpoints
 from api.deploy_events import router as deploy_events_router  # Gap 4: deploy signal CI/CD
 from api.api_keys import router as api_keys_router  # API key management
+from api.routes_project_overview import router as project_overview_router  # War Room Part A
 from services.mongodb_client import close as close_mongo
 from services.telegram_listener import start_polling
 from services.request_log import ensure_indexes
@@ -173,7 +174,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Popov - The Intelligence Behind Operations",
     description="LangGraph multi-agent: MongoDB reader + Telegram notifier",
-    version="0.2.0rc161",
+    version="0.2.0rc183",
     lifespan=lifespan,
 )
 
@@ -193,6 +194,7 @@ app.include_router(knowledge_router, prefix="/api/v1")
 app.include_router(services_lib_router, prefix="/api/v1")
 app.include_router(agent_docs_router, prefix="/api/v1")
 app.include_router(api_keys_router, prefix="/api/v1")  # API key management (internal only)
+app.include_router(project_overview_router, prefix="/api/v1")  # War Room Part A
 
 # ── Public API (pub) — External API Keys (pk_pub_*) ──────────────────────────
 app.include_router(ingest_router, prefix="/api/pub/v1")  # public ingest endpoints

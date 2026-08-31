@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 LIBRARY_COLLECTION = "knowledge_library"
 AGENT_DOCS_COLLECTION = "agent_docs"
+SERVICE_LIBRARY_COLLECTION = "service_library"
 WORKSPACE_KB_COLLECTION = "workspace_knowledge"
 WORKSPACE_REFS_COLLECTION = "workspace_knowledge_refs"
 SERVICE_REFS_COLLECTION = "service_knowledge_refs"
@@ -75,15 +76,28 @@ async def _load_library_docs_via_refs(workspace_id: str, service_name: str) -> L
         if lid:
             lib_id_set.add(lid)
 
-    # Via service_knowledge_refs
-    svc_ref_cursor = db[SERVICE_REFS_COLLECTION].find(
-        {"workspaceId": workspace_id}, {"libraryId": 1}
-    )
-    svc_ref_docs = await svc_ref_cursor.to_list(length=100)
-    for ref in svc_ref_docs:
-        lid = ref.get("libraryId")
-        if lid:
-            lib_id_set.add(lid)
+    # Via service_knowledge_refs — schema: {serviceLibraryId: str, knowledgeLibraryId: str}
+    # (bukan workspaceId/libraryId). Resolve service_library by name dulu (Fix acceptance test 2026-09-01).
+    if service_name:
+        svc_norm = (service_name or "").strip().lower()
+        svc_variants = {
+            svc_norm,
+            svc_norm.replace("-", "_"),
+            svc_norm.replace("_", "-"),
+        }
+        svc_libs = await db[SERVICE_LIBRARY_COLLECTION].find(
+            {"serviceId": {"$in": list(svc_variants)}},
+            {"_id": 1},
+        ).to_list(length=50)
+        svc_lib_ids = [str(s["_id"]) for s in svc_libs]
+        if svc_lib_ids:
+            svc_ref_cursor = db[SERVICE_REFS_COLLECTION].find(
+                {"serviceLibraryId": {"$in": svc_lib_ids}}, {"knowledgeLibraryId": 1}
+            )
+            async for ref in svc_ref_cursor:
+                kid = ref.get("knowledgeLibraryId")
+                if kid:
+                    lib_id_set.add(kid)
 
     if not lib_id_set:
         return []

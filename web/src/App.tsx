@@ -8,6 +8,7 @@ import { WorkspaceSettingsPage } from "@/pages/WorkspaceSettingsPage"
 import { ProjectPage } from "@/pages/ProjectPage"
 import { NewTicketPage } from "@/pages/NewTicketPage"
 import { NotificationsPage } from "@/pages/NotificationsPage"
+import { ProjectOverview } from "@/pages/ProjectOverview"
 import { ProjectChatPage } from "@/pages/ProjectChatPage"
 import { ManagementPage } from "@/pages/management/ManagementPage"
 import { useAuth } from "@/hooks/useAuth"
@@ -77,6 +78,7 @@ export default function App() {
           <Route path="/w/:wsSlug/chats" element={<ChatsRedirect />} />
           <Route path="/w/:wsSlug/chats/:sessionId" element={<ProjectChatPage />} />
           <Route path="/w/:wsSlug/:projSlug" element={<ProjectPage />} />
+          <Route path="/w/:wsSlug/:projSlug/overview" element={<ProjectOverview />} />
           <Route path="/w/:wsSlug/:projSlug/new" element={<NewTicketPage />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/management" element={<ManagementPage />} />

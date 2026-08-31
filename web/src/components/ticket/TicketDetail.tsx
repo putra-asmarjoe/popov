@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Check, ChevronsUpDown, ExternalLink, Pencil, RotateCcw, X } from "lucide-react"
+import { Check, ChevronsUpDown, ExternalLink, Pencil, Radar, RotateCcw, X } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -35,11 +35,13 @@ export function TicketDetail({
   projectKey,
   members,
   onClose,
+  onOpenWarroom,
 }: {
   ticket: Ticket
   projectKey: string
   members: WorkspaceMember[]
   onClose: () => void
+  onOpenWarroom?: () => void
 }) {
   const { t } = useTranslation("project")
   const [editOpen, setEditOpen] = useState(false)
@@ -91,6 +93,18 @@ export function TicketDetail({
             )}
           </p>
         </div>
+        {onOpenWarroom && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1 text-xs"
+            onClick={onOpenWarroom}
+          >
+            <Radar className="size-3.5" aria-hidden="true" />
+            {t("detail.open_warroom")}
+          </Button>
+        )}
         <Button variant="ghost" size="icon" className="size-7 shrink-0" onClick={onClose}>
           <X className="size-4" />
         </Button>

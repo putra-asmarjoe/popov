@@ -1,21 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { Link, useParams, useSearchParams } from "react-router-dom"
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { useTranslation } from "react-i18next"
-import { ChevronRight, Plus } from "lucide-react"
+import { Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
-import { ChatPanel } from "@/components/chat/ChatPanel"
-import { TicketDetail } from "@/components/ticket/TicketDetail"
+import { TicketDetailChatPanel } from "@/components/ticket/TicketDetailChatPanel"
 import { TicketFilters } from "@/components/ticket/TicketFilters"
 import { TicketTable } from "@/components/ticket/TicketTable"
 import { FloatingPanel } from "@/components/panel/FloatingPanel"
+import { WarRoomPanel } from "@/components/warroom/WarRoomPanel"
+import { ProjectViewToggle } from "@/components/project/ProjectViewToggle"
 import { OnboardingBackStrip } from "@/components/workspace/OnboardingBackStrip"
 import { useTicket, useTickets, useOpenTicket } from "@/hooks/useTickets"
 import { useTicketRealtime } from "@/hooks/useWebSocket"
 import { useProjects, useWorkspaces, useWorkspaceDetail } from "@/hooks/useWorkspaces"
+import { getProjectView, setProjectView } from "@/lib/project-view"
 import { useTicketStore } from "@/store/ticket.store"
 import { useWorkspaceStore } from "@/store/workspace.store"
-import type { TicketContext } from "@/types/chat"
 
 /**
  * ProjectPage (/w/:wsSlug/:projSlug) — HALAMAN UTAMA.
@@ -26,6 +27,7 @@ import type { TicketContext } from "@/types/chat"
 export function ProjectPage() {
   const { t } = useTranslation("project")
   const { wsSlug, projSlug } = useParams<{ wsSlug: string; projSlug: string }>()
+  const navigate = useNavigate()
   const { data: workspaces, isLoading: wsLoading } = useWorkspaces()
   const workspace = useMemo(
     () => workspaces?.find((w) => w.slug === wsSlug) ?? null,
@@ -82,12 +84,24 @@ export function ProjectPage() {
     }
   }
 
+  // War Room: mode full-width ?ticket=KEY-N&view=warroom (menggantikan split Detail|Chat).
+  // Back → ?ticket=KEY-N → chat + detail normal kembali.
+  const openWarroom = (number: number) => {
+    setSearchParams(
+      { ticket: `${project?.key ?? ""}-${number}`, view: "warroom" },
+      { replace: true },
+    )
+  }
   const { data: freshTicket } = useTicket(
     activeTicket?.id ?? null,
     activeTicket,
   )
   // Detail selalu pakai data termutakhir (optimistic/invalidate langsung terlihat)
   const detailTicket = freshTicket ?? activeTicket
+
+  // War Room: mode full-width ?ticket=KEY-N&view=warroom (menggantikan split Detail|Chat).
+  // Back → ?ticket=KEY-N → chat + detail normal kembali.
+  const isWarroom = searchParams.get("view") === "warroom" && Boolean(detailTicket)
 
   // Status "new" → "open" saat detail tiket dibuka (auto-open-on-view, silent).
   // Guard ref: sekali per tiket — optimistic update membuat status bukan lagi "new".
@@ -101,22 +115,35 @@ export function ProjectPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailTicket?.id, detailTicket?.status])
 
-  // Konteks tiket untuk chat — 1 sesi chat = 1 tiket (bawaan panel split Detail | Chat)
-  const chatCtx = useMemo<TicketContext | null>(() => {
-    if (!detailTicket) return null
-    return {
-      ticketId: detailTicket.id,
-      ticketNumber: `${project?.key ?? ""}-${detailTicket.ticketNumber}`,
-      title: detailTicket.title,
-      traceId: detailTicket.traceId,
-      serviceName: detailTicket.serviceName ?? null, // Fix #49
-    }
-  }, [detailTicket, project?.key])
-
   if (!wsLoading && !workspace)
     return <NotFoundBlock message={t("page.workspace_not_found")} />
   if (!projLoading && workspace && !project)
     return <NotFoundBlock message={t("page.project_not_found")} />
+
+  // Mode War Room (preferensi session, default warroom): main URL tanpa konteks
+  // tiket → redirect ke /overview. Ada `?ticket` → tetap classic (workflow
+  // detail/chat tidak boleh putus).
+  if (
+    !isWarroom &&
+    getProjectView() === "warroom" &&
+    !searchParams.get("ticket") &&
+    workspace &&
+    project
+  ) {
+    return <Navigate to={`/w/${wsSlug}/${projSlug}/overview`} replace />
+  }
+
+  // War Room mode: full-width, ganti split Detail|Chat. Back → chat normal.
+  if (isWarroom && detailTicket) {
+    return (
+      <div className="h-full min-h-0">
+        <WarRoomPanel
+          ticket={detailTicket}
+          onBack={() => selectTicket(detailTicket.ticketNumber)}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="grid h-full min-h-0 grid-cols-1 grid-rows-1">
@@ -126,18 +153,19 @@ export function ProjectPage() {
         <div className="flex items-center gap-1.5 border-b px-4 py-3 text-sm">
           {workspace && project ? (
             <>
-              <Link to={`/w/${wsSlug}`} className="text-muted-foreground hover:text-foreground">
-                {workspace.name}
-              </Link>
-              <ChevronRight className="size-3.5 text-muted-foreground" />
-              <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-xs font-semibold text-primary">
-                {project.key}
-              </span>
               {/* Jalur pulang ke checklist bila masuk halaman ini dari onboarding */}
               <OnboardingBackStrip backTo={`/w/${wsSlug}`} />
-              <span className="font-medium">{project.name}</span>
               {/* Fase D8 + Fix #37: pilih Observability Stack & channel Notifikasi (admin) */}
               <div className="ml-auto flex items-center gap-2">
+                <ProjectViewToggle
+                  value="classic"
+                  onChange={(v) => {
+                    setProjectView(v)
+                    if (v === "warroom") {
+                      navigate(`/w/${wsSlug}/${projSlug}/overview`)
+                    }
+                  }}
+                />
                 <Button asChild size="sm" className="h-8 gap-1">
                   <Link to={`/w/${wsSlug}/${projSlug}/new`}>
                     <Plus className="size-4" /> {t("page.new_ticket_title")}
@@ -183,23 +211,16 @@ export function ProjectPage() {
           }
           title={t("page.panel_title")}
         >
-          <div className="flex h-full min-h-0 min-w-0">
-            {/* 30% kiri: detail tiket */}
-            <div className="flex h-full min-w-0 w-[30%] shrink-0 flex-col border-r">
-              {detailTicket && (
-                <TicketDetail
-                  ticket={detailTicket}
-                  projectKey={project.key}
-                  members={members}
-                  onClose={() => selectTicket(null)}
-                />
-              )}
-            </div>
-            {/* 70% kanan: chat yang terikat tiket ini */}
-            <div className="flex h-full min-w-0 flex-1 flex-col">
-              <ChatPanel key={project.id} projectId={project.id} ticket={chatCtx} />
-            </div>
-          </div>
+          {detailTicket && (
+            <TicketDetailChatPanel
+              ticket={detailTicket}
+              projectKey={project.key}
+              projectId={project.id}
+              members={members}
+              onClose={() => selectTicket(null)}
+              onOpenWarroom={() => openWarroom(detailTicket.ticketNumber)}
+            />
+          )}
         </FloatingPanel>
       )}
     </div>

@@ -105,6 +105,13 @@ async def ensure_indexes() -> None:
         except Exception as e3:
             logger.warning(f"MT compound indexes not ensured: {e3}")
 
+        # War Room (Fix 1): index per-ticket runs (query runs[] sort incoming_date desc).
+        # Sparse — ticket_id top-level hanya ada utk run yang terikat tiket.
+        try:
+            await collection.create_index([("ticket_id", 1), ("incoming_date", -1)], sparse=True)
+        except Exception as e4:
+            logger.warning(f"War Room ticket_id index not ensured: {e4}")
+
         # Fase 6C: Diagnostic sessions TTL
         try:
             diag = db["diagnostic_sessions"]
@@ -186,6 +193,11 @@ async def update_request_log(
         update["raw_documents_snapshot"] = _snapshot_documents(raw_documents)
     if investigation_state is not None:
         update["investigation_state"] = investigation_state
+        # War Room (Fix 1): ticket_id top-level utk query per-ticket tanpa scan nested.
+        # Sparse — run non-tiket tidak menulis field ini.
+        tid = (investigation_state or {}).get("ticket_id", "")
+        if tid:
+            update["ticket_id"] = tid
     if agent_traces is not None:
         update["agent_traces"] = agent_traces
         update["agent_sequence"] = [t.get("agent") for t in agent_traces if isinstance(t, dict)]

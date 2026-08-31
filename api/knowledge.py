@@ -238,6 +238,29 @@ async def delete_library_item(
 
 # ── Knowledge Workspace (/w/:slug/settings → section Knowledge) ──────────────
 
+@router.get("/workspaces/{ws_id}/summary")
+async def workspace_knowledge_summary(ws_id: str, current_user: dict = Depends(get_current_user)):
+    """Ringkasan keberadaan knowledge utk workspace (onboarding checklist).
+
+    Source: (1) workspace_knowledge_refs, (2) knowledge_library milik workspace
+    (ownerId `system:{ws_id}` — service knowledge hasil scan/link service),
+    (3) grounding docs global (agent_docs Management). `has` = salah satu > 0.
+    """
+    await _workspace_and_membership(ws_id, current_user)
+    db = knowledge_store.get_db()
+    ws_refs = await db["workspace_knowledge_refs"].count_documents({"workspaceId": ws_id})
+    svc_knowledge = await db["knowledge_library"].count_documents({"ownerId": f"system:{ws_id}"})
+    agent_docs = await db["agent_docs"].count_documents({})
+    total = ws_refs + svc_knowledge + agent_docs
+    return {
+        "workspace_refs": ws_refs,
+        "service_knowledge": svc_knowledge,
+        "agent_docs": agent_docs,
+        "total": total,
+        "has": total > 0,
+    }
+
+
 @router.get("/workspaces/{ws_id}")
 async def workspace_knowledge_list(ws_id: str, current_user: dict = Depends(get_current_user)):
     await _workspace_and_membership(ws_id, current_user)

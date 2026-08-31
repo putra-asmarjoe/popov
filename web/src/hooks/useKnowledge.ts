@@ -154,6 +154,26 @@ export function useWorkspaceKnowledge(wsId: string | null) {
   })
 }
 
+export interface WorkspaceKnowledgeSummary {
+  workspace_refs: number
+  service_knowledge: number
+  agent_docs: number
+  total: number
+  has: boolean
+}
+
+/** Keberadaan knowledge workspace: workspace refs + service knowledge + grounding docs. */
+export function useWorkspaceKnowledgeSummary(wsId: string | null) {
+  return useQuery({
+    queryKey: ["knowledge", "ws-summary", wsId],
+    queryFn: async () => {
+      const { data } = await api.get(`/knowledge/workspaces/${wsId}/summary`)
+      return data as WorkspaceKnowledgeSummary
+    },
+    enabled: !!wsId,
+  })
+}
+
 export function useLinkKnowledge(wsId: string | null) {
   const { t } = useTranslation("management")
   const qc = useQueryClient()

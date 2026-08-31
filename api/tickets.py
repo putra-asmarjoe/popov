@@ -13,6 +13,7 @@ Semua endpoint butuh auth + membership workspace project terkait.
 - POST  /tickets/{id}/progress          → tambah catatan progress
 """
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -20,7 +21,10 @@ from pydantic import BaseModel
 
 from api.deps import get_current_user
 from api.messages import msg, M
+from services.mongodb_client import get_db
 from services.notification_store import create_notification
+from services.request_log import REQUEST_LOG_COLLECTION
+from services.second_brain import INCIDENT_EPISODES_COLLECTION, read_similar_episodes
 from services.ticket_alert_store import list_alerts_for_ticket, public_alert
 from services.ticket_store import (
     add_progress_note,
@@ -386,3 +390,138 @@ async def add_progress(
     if updated is None:
         raise HTTPException(status_code=404, detail=msg(locale, M.TICKET_NOT_FOUND))
     return (await _attach_assignees_detail([updated]))[0]
+
+
+# ── War Room (WARROOM_IMPLEMENTATION2.md §5.3) ──────────────────────────────
+
+_PILLAR_KEYS = ("mongo", "metrics", "trace", "span")
+
+
+def _build_pillars(traces: Optional[List[Dict[str, Any]]]) -> Dict[str, Dict[str, Any]]:
+    """Ringkas agent_traces → 4 pillar {status, summary, duration_ms}. web chat only."""
+    pillar_map: Dict[str, Dict[str, Any]] = {}
+    agent_key = {
+        "mongo_agent": "mongo",
+        "metrics_agent": "metrics",
+        "trace_agent": "trace",
+        "span_agent": "span",
+    }
+    for t in traces or []:
+        key = agent_key.get(t.get("agent", ""))
+        if not key:
+            continue
+        summary = t.get("summary") or {}
+        text = (
+            summary.get("mongo_summary") or summary.get("metrics_summary")
+            or summary.get("trace_summary") or summary.get("span_summary")
+        )
+        pillar_map[key] = {
+            "status": "ran",
+            "summary": text,
+            "duration_ms": t.get("duration_ms"),
+        }
+    for k in _PILLAR_KEYS:
+        pillar_map.setdefault(k, {"status": "skipped", "summary": None, "duration_ms": None})
+    return pillar_map
+
+
+def _run_from_log(log: Dict[str, Any]) -> Dict[str, Any]:
+    inv = log.get("investigation_state") or {}
+    return {
+        "request_id": log.get("request_id"),
+        "channel": log.get("channel"),
+        "investigated_at": log.get("incoming_date"),
+        "diagnosis": {
+            "hypothesis": inv.get("hypothesis", "unknown"),
+            "confidence": inv.get("confidence", 0.0),
+            "correlation_summary": inv.get("correlation_summary", ""),
+            "data_gaps": inv.get("data_gaps", []),
+            "suggested_next": inv.get("suggested_next", []),
+        },
+        "pillars": _build_pillars(log.get("agent_traces")),
+        "timeline": [
+            {"agent": t.get("agent"), "order": t.get("order"), "duration_ms": t.get("duration_ms")}
+            for t in log.get("agent_traces") or []
+        ],
+    }
+
+
+@router.get("/tickets/{ticket_id}/warroom")
+async def get_ticket_warroom(
+    ticket_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """War Room: merge request_logs runs[] + incident_episodes + second brain.
+    Fallback: runs kosong (channel non-chat / data lama) → episode jadi sumber utama."""
+    ticket = await _check_ticket_access(ticket_id, current_user)
+    workspace_id = str(ticket.get("workspaceId", ""))
+    service_name = ticket.get("serviceName") or None
+
+    db = get_db()
+    logs = await db[REQUEST_LOG_COLLECTION].find(
+        {"ticket_id": ticket_id, "workspace_id": workspace_id},
+        {"request_id": 1, "channel": 1, "incoming_date": 1,
+         "investigation_state": 1, "agent_traces": 1},
+    ).sort("incoming_date", -1).limit(10).to_list(10)
+
+    ep = await db[INCIDENT_EPISODES_COLLECTION].find_one(
+        {"ticket_id": ticket_id, "workspace_id": workspace_id},
+        sort=[("created_at", -1)],
+    )
+
+    runs = [_run_from_log(log) for log in logs]
+
+    # Second Brain — similarity HITUNG SAAT READ (bukan field), +enrich TTR/resolution
+    second_brain: List[Dict[str, Any]] = []
+    if service_name:
+        sb = await read_similar_episodes(
+            {"service_name": service_name, "workspace_id": workspace_id}, limit=5
+        )
+        top = (sb or {}).get("top_matches") or []
+        if top:
+            ids = [m.get("episode_id") for m in top if m.get("episode_id")]
+            enrich = {}
+            if ids:
+                ecur = db[INCIDENT_EPISODES_COLLECTION].find(
+                    {"episode_id": {"$in": ids}},
+                    {"episode_id": 1, "resolution_actions": 1,
+                     "actual_ttr_minutes": 1, "created_at": 1},
+                )
+                for e in await ecur.to_list(len(ids)):
+                    enrich[e.get("episode_id")] = e
+            for m in top[:5]:
+                e = enrich.get(m.get("episode_id")) or {}
+                second_brain.append({
+                    "episode_id": m.get("episode_id"),
+                    "service_name": service_name,
+                    "root_cause": m.get("root_cause"),
+                    "similarity": m.get("similarity"),
+                    "timestamp": m.get("timestamp"),
+                    "created_at": e.get("created_at"),
+                    "resolution_actions": e.get("resolution_actions", []),
+                    "actual_ttr_minutes": e.get("actual_ttr_minutes"),
+                })
+
+    source = "request_logs" if runs else ("incident_episodes" if ep else "none")
+    corr = ep.get("correlation_result") if ep else None
+    corr_text = str(corr)[:1000] if corr else None
+    return {
+        "ticket_id": ticket_id,
+        "ticket_number": f"{ticket.get('ticketNumber')}",
+        "service_name": service_name,
+        "runs": runs,
+        "episode": {
+            "root_cause": ep.get("root_cause") if ep else None,
+            "confidence": ep.get("confidence", 0) if ep else 0,
+            "correlation_result": corr_text,
+            "resolution_actions": ep.get("resolution_actions", []) if ep else [],
+            "actual_ttr_minutes": ep.get("actual_ttr_minutes") if ep else None,
+        } if ep else None,
+        "second_brain": second_brain,
+        "source": source,
+        "meta": {
+            "investigated_at": runs[0]["investigated_at"] if runs else (ep.get("created_at") if ep else None),
+            "channel": runs[0]["channel"] if runs else (ep.get("trigger") if ep else None),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }

@@ -162,7 +162,7 @@ export function Sidebar({ className }: { className?: string }) {
           <nav className="space-y-0.5">
             {projects.map((project) => {
               const href = `/w/${current?.slug}/${project.slug}`
-              const active = location.pathname === href
+              const active = location.pathname === href || location.pathname.startsWith(`${href}/`)
               return (
                 <Link
                   key={project.id}

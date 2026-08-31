@@ -25,7 +25,7 @@ import {
   useObservabilityTargets,
   useWsRegistryList,
 } from "@/hooks/useManagement"
-import { useWorkspaceKnowledge } from "@/hooks/useKnowledge"
+import { useWorkspaceKnowledgeSummary } from "@/hooks/useKnowledge"
 import { useWorkspaceChannels } from "@/hooks/useNotificationChannels"
 import {
   clearOnboardingProgress,
@@ -81,7 +81,7 @@ export function OnboardingChecklist({ wsSlug, workspaceId, onCreateProject }: On
   // Semua query memakai queryKey yang sama dengan pemakai lain → cache dishare.
   const { data: projects, isLoading: projLoading } = useProjects(workspaceId)
   const { data: registry, isLoading: regLoading } = useWsRegistryList(workspaceId)
-  const { data: knowledge, isLoading: knowLoading } = useWorkspaceKnowledge(workspaceId)
+  const { data: knowledgeSummary, isLoading: summaryLoading } = useWorkspaceKnowledgeSummary(workspaceId)
   const { data: channels, isLoading: chanLoading } = useWorkspaceChannels(workspaceId)
   // Endpoint stacks & LLM keys require_admin global — hanya dipanggil bila berhak.
   const isAdminQueryReady = !!workspaceId && isWsAdmin
@@ -98,7 +98,15 @@ export function OnboardingChecklist({ wsSlug, workspaceId, onCreateProject }: On
   )
 
   const ready =
-    !projLoading && !regLoading && !knowLoading && !chanLoading && !obsLoading && !llmLoading
+    !projLoading &&
+    !regLoading &&
+    !summaryLoading &&
+    !chanLoading &&
+    !obsLoading &&
+    !llmLoading
+
+  // "Add knowledge" ✓ bila ada knowledge APAPUN workspace: refs, service knowledge, grounding docs.
+  const hasAnyKnowledge = knowledgeSummary?.has ?? false
 
   const rows: Row[] = ready
     ? [
@@ -109,22 +117,6 @@ export function OnboardingChecklist({ wsSlug, workspaceId, onCreateProject }: On
           hint: t("items.project.hint"),
           onOpen: onCreateProject,
           done: (projects?.length ?? 0) > 0,
-        },
-        {
-          id: "services",
-          icon: Boxes,
-          label: t("items.services.label"),
-          hint: t("items.services.hint"),
-          to: servicesHref,
-          done: (registry?.length ?? 0) > 0,
-        },
-        {
-          id: "knowledge",
-          icon: BookOpen,
-          label: t("items.knowledge.label"),
-          hint: t("items.knowledge.hint"),
-          to: servicesHref,
-          done: (knowledge?.length ?? 0) > 0,
         },
         // Stack & notifikasi = tab admin-only workspace (gate sama dgn Settings).
         ...(isWsAdmin
@@ -148,6 +140,22 @@ export function OnboardingChecklist({ wsSlug, workspaceId, onCreateProject }: On
               },
             ] as Row[])
           : []),
+        {
+          id: "services",
+          icon: Boxes,
+          label: t("items.services.label"),
+          hint: t("items.services.hint"),
+          to: servicesHref,
+          done: (registry?.length ?? 0) > 0,
+        },
+        {
+          id: "knowledge",
+          icon: BookOpen,
+          label: t("items.knowledge.label"),
+          hint: t("items.knowledge.hint"),
+          to: servicesHref,
+          done: hasAnyKnowledge,
+        },
         // Management (LLM keys) = admin global saja (gate sama dgn /management).
         ...(isGlobalAdmin
           ? ([

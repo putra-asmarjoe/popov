@@ -1,6 +1,6 @@
 [project]
 name = "popov-incident-response-agent"
-version = "0.2.0rc161"
+version = "0.2.0rc183"
 description = "Popov - The Intelligence Behind Operations: LangGraph multi-agent monitoring, triage & RCA (MongoDB + Telegram)"
 requires-python = ">=3.9"
 

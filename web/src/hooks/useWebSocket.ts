@@ -38,6 +38,10 @@ export function useTicketRealtime(projectId: string | null | undefined) {
         queryClient.invalidateQueries({ queryKey: ["ticket"] })
         // Fix #86: alert ter-link ikut segar (event ticket:alert_added)
         queryClient.invalidateQueries({ queryKey: ["ticketAlerts"] })
+        // War Room: run baru / status berubah saat investigasi selesai → segar
+        queryClient.invalidateQueries({ queryKey: ["ticket-warroom"] })
+        // Overview: open count / episode timeline berubah saat tiket berubah
+        queryClient.invalidateQueries({ queryKey: ["project-overview", projectId] })
       }, 300)
     }
 

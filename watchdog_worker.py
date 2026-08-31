@@ -89,6 +89,16 @@ async def main() -> None:
     except Exception as e:
         logger.warning(f"[WatchdogWorker] auto_feedback not started: {e}")
 
+    # 3. Verification loop (epic Gap 5) — closed-loop post-fix check
+    try:
+        from config.settings import settings as wd_settings
+        from services.verification_agent import start_verification_loop
+        interval = getattr(wd_settings, "verification_interval_sec", 60)
+        tasks.append(asyncio.create_task(start_verification_loop(interval_sec=interval), name="verification"))
+        logger.info(f"[WatchdogWorker] verification loop started interval={interval}s")
+    except Exception as e:
+        logger.warning(f"[WatchdogWorker] verification not started: {e}")
+
     try:
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:

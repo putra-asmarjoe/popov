@@ -6,7 +6,8 @@
     "workspace_not_found": "Workspace not found",
     "project_not_found": "Project not found",
     "go_home": "Go home",
-    "panel_title": "Ticket detail & chat"
+    "panel_title": "Ticket detail & chat",
+    "overview": "Overview"
   },
   "table": {
     "header_title": "Title",
@@ -60,7 +61,8 @@
     "section_description": "Description",
     "section_tags": "Tags",
     "section_progress": "Progress Log",
-    "section_alerts": "Linked Alerts"
+    "section_alerts": "Linked Alerts",
+    "open_warroom": "War Room"
   },
   "progress": {
     "empty": "No progress notes yet.",
@@ -117,5 +119,62 @@
     "trace_label": "agents traced",
     "trace_no_data": "No output data recorded for this agent.",
     "trace_panel_title": "Agent trace"
+  },
+  "warroom": {
+    "warroom": "War Room",
+    "back": "Back to ticket",
+    "updated": "updated",
+    "hypothesis": "Hypothesis",
+    "confidence": "Confidence",
+    "top_gap": "Top data gap",
+    "correlation_summary": "Correlation summary",
+    "unknown": "unknown",
+    "ran": "ran",
+    "skipped": "skipped",
+    "no_data": "no data recorded",
+    "pillar_mongo": "Mongo logs",
+    "pillar_metrics": "Metrics",
+    "pillar_trace": "Traces",
+    "pillar_span": "OTel spans",
+    "pillar_skipped_hint": "Pillar skipped by planner — not investigated",
+    "second_brain": "Second Brain — similar episodes",
+    "ttr": "to resolve",
+    "timeline": "Investigation timeline",
+    "timeline_steps": "steps",
+    "investigations": "Investigations",
+    "investigation_hint": "Each reply/bubble is one investigation run.",
+    "open_in_chat": "Open in chat",
+    "data_gaps_title": "Data gaps & suggested next",
+    "data_gaps": "Data gaps",
+    "suggested_next": "Suggested next",
+    "empty_title": "No investigation data yet",
+    "empty_body": "This ticket hasn't been investigated by the agent pipeline. Run an investigation from the chat tab.",
+    "empty_action": "Back to ticket chat",
+    "partial_banner": "Full investigation detail not available for this run (non-chat channel) — showing the episode summary instead."
+  },
+  "overview": {
+    "back": "Back to project",
+    "updated": "updated",
+    "open_tickets": "Open tickets",
+    "alerts": "Alerts",
+    "alerts_empty": "No alerts in this window",
+    "stack_health": "Stack health",
+    "stacks_empty": "No observability targets configured",
+    "health": {
+      "ok": "ok",
+      "degraded": "degraded",
+      "error": "error",
+      "unknown": "unknown"
+    },
+    "stale": "stale",
+    "episodes": "Episodes",
+    "resolved": "resolved",
+    "episodes_empty": "No episodes in the last 30 days",
+    "tickets_empty_filter": "No tickets match the selected filters"
+  },
+  "view": {
+    "label": "Project view mode",
+    "classic": "Classic",
+    "warroom": "War Room"
   }
 }

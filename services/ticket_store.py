@@ -445,6 +445,17 @@ async def change_status(
         set_doc["resolvedAt"] = now
         set_doc["resolvedBy"] = str(user["_id"])
         set_doc["resolvedByName"] = user.get("name", "")
+    # Gap 5-Verify: schedule re-check saat masuk in_progress/needs_review (debounce —
+    # hanya jika belum ada pending; tidak re-schedule jika masih menunggu verifikasi)
+    if target in ("in_progress", "needs_review") and ticket.get("verification_status") != "pending":
+        from config.settings import settings
+        delay_min = getattr(settings, "verification_delay_minutes", 10)
+        set_doc["verification_due_at"] = (
+            datetime.now(timezone.utc) + timedelta(minutes=delay_min)
+        ).isoformat()
+        set_doc["verification_status"] = "pending"
+        set_doc["verification_result"] = None
+        set_doc["verification_note"] = None
     entry = {
         "id": uuid.uuid4().hex[:8],
         "note": (
