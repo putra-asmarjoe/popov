@@ -5,10 +5,27 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { useChatStore } from "@/store/chat.store"
 
-/** Input chat: textarea autosize + kirim/stop. Chat selalu terikat tiket (1 sesi = 1 tiket). */
-export function ChatInput({ sessionId, disabled }: { sessionId: string; disabled?: boolean }) {
+/** Input chat: textarea autosize + kirim/stop. Chat selalu terikat tiket (1 sesi = 1 tiket).
+ *  Props `value`/`onTextChange` opsional — controlled draft (dipakai ChatPanel utk chips
+ *  suggestions); tanpa props, state internal dipakai (perilaku lama). */
+export function ChatInput({
+  sessionId,
+  disabled,
+  value: externalValue,
+  onTextChange,
+}: {
+  sessionId: string
+  disabled?: boolean
+  value?: string
+  onTextChange?: (v: string) => void
+}) {
   const { t } = useTranslation("project")
-  const [text, setText] = useState("")
+  const [internalText, setInternalText] = useState("")
+  const text = externalValue ?? internalText
+  const setText = (v: string) => {
+    if (onTextChange) onTextChange(v)
+    else setInternalText(v)
+  }
   // Streaming di-scope per-session — bukan global, agar tak konflik dgn sesi lain.
   const isStreaming = useChatStore((s) => s.streaming[sessionId]?.isStreaming ?? false)
   const sendMessage = useChatStore((s) => s.sendMessage)
@@ -44,7 +61,7 @@ export function ChatInput({ sessionId, disabled }: { sessionId: string; disabled
             }
           }}
           placeholder={t("chat.input_placeholder")}
-          className="min-h-9 max-h-48 resize-none overflow-y-auto text-sm"
+          className="min-h-9 max-h-48 resize-none overflow-y-auto py-1.5 text-sm"
           rows={1}
           disabled={disabled}
         />

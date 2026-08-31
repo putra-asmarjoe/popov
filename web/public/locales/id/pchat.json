@@ -20,5 +20,14 @@
     "low": "Cepat: fakta dikumpulkan langsung dari database",
     "medium": "Seimbang: menambah tawaran investigasi lebih dalam",
     "thinking": "Insight penuh: menjalankan analisis insiden lengkap (lebih lambat, boros token)"
-  }
+  },
+  "new_chat_title": "Chat baru",
+  "create_session_failed": "Gagal membuat sesi chat",
+  "edit_title": "Ubah judul",
+  "edit_title_description": "Ubah nama tampilan sesi chat ini.",
+  "title": "Judul",
+  "saving": "Menyimpan…",
+  "cancel": "Batal",
+  "save": "Simpan",
+  "update_session_failed": "Gagal memperbarui sesi"
 }

@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Bot, Loader2 } from "lucide-react"
+import { Activity, Bot, Loader2 } from "lucide-react"
 import { ChatInput } from "@/components/chat/ChatInput"
 import { ChatMessages } from "@/components/chat/ChatMessages"
+import { ChatSuggestions } from "@/components/chat/ChatSuggestions"
+import { AgentTracePanel } from "@/components/chat/AgentTracePanel"
 import { useChatMessages, useChatSessions, useCreateChatSession } from "@/hooks/useChatStream"
 import { useChatStore, recentlyFinalized } from "@/store/chat.store"
+import { lastAssistantMeta } from "@/lib/chat-meta"
 import { api } from "@/lib/api"
 import type { TicketContext } from "@/types/chat"
 
@@ -27,6 +30,11 @@ export function ChatPanel({
   const setActiveSession = useChatStore((s) => s.setActiveSession)
   const setTicketContext = useChatStore((s) => s.setTicketContext)
   const clearTicketContext = useChatStore((s) => s.clearTicketContext)
+  const sendMessage = useChatStore((s) => s.sendMessage)
+  const activeTraceMessages = useChatStore((s) => s.activeTraceMessages)
+  const activeTraceRequestId = useChatStore((s) => s.activeTraceRequestId)
+  // Draft terisi dari chips suggestions (recommended questions) — klik chip → isi input
+  const [draft, setDraft] = useState("")
 
   // Sesi tiket ini = session pertama dengan ticketId yang cocok
   const ticketSession = useMemo(
@@ -34,6 +42,15 @@ export function ChatPanel({
     [sessions, ticket],
   )
   useChatMessages(ticketSession?.id ?? null)
+
+  // Recommended questions (chips 💡) dari meta pesan assistant TERAKHIR — persist server,
+  // refresh-safe (pola yang sama dgn chat project / ProjectChatPage).
+  const messagesMap = useChatStore((s) => s.messages)
+  const ticketMessages = ticketSession ? (messagesMap[ticketSession.id] ?? []) : []
+  const suggestions = useMemo(() => lastAssistantMeta(ticketMessages)?.suggestions ?? [], [ticketMessages])
+  // Belum ada chat sama sekali → tampilkan chip "check ticket detail" (pengecekan dini)
+  const hasMessages = ticketMessages.length > 0
+  const isStreamingThis = useChatStore((s) => s.streaming[ticketSession?.id ?? ""]?.isStreaming ?? false)
 
   // Auto-buat sesi saat belum ada (sekali per tiket; ref mencegah dobel create)
   const requestedTicketId = useRef<string | null>(null)
@@ -86,6 +103,12 @@ export function ChatPanel({
     else clearTicketContext()
   }, [ticket, setTicketContext, clearTicketContext])
 
+  // Tutup Agent Trace panel saat pindah tiket — trace milik tiket lama
+  const closeTrace = useChatStore((s) => s.closeTrace)
+  useEffect(() => {
+    closeTrace()
+  }, [ticket?.ticketId, closeTrace])
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col">
       {/* Header */}
@@ -97,16 +120,46 @@ export function ChatPanel({
         {isLoading && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />}
       </div>
 
-      {ticketSession ? (
-        <>
-          <ChatMessages sessionId={ticketSession.id} />
-          <ChatInput sessionId={ticketSession.id} />
-        </>
-      ) : (
-        <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
-          <Loader2 className="mr-2 size-3.5 animate-spin" /> {t("chat.preparing_session")}
+      <div className="flex min-h-0 flex-1">
+        {/* Chat area */}
+        <div className="flex h-full min-h-0 flex-1 flex-col">
+          {ticketSession ? (
+            <>
+              <ChatMessages sessionId={ticketSession.id} />
+              {!hasMessages && !isStreamingThis && (
+                <div className="border-t px-4 py-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void sendMessage(ticketSession.id, t("chat.check_ticket"))
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/5 px-2.5 py-1 text-left text-xs font-medium text-primary hover:bg-primary/10"
+                      aria-label={t("chat.check_ticket_aria")}
+                    >
+                      <Activity className="size-3.5" />
+                      {t("chat.check_ticket")}
+                    </button>
+                  </div>
+                </div>
+              )}
+              <ChatSuggestions suggestions={suggestions} onPick={setDraft} />
+              <ChatInput sessionId={ticketSession.id} value={draft} onTextChange={setDraft} />
+            </>
+          ) : (
+            <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">
+              <Loader2 className="mr-2 size-3.5 animate-spin" /> {t("chat.preparing_session")}
+            </div>
+          )}
         </div>
-      )}
+
+        {/* Trace panel (fixed width, right side) */}
+        {activeTraceMessages.length > 0 && (
+          <div className="w-[420px] shrink-0 border-l">
+            <AgentTracePanel traces={activeTraceMessages} requestId={activeTraceRequestId} />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

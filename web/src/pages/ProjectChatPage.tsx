@@ -6,48 +6,25 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ChatMessages } from "@/components/chat/ChatMessages"
+import { ChatSuggestions } from "@/components/chat/ChatSuggestions"
+import { AgentTracePanel } from "@/components/chat/AgentTracePanel"
 import { useChatMessages, useChatSessions, useChatStream } from "@/hooks/useChatStream"
 import { useChatStore } from "@/store/chat.store"
 import { useProjects } from "@/hooks/useWorkspaces"
 import { useWorkspaceStore } from "@/store/workspace.store"
 import { cn } from "@/lib/utils"
+import { lastAssistantMeta } from "@/lib/chat-meta"
 
 /**
  * ProjectChatPage — halaman chat ber-konteks project (Chat by Project fase 1).
  * Terpisah dari chat detail tiket: sesi punya projectId TANPA ticketId.
  * Chips dari meta jawaban assistant terakhir (persist server, refresh-safe):
- * - suggestions → isi input dengan saran follow-up
+ * - suggestions → isi input dengan saran follow-up (via ChatSuggestions)
  * - ticket_refs → navigate ke detail tiket (/w/:ws/:proj?ticket=KEY-N)
  */
 
 const CHAT_MODES = ["low", "medium", "thinking"] as const
 type ChatMode = (typeof CHAT_MODES)[number]
-
-interface TicketRef {
-  ticketNumber: number
-  ticketId: string
-  projectKey?: string
-  title?: string | null
-  status?: string | null
-}
-
-interface AssistantMeta {
-  ticket_refs?: TicketRef[]
-  suggestions?: string[]
-}
-
-function lastAssistantMeta(
-  messages: { role: string; meta?: Record<string, unknown> }[] | undefined,
-): AssistantMeta | null {
-  if (!messages) return null
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]
-    if (m.role === "assistant" && m.meta && typeof m.meta === "object") {
-      return m.meta as AssistantMeta
-    }
-  }
-  return null
-}
 
 export function ProjectChatPage() {
   const { t } = useTranslation("pchat")
@@ -58,6 +35,14 @@ export function ProjectChatPage() {
   const { data: projects } = useProjects(activeWorkspace?.id ?? null)
   const sessionsQuery = useChatSessions(null, 100) // Fix G1
   const messagesQuery = useChatMessages(sessionId || null)
+  const activeTraceMessages = useChatStore((s) => s.activeTraceMessages)
+  const activeTraceRequestId = useChatStore((s) => s.activeTraceRequestId)
+
+  // Tutup Agent Trace panel saat pindah session — trace milik session lama
+  const closeTrace = useChatStore((s) => s.closeTrace)
+  useLayoutEffect(() => {
+    closeTrace()
+  }, [sessionId, closeTrace])
 
   const session = useMemo(
     () => sessionsQuery.data?.find((s) => s.id === sessionId) ?? null,
@@ -74,94 +59,94 @@ export function ProjectChatPage() {
   const ticketRefs = meta?.ticket_refs ?? []
 
   return (
-    <div className="flex h-full min-w-0 flex-col">
-      {/* Header */}
-      <div className="flex items-center gap-3 border-b px-4 py-2.5">
-        <div className="mx-auto flex w-full max-w-3xl items-center gap-3">
-          <Button variant="ghost" size="icon" className="size-8 shrink-0" asChild>
-            <Link to={project ? `/w/${wsSlug}/${project.slug}` : `/w/${wsSlug}`} aria-label={t("back")}>
-              <ArrowLeft className="size-4" />
-            </Link>
-          </Button>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium">
-              {sessionsQuery.isLoading ? (
-                <Skeleton className="h-4 w-48" />
-              ) : (
-                session?.title || t("title_fallback")
-              )}
-            </p>
-            <p className="truncate text-xs text-muted-foreground">
-              {project ? `${project.key} · ${project.name}` : ""}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Messages */}
-      {sessionId ? (
-        <ChatMessages sessionId={sessionId} contentClassName="max-w-3xl" />
-      ) : (
-        <div className="flex flex-1 items-center justify-center px-4 text-sm text-muted-foreground">
-          <div className="mx-auto w-full max-w-3xl">{t("no_session")}</div>
-        </div>
-      )}
-
-      {/* Chips: link tiket + saran follow-up */}
-      {(ticketRefs.length > 0 || suggestions.length > 0) && (
-        <div className="border-t px-4 py-2">
-          <div className="mx-auto flex max-w-3xl flex-wrap gap-1.5">
-            {ticketRefs.map((ref) => {
-              const proj = projects?.find((p) => p.key === ref.projectKey) ?? project
-              const href = proj ? `/w/${wsSlug}/${proj.slug}?ticket=${proj.key}-${ref.ticketNumber}` : "#"
-              return (
-                <Link
-                  key={`ref-${ref.ticketId}`}
-                  to={href}
-                  className="rounded-full border bg-muted/40 px-2.5 py-1 text-xs hover:bg-muted"
-                >
-                  🎟️ {ref.projectKey ?? project?.key}-{ref.ticketNumber}
-                </Link>
-              )
-            })}
-            {suggestions.map((sug) => (
-              <button
-                key={sug}
-                type="button"
-                onClick={() => setText(sug)}
-                className="rounded-full border bg-muted/40 px-2.5 py-1 text-left text-xs hover:bg-muted"
-              >
-                💡 {sug}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Mode selector + input */}
-      <div className="border-t px-4 py-2.5">
-        <div className="mx-auto w-full max-w-3xl space-y-2">
-          <div className="flex items-center gap-1">
-            {CHAT_MODES.map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setMode(m)}
-                title={t(`mode_hint.${m}`)}
-                className={cn(
-                  "rounded-full border px-2.5 py-1 text-[11px] capitalize",
-                  mode === m
-                    ? "border-primary bg-primary font-medium text-primary-foreground"
-                    : "text-muted-foreground hover:bg-muted",
+    <div className="flex h-full min-w-0">
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        {/* Header */}
+        <div className="flex items-center gap-3 border-b px-4 py-2.5">
+          <div className="mx-auto flex w-full max-w-3xl items-center gap-3">
+            <Button variant="ghost" size="icon" className="size-8 shrink-0" asChild>
+              <Link to={project ? `/w/${wsSlug}/${project.slug}` : `/w/${wsSlug}`} aria-label={t("back")}>
+                <ArrowLeft className="size-4" />
+              </Link>
+            </Button>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">
+                {sessionsQuery.isLoading ? (
+                  <Skeleton className="h-4 w-48" />
+                ) : (
+                  session?.title || t("title_fallback")
                 )}
-              >
-                {m === "thinking" ? `🧠 ${m}` : m}
-              </button>
-            ))}
+              </p>
+              <p className="truncate text-xs text-muted-foreground">
+                {project ? `${project.key} · ${project.name}` : ""}
+              </p>
+            </div>
           </div>
-          <ProjectChatInput sessionId={sessionId} mode={mode} onTextChange={setText} draft={text} />
+        </div>
+
+        {/* Messages */}
+        {sessionId ? (
+          <ChatMessages sessionId={sessionId} contentClassName="max-w-3xl" />
+        ) : (
+          <div className="flex flex-1 items-center justify-center px-4 text-sm text-muted-foreground">
+            <div className="mx-auto w-full max-w-3xl">{t("no_session")}</div>
+          </div>
+        )}
+
+        {/* Chips: link tiket (🎟️) — saran follow-up (💡) via ChatSuggestions */}
+        {ticketRefs.length > 0 && (
+          <div className="border-t px-4 py-2">
+            <div className="mx-auto flex max-w-3xl flex-wrap gap-1.5">
+              {ticketRefs.map((ref) => {
+                const proj = projects?.find((p) => p.key === ref.projectKey) ?? project
+                const href = proj ? `/w/${wsSlug}/${proj.slug}?ticket=${proj.key}-${ref.ticketNumber}` : "#"
+                return (
+                  <Link
+                    key={`ref-${ref.ticketId}`}
+                    to={href}
+                    className="rounded-full border bg-muted/40 px-2.5 py-1 text-xs hover:bg-muted"
+                  >
+                    🎟️ {ref.projectKey ?? project?.key}-{ref.ticketNumber}
+                  </Link>
+                )
+              })}
+            </div>
+          </div>
+        )}
+        <ChatSuggestions suggestions={suggestions} onPick={setText} contentClassName="max-w-3xl" />
+
+        {/* Mode selector + input */}
+        <div className="border-t px-4 py-2.5">
+          <div className="mx-auto w-full max-w-3xl space-y-2">
+            <div className="flex items-center gap-1">
+              {CHAT_MODES.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMode(m)}
+                  title={t(`mode_hint.${m}`)}
+                  className={cn(
+                    "rounded-full border px-2.5 py-1 text-[11px] capitalize",
+                    mode === m
+                      ? "border-primary bg-primary font-medium text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted",
+                  )}
+                >
+                  {m === "thinking" ? `🧠 ${m}` : m}
+                </button>
+              ))}
+            </div>
+            <ProjectChatInput sessionId={sessionId} mode={mode} onTextChange={setText} draft={text} />
+          </div>
         </div>
       </div>
+
+      {/* Trace panel (right side, fixed width) */}
+      {activeTraceMessages.length > 0 && (
+        <div className="w-[420px] shrink-0 border-l">
+          <AgentTracePanel traces={activeTraceMessages} requestId={activeTraceRequestId} />
+        </div>
+      )}
     </div>
   )
 }
@@ -214,7 +199,7 @@ function ProjectChatInput({
           }
         }}
         placeholder={t("input_placeholder")}
-        className="min-h-9 max-h-48 resize-none overflow-y-auto text-sm"
+        className="min-h-9 max-h-48 resize-none overflow-y-auto py-1.5 text-sm"
         rows={1}
       />
       {isStreaming ? (

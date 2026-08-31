@@ -3,7 +3,7 @@ import { toast } from "sonner"
 import { api, apiErrorMessage } from "@/lib/api"
 import { getToken } from "@/lib/auth"
 import i18n from "@/lib/i18n"
-import type { ChatMessage, ChatSession, TicketContext } from "@/types/chat"
+import type { ChatMessage, ChatSession, TicketContext, AgentTrace } from "@/types/chat"
 
 // EventSource tunggal level modul — satu stream aktif (mirror backend: 1 reader/session)
 let es: EventSource | null = null
@@ -33,6 +33,10 @@ interface ChatStore {
   ticketContext: TicketContext | null
   // bertambah setiap kali stream selesai → pemicu refetch history
   finalizeTick: number
+  // Trace panel state — ID pesan + traces-nya
+  activeTraceMessageId: string | null
+  activeTraceMessages: AgentTrace[]
+  activeTraceRequestId: string | null
 
   setSessions: (sessions: ChatSession[]) => void
   setActiveSession: (session: ChatSession | null) => void
@@ -40,6 +44,9 @@ interface ChatStore {
   appendMessage: (sessionId: string, message: ChatMessage) => void
   setTicketContext: (ctx: TicketContext | null) => void
   clearTicketContext: () => void
+
+  openTrace: (messageId: string, traces: AgentTrace[], requestId?: string | null) => void
+  closeTrace: () => void
 
   sendMessage: (sessionId: string, text: string, mode?: string) => Promise<void>
   /** Ikut stream yang SUDAH berjalan di server (mis. setelah refresh) — Fix #114 */
@@ -58,6 +65,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   streaming: {},
   ticketContext: null,
   finalizeTick: 0,
+  activeTraceMessageId: null,
+  activeTraceMessages: [],
+  activeTraceRequestId: null,
 
   setSessions(sessions) {
     set({ sessions })
@@ -83,6 +93,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   clearTicketContext() {
     set({ ticketContext: null })
+  },
+
+  openTrace(messageId, traces, requestId = null) {
+    set({ activeTraceMessageId: messageId, activeTraceMessages: traces, activeTraceRequestId: requestId })
+  },
+
+  closeTrace() {
+    set({ activeTraceMessageId: null, activeTraceMessages: [], activeTraceRequestId: null })
   },
 
   async sendMessage(sessionId, text, mode) {
@@ -156,6 +174,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
           role: "assistant",
           content,
           createdAt: new Date().toISOString(),
+          meta: { suggestions: [] },
         })
       }
       lastFinalizedAt = Date.now()
@@ -227,6 +246,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         role: "assistant",
         content: `${content}\n\n_(${i18n.t("project:chat.stream_stopped")})_`,
         createdAt: new Date().toISOString(),
+        meta: { suggestions: [] },
       })
     }
     lastFinalizedAt = Date.now()

@@ -50,7 +50,9 @@
     "svc_updated": "Service diperbarui",
     "test_failed": "Test koneksi gagal",
     "token_rotated": "Token baru dibuat — token lama tidak berlaku",
-    "unlink_ok": "Link stack-project dilepas"
+    "unlink_ok": "Link stack-project dilepas",
+    "ticket_created": "Tiket dibuat",
+    "ticket_create_failed": "Gagal membuat tiket"
   },
   "status": {
     "loading": "Memuat...",
@@ -75,7 +77,14 @@
     "title": "Notifikasi",
     "mark_all": "Tandai semua",
     "empty": "Belum ada notifikasi",
-    "see_all": "Lihat semua"
+    "see_all": "Lihat semua",
+    "unread": "{{count}} belum dibaca",
+    "unread_only": "Belum dibaca",
+    "all": "Semua",
+    "loading": "Memuat…",
+    "empty_desc": "Kamu akan menerima notifikasi saat di-assign ke tiket atau saat alert observability masuk.",
+    "access_denied": "Akses ditolak",
+    "admin_only": "Panel management hanya untuk admin."
   },
   "panel": {
     "minimize": "Minimize panel",

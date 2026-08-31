@@ -50,7 +50,9 @@
     "svc_updated": "Service updated",
     "test_failed": "Connection test failed",
     "token_rotated": "New token created — the old token is no longer valid",
-    "unlink_ok": "Stack–project link removed"
+    "unlink_ok": "Stack–project link removed",
+    "ticket_created": "Ticket created",
+    "ticket_create_failed": "Failed to create ticket"
   },
   "status": {
     "loading": "Loading...",
@@ -75,7 +77,14 @@
     "title": "Notifications",
     "mark_all": "Mark all read",
     "empty": "No notifications yet",
-    "see_all": "See all"
+    "see_all": "See all",
+    "unread": "{{count}} unread",
+    "unread_only": "Unread",
+    "all": "All",
+    "loading": "Loading…",
+    "empty_desc": "You'll get notifications when assigned to a ticket or when observability alerts come in.",
+    "access_denied": "Access denied",
+    "admin_only": "Management panel is admin-only."
   },
   "panel": {
     "minimize": "Minimize panel",

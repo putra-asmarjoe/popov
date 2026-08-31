@@ -36,7 +36,12 @@
       "title_min": "Judul minimal 5 karakter",
       "description_min": "Deskripsi minimal 10 karakter",
       "trace_hex": "TraceId harus hex 16-64 karakter"
-    }
+    },
+    "kind_label": "Jenis",
+    "severity_label": "Severitas",
+    "assign_label": "Assign",
+    "assign_placeholder": "Pilih member…",
+    "assign_none": "Tidak ada"
   },
   "detail": {
     "created_by": "Dibuat {{name}} · {{date}}",
@@ -103,6 +108,14 @@
     "stream_disconnected": "koneksi stream terputus — jawaban tersimpan di server",
     "stream_stopped": "dihentikan",
     "stream_error": "Stream error",
-    "agent_composing": "menyusun jawaban…"
+    "agent_composing": "menyusun jawaban…",
+    "check_ticket": "Cek detail tiket",
+    "check_ticket_aria": "Jalankan pengecekan dini pada tiket ini",
+    "trace_title": "Jejak agent",
+    "trace_desc": "Agent yang terlibat dalam balasan ini, durasinya, dan apa yang dihasilkan masing-masing.",
+    "trace_hint": "Lihat jejak agent",
+    "trace_label": "agent terlacak",
+    "trace_no_data": "Tidak ada data keluaran yang tercatat untuk agent ini.",
+    "trace_panel_title": "Jejak agent"
   }
 }

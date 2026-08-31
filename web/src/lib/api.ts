@@ -2,7 +2,7 @@ import axios from "axios"
 import { clearToken, getToken } from "@/lib/auth"
 
 // Dev: Vite proxy /api → http://localhost:8000 (lihat vite.config.ts)
-// Prod: build diserve FastAPI (same-origin) — "/api/v1" tetap benar.
+// Prod: build diserve FastAPI (same-origin) — "/api/v1" untuk internal API.
 // VITE_API_BASE_URL hanya untuk deployment terpisah (opsional).
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? "/api/v1",

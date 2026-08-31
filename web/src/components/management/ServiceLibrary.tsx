@@ -402,7 +402,7 @@ export function ServiceLibrary() {
             <div className="space-y-1.5">
               <Label>{t("hierarchy.service_id_label", { ns: "workspace" })}</Label>
               <Input
-                placeholder="nama-deployment-k8s"
+                placeholder={t("hierarchy.service_id_placeholder", { ns: "workspace" })}
                 value={editor?.service_id ?? ""}
                 onChange={(e) =>
                   editor &&

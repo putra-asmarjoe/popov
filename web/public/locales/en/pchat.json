@@ -20,5 +20,14 @@
     "low": "Fast: facts gathered directly from the database",
     "medium": "Balanced: adds deeper investigation offers",
     "thinking": "Full insight: runs the complete incident analysis (slower, more tokens)"
-  }
+  },
+  "new_chat_title": "New chat",
+  "create_session_failed": "Failed to create chat session",
+  "edit_title": "Edit title",
+  "edit_title_description": "Change the display name of this chat session.",
+  "title": "Title",
+  "saving": "Saving…",
+  "cancel": "Cancel",
+  "save": "Save",
+  "update_session_failed": "Failed to update session"
 }

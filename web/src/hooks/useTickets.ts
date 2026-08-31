@@ -1,5 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
+import { useTranslation } from "react-i18next"
 import { api, apiErrorMessage } from "@/lib/api"
 import type { TicketFilters } from "@/store/ticket.store"
 import type { Ticket, TicketListMeta, TicketStatus } from "@/types/ticket"
@@ -18,7 +19,7 @@ export function useTickets(projectId: string | null, filters: TicketFilters, pag
           search: filters.search || undefined,
           page,
           limit: 20,
-          sort: "createdAt:desc",
+          sort: "updatedAt:desc",
         },
       })
       return data as { tickets: Ticket[]; meta: TicketListMeta }
@@ -67,6 +68,7 @@ function useOptimisticTicketUpdate() {
 }
 
 export function useCreateTicket(projectId: string | null) {
+  const { t } = useTranslation("common")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (input: {
@@ -81,10 +83,10 @@ export function useCreateTicket(projectId: string | null) {
       return data as Ticket
     },
     onSuccess: () => {
-      toast.success("Tiket dibuat")
+      toast.success(t("toasts.ticket_created"))
       qc.invalidateQueries({ queryKey: ["tickets", projectId] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal membuat tiket")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.ticket_create_failed"))),
   })
 }
 

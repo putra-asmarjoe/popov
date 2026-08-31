@@ -36,7 +36,12 @@
       "title_min": "Title must be at least 5 characters",
       "description_min": "Description must be at least 10 characters",
       "trace_hex": "Trace ID must be 16-64 hex characters"
-    }
+    },
+    "kind_label": "Kind",
+    "severity_label": "Severity",
+    "assign_label": "Assign",
+    "assign_placeholder": "Select member…",
+    "assign_none": "None"
   },
   "detail": {
     "created_by": "Created {{name}} · {{date}}",
@@ -103,6 +108,14 @@
     "stream_disconnected": "stream disconnected — answer is saved on the server",
     "stream_stopped": "stopped",
     "stream_error": "Stream error",
-    "agent_composing": "composing reply…"
+    "agent_composing": "composing reply…",
+    "check_ticket": "Check ticket detail",
+    "check_ticket_aria": "Run an early check on this ticket",
+    "trace_title": "Agent trace",
+    "trace_desc": "Agents involved in this reply, their duration, and what each produced.",
+    "trace_hint": "View agent trace",
+    "trace_label": "agents traced",
+    "trace_no_data": "No output data recorded for this agent.",
+    "trace_panel_title": "Agent trace"
   }
 }

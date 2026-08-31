@@ -1,7 +1,7 @@
 {
   "name": "popov-web",
   "private": true,
-  "version": "0.2.0.24",
+  "version": "0.2.0-rc161",
   "type": "module",
   "scripts": {
     "dev": "concurrently --kill-others -n API,WEB -c green,yellow \"npm run dev:backend\" \"npm run dev:frontend\"",
@@ -56,5 +56,5 @@
     "typescript": "~6.0.2",
     "vite": "^8.2.0"
   },
-  "description": "Popov - Incident Response Agent frontend (React/Vite)"
+  "description": "Popov - The Intelligence Behind Operations frontend (React/Vite)"
 }

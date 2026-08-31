@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import type { Ticket } from "@/types/ticket"
+import type { WorkspaceMember } from "@/types/workspace"
 
 // Schema factory — pesan validasi via t() agar ikut locale aktif
 const makeSchema = (t: TFunction) =>
@@ -24,6 +25,7 @@ const makeSchema = (t: TFunction) =>
     description: z.string().min(10, t("form.validation.description_min")),
     kind: z.enum(["business_logic", "infrastructure"]),
     severity: z.enum(["critical", "high", "medium", "low"]),
+    assigneeId: z.string().optional(),
     traceId: z
       .string()
       .regex(/^[0-9a-fA-F]{16,64}$/, t("form.validation.trace_hex"))
@@ -39,6 +41,7 @@ export interface TicketFormValues {
   description: string
   kind: "business_logic" | "infrastructure"
   severity: "critical" | "high" | "medium" | "low"
+  assigneeId?: string
   traceId?: string
   tags?: string[]
 }
@@ -50,12 +53,15 @@ export function TicketForm({
   onSubmit,
   submitLabel,
   onCancel,
+  members,
 }: {
   initial?: Partial<Ticket>
   submitting?: boolean
   onSubmit: (values: TicketFormValues) => void
   submitLabel?: string
   onCancel?: () => void
+  /** Daftar member workspace — bila diberikan, tampilkan field Assign (create only). */
+  members?: WorkspaceMember[]
 }) {
   const { t } = useTranslation("project")
   const schema = useMemo(() => makeSchema(t), [t])
@@ -72,6 +78,7 @@ export function TicketForm({
       description: initial?.description ?? "",
       kind: initial?.kind ?? "business_logic",
       severity: initial?.severity ?? "medium",
+      assigneeId: "",
       traceId: initial?.traceId ?? "",
       tagsInput: (initial?.tags ?? []).join(", "),
     },
@@ -83,6 +90,7 @@ export function TicketForm({
     setValue("description", initial?.description ?? "")
     setValue("kind", initial?.kind ?? "business_logic")
     setValue("severity", initial?.severity ?? "medium")
+    setValue("assigneeId", "")
     setValue("traceId", initial?.traceId ?? "")
     setValue("tagsInput", (initial?.tags ?? []).join(", "))
   }, [initial, setValue])
@@ -90,6 +98,7 @@ export function TicketForm({
   const submit = handleSubmit((values) => {
     onSubmit({
       ...values,
+      assigneeId: values.assigneeId || undefined,
       traceId: values.traceId || undefined,
       tags: (values.tagsInput ?? "")
         .split(",")
@@ -119,7 +128,7 @@ export function TicketForm({
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <div className="space-y-1.5">
-          <Label>Kind</Label>
+          <Label>{t("form.kind_label")}</Label>
           <Select value={watch("kind")} onValueChange={(v) => setValue("kind", v as FormValues["kind"])}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -129,7 +138,7 @@ export function TicketForm({
           </Select>
         </div>
         <div className="space-y-1.5">
-          <Label>Severity</Label>
+          <Label>{t("form.severity_label")}</Label>
           <Select value={watch("severity")} onValueChange={(v) => setValue("severity", v as FormValues["severity"])}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -140,6 +149,25 @@ export function TicketForm({
             </SelectContent>
           </Select>
         </div>
+        {members && members.length > 0 && (
+          <div className="space-y-1.5">
+            <Label>{t("form.assign_label")}</Label>
+            <Select
+              value={watch("assigneeId") ?? ""}
+              onValueChange={(v) => setValue("assigneeId", v === "none" ? "" : v)}
+            >
+              <SelectTrigger><SelectValue placeholder={t("form.assign_placeholder")} /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">{t("form.assign_none")}</SelectItem>
+                {members.map((m) => (
+                  <SelectItem key={m.userId} value={m.userId}>
+                    {m.name} <span className="text-muted-foreground">· {m.email}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">

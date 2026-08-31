@@ -85,11 +85,12 @@ export function Sidebar({ className }: { className?: string }) {
   }, [projects])
 
   const projectChats = useMemo(() => {
+    const wsProjectIds = new Set(projects?.map((p) => p.id) ?? [])
     return (allSessions ?? [])
-      .filter((s: ChatSession) => s.projectId && !s.ticketId)
+      .filter((s: ChatSession) => s.projectId && wsProjectIds.has(s.projectId) && !s.ticketId)
       .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
       .slice(0, 5)
-  }, [allSessions])
+  }, [allSessions, projects])
 
 
   return (
@@ -326,7 +327,7 @@ export function Sidebar({ className }: { className?: string }) {
           <SidebarItemPlaceholder icon={<Settings2 className="size-4" />} label={t("nav.management")} hint="admin" />
         )}
         <div className="px-2.5 pb-1 pt-2 text-[10px] text-sidebar-foreground/40">
-          Popov - Incident Response Agent v{__APP_VERSION__}
+          Popov - The Intelligence Behind Operations v{__APP_VERSION__}
         </div>
       </nav>
 

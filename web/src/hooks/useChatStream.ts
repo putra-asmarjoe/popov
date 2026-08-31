@@ -52,6 +52,7 @@ export function useChatMessages(sessionId: string | null) {
 // ── Mutations ─────────────────────────────────────────────────────────────────
 
 export function useCreateChatSession(projectId: string | null) {
+  const { t } = useTranslation("pchat")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (vars?: {
@@ -62,14 +63,14 @@ export function useCreateChatSession(projectId: string | null) {
       const { data } = await api.post("/chat/sessions", {
         projectId: vars?.projectId ?? projectId,
         ticketId: vars?.ticketId ?? null,
-        title: vars?.title ?? "Chat baru",
+        title: vars?.title ?? t("new_chat_title"),
       })
       return data as ChatSession
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["chat", "sessions"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal membuat sesi chat")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("create_session_failed"))),
   })
 }
 
@@ -96,5 +97,21 @@ export function useDeleteChatSession() {
       qc.invalidateQueries({ queryKey: ["chat", "sessions"] })
     },
     onError: (e) => toast.error(apiErrorMessage(e, t("delete_failed"))),
+  })
+}
+
+/** Update session title (project chat). */
+export function useUpdateChatSession() {
+  const { t } = useTranslation("pchat")
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ sessionId, title }: { sessionId: string; title: string }) => {
+      const { data } = await api.patch(`/chat/sessions/${sessionId}`, { title })
+      return data as ChatSession
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["chat", "sessions"] })
+    },
+    onError: (e) => toast.error(apiErrorMessage(e, t("update_session_failed"))),
   })
 }
