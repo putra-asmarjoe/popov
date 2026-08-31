@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { Bell, CheckCheck } from "lucide-react"
+import { useTranslation } from "react-i18next"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api } from "@/lib/api"
@@ -11,6 +12,7 @@ import type { NotificationItem } from "@/types/notification"
 
 /** NotificationsPage (/notifications) — daftar penuh + filter unread. */
 export function NotificationsPage() {
+  const { t } = useTranslation("common")
   const [unreadOnly, setUnreadOnly] = useState(false)
   const { data, isLoading } = useNotifications(50, unreadOnly)
   const markRead = useMarkRead()
@@ -45,9 +47,9 @@ export function NotificationsPage() {
           <Bell className="size-5 text-muted-foreground" />
         </div>
         <div>
-          <h1 className="text-lg font-semibold">Notifikasi</h1>
+          <h1 className="text-lg font-semibold">{t("notif.title")}</h1>
           <p className="text-xs text-muted-foreground">
-            {data ? `${data.unread} belum dibaca` : "Memuat…"}
+            {data ? t("notif.unread", { count: data.unread }) : t("notif.loading")}
           </p>
         </div>
         <div className="ml-auto flex gap-2">
@@ -57,7 +59,7 @@ export function NotificationsPage() {
             className="h-8 text-xs"
             onClick={() => setUnreadOnly((v) => !v)}
           >
-            {unreadOnly ? "Semua" : "Belum dibaca"}
+            {unreadOnly ? t("notif.all") : t("notif.unread_only")}
           </Button>
           <Button
             variant="ghost"
@@ -66,7 +68,7 @@ export function NotificationsPage() {
             onClick={() => markRead.mutate(undefined)}
             disabled={!data?.unread}
           >
-            <CheckCheck className="size-3.5" /> Tandai semua
+            <CheckCheck className="size-3.5" /> {t("notif.mark_all")}
           </Button>
         </div>
       </div>
@@ -76,9 +78,9 @@ export function NotificationsPage() {
           [...Array(4)].map((_, i) => <Skeleton key={i} className="h-14 w-full rounded-lg" />)
         ) : !data?.notifications.length ? (
           <div className="rounded-xl border border-dashed p-10 text-center">
-            <p className="text-sm font-medium">Tidak ada notifikasi</p>
+            <p className="text-sm font-medium">{t("notif.empty")}</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Kamu akan menerima notifikasi saat di-assign ke tiket atau saat alert observability masuk.
+              {t("notif.empty_desc")}
             </p>
           </div>
         ) : (

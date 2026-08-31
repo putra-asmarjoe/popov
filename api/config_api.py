@@ -14,7 +14,13 @@ from api.deps import get_current_user, require_admin
 from config.settings import settings
 from services.config_manager import patch_env
 from services.doc_loader import reload_docs
+from services.user_store import get_user_locale
 from services.workspace_store import find_workspace_by_id, get_membership, is_workspace_admin  # Fix #39
+
+# Bilingual error messages for config API
+def _err(locale: str, id_msg: str, en_msg: str) -> str:
+    """Return localized error message based on user locale."""
+    return en_msg if locale == "en" else id_msg
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/config", tags=["config"])
@@ -532,10 +538,11 @@ async def test_notification_connection(notif_id: str, admin: dict = Depends(requ
     """Probe Telegram getMe dengan token tersimpan (tanpa mengirim pesan)."""
     import httpx
     from services.notification_store import get_notification, mask_bot_token
+    from services.secret_crypto import decrypt_secret
     doc = await get_notification(notif_id)
     if not doc:
         raise HTTPException(404, "notifikasi tidak ditemukan")
-    token = ((doc.get("config") or {}).get("telegram") or {}).get("bot_token")
+    token = decrypt_secret(((doc.get("config") or {}).get("telegram") or {}).get("bot_token"))
     if not token:
         raise HTTPException(422, "bot_token belum diset")
     try:
@@ -558,6 +565,7 @@ class RegistryUpsert(BaseModel):
     db_uri: Optional[str] = None
     db_name: Optional[str] = None
     db_collection: Optional[str] = None
+    project_ids: Optional[list[str]] = None
 
 
 class RegistryPatch(BaseModel):
@@ -616,6 +624,21 @@ async def create_ws_registry(
         )
     except ValueError as e:
         raise HTTPException(422, str(e))
+
+    # Link service to selected projects (after mirror to service_library)
+    if body.project_ids:
+        from services import service_store
+        from services.mongodb_client import get_db
+        db = get_db()
+        alt_slugs = list({doc["service_id"], doc["service_id"].replace("-", "_"), doc["service_id"].replace("_", "-")})
+        svc = await db[service_store.LIBRARY_COLLECTION].find_one({"serviceId": {"$in": alt_slugs}})
+        if svc:
+            for pid in body.project_ids:
+                try:
+                    await service_store.add_project_ref(pid, str(svc["_id"]), uid)
+                except Exception:
+                    pass  # skip duplicate or invalid
+
     return {"item": doc}
 
 
@@ -693,32 +716,40 @@ class LinkProjectRequest(BaseModel):
 async def link_stack_project(observ_id: str, body: LinkProjectRequest, admin: dict = Depends(require_admin)):
     """Link project ke stack (auto-replace bila kind sama sudah ter-link di project itu)."""
     from services.observability_store import get_target, link_project
+    locale = await get_user_locale(admin.get("_id"))
     target = await get_target(observ_id)
     if not target:
-        raise HTTPException(404, "stack tidak ditemukan")
+        raise HTTPException(404, _err(locale, "stack tidak ditemukan", "stack not found"))
     # auth: global admin ATAU ws-admin workspace pemilik stack
     if admin.get("role") != "admin" and target.get("workspace_id"):
         from services.workspace_store import find_workspace_by_id, is_workspace_admin
         ws = await find_workspace_by_id(target["workspace_id"])
         if not ws or not is_workspace_admin(ws, str(admin["_id"])):
-            raise HTTPException(403, "Hanya workspace admin")
+            raise HTTPException(403, _err(locale, "Hanya workspace admin", "Workspace admin only"))
     try:
         return await link_project(observ_id, body.project_id)
     except ValueError as e:
-        raise HTTPException(422, str(e))
+        # Translate known Indonesian errors
+        err = str(e)
+        if "kind" in err and "belum" in err:
+            raise HTTPException(422, _err(locale, err, "stack missing 'kind' — set stack type before linking"))
+        if "tidak ditemukan" in err:
+            raise HTTPException(422, _err(locale, err, "not found"))
+        raise HTTPException(422, _err(locale, err, err))
 
 
 @router.post("/observability-targets/{observ_id}/unlink-project")
 async def unlink_stack_project(observ_id: str, body: LinkProjectRequest, admin: dict = Depends(require_admin)):
     from services.observability_store import get_target, unlink_project
+    locale = await get_user_locale(admin.get("_id"))
     target = await get_target(observ_id)
     if not target:
-        raise HTTPException(404, "stack tidak ditemukan")
+        raise HTTPException(404, _err(locale, "stack tidak ditemukan", "stack not found"))
     if admin.get("role") != "admin" and target.get("workspace_id"):
         from services.workspace_store import find_workspace_by_id, is_workspace_admin
         ws = await find_workspace_by_id(target["workspace_id"])
         if not ws or not is_workspace_admin(ws, str(admin["_id"])):
-            raise HTTPException(403, "Hanya workspace admin")
+            raise HTTPException(403, _err(locale, "Hanya workspace admin", "Workspace admin only"))
     ok = await unlink_project(observ_id, body.project_id)
     return {"ok": ok}
 
@@ -728,14 +759,15 @@ async def unlink_stack_project(observ_id: str, body: LinkProjectRequest, admin: 
 @router.post("/notification-targets/{notif_id}/link-project")
 async def link_notification_project(notif_id: str, body: LinkProjectRequest, admin: dict = Depends(require_admin)):
     from services.notification_store import get_notification, link_project_notification
+    locale = await get_user_locale(admin.get("_id"))
     doc = await get_notification(notif_id)
     if not doc:
-        raise HTTPException(404, "notifikasi tidak ditemukan")
+        raise HTTPException(404, _err(locale, "notifikasi tidak ditemukan", "notification not found"))
     if admin.get("role") != "admin" and doc.get("workspace_id"):
         from services.workspace_store import find_workspace_by_id, is_workspace_admin
         ws = await find_workspace_by_id(doc["workspace_id"])
         if not ws or not is_workspace_admin(ws, str(admin["_id"])):
-            raise HTTPException(403, "Hanya workspace admin")
+            raise HTTPException(403, _err(locale, "Hanya workspace admin", "Workspace admin only"))
     ok = await link_project_notification(notif_id, body.project_id)
     return {"ok": ok}
 
@@ -743,13 +775,14 @@ async def link_notification_project(notif_id: str, body: LinkProjectRequest, adm
 @router.post("/notification-targets/{notif_id}/unlink-project")
 async def unlink_notification_project(notif_id: str, body: LinkProjectRequest, admin: dict = Depends(require_admin)):
     from services.notification_store import get_notification, unlink_project_notification
+    locale = await get_user_locale(admin.get("_id"))
     doc = await get_notification(notif_id)
     if not doc:
-        raise HTTPException(404, "notifikasi tidak ditemukan")
+        raise HTTPException(404, _err(locale, "notifikasi tidak ditemukan", "notification not found"))
     if admin.get("role") != "admin" and doc.get("workspace_id"):
         from services.workspace_store import find_workspace_by_id, is_workspace_admin
         ws = await find_workspace_by_id(doc["workspace_id"])
         if not ws or not is_workspace_admin(ws, str(admin["_id"])):
-            raise HTTPException(403, "Hanya workspace admin")
+            raise HTTPException(403, _err(locale, "Hanya workspace admin", "Workspace admin only"))
     ok = await unlink_project_notification(notif_id, body.project_id)
     return {"ok": ok}

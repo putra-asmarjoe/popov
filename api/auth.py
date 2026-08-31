@@ -11,10 +11,12 @@ from pydantic import BaseModel
 from pymongo.errors import DuplicateKeyError
 
 from api.deps import get_current_user
+from api.messages import msg, M
 from services.user_store import (
     create_token,
     create_user,
     find_by_email,
+    get_user_locale,
     public_user,
     update_locale,
     verify_password,
@@ -53,12 +55,12 @@ async def register(body: RegisterRequest):
     try:
         user = await create_user(body.name, body.email, body.password)
     except DuplicateKeyError:
-        raise HTTPException(status_code=409, detail="Email sudah terdaftar")
+        raise HTTPException(status_code=409, detail=msg("id", M.EMAIL_ALREADY_REGISTERED))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         logger.error(f"Register failed: {e}")
-        raise HTTPException(status_code=500, detail="Gagal membuat user")
+        raise HTTPException(status_code=500, detail=msg("id", M.FAILED_CREATE_USER))
     return AuthResponse(token=create_token(user), user=public_user(user))
 
 
@@ -67,7 +69,7 @@ async def login(body: LoginRequest):
     """Login dengan email+password → JWT token."""
     user = await find_by_email(body.email)
     if user is None or not verify_password(body.password, user.get("passwordHash", "")):
-        raise HTTPException(status_code=401, detail="Email atau password salah")
+        raise HTTPException(status_code=401, detail=msg("id", M.INVALID_CREDENTIALS))
     return AuthResponse(token=create_token(user), user=public_user(user))
 
 
@@ -88,8 +90,8 @@ async def update_preferences(
 ):
     """Simpan preferensi bahasa user (MULTILANG_PLAN Fase 1)."""
     if body.localePreference not in VALID_LOCALES:
-        raise HTTPException(status_code=400, detail="Invalid locale")
+        raise HTTPException(status_code=400, detail=msg("id", M.INVALID_LOCALE))
     ok = await update_locale(str(current_user["_id"]), body.localePreference)
     if not ok:
-        raise HTTPException(status_code=404, detail="User tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg("id", M.USER_NOT_FOUND))
     return {"localePreference": body.localePreference}

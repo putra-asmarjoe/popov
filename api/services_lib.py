@@ -11,13 +11,14 @@ GET /services/registry: daftar service_id monitoring GLOBAL untuk validasi form
 (read-only, authenticated user apa pun, TANPA URI/kredensial).
 """
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from api.deps import get_current_user
-from services import service_store
+from api.deps import Principal, get_current_principal, get_current_user
+from api.ingest import _get_locale, _msg
+from services import knowledge_store, service_store
 from services.knowledge_store import get_item as get_knowledge_item
 from services.workspace_store import (
     find_project_by_id,
@@ -63,16 +64,29 @@ class LinkKnowledgeRequest(BaseModel):
     knowledgeLibraryId: str
 
 
+class LinkProjectsRequest(BaseModel):
+    project_ids: list[str]
+
+
 def _uid(user: dict) -> str:
     return str(user["_id"])
 
 
 async def _owned_service_or_404(item_id: str, user: dict) -> dict:
     item = await service_store.get_item(item_id)
-    if item is None or item.get("ownerId") != _uid(user):
-        # 404 (bukan 403) agar tidak membocorkan keberadaan item orang lain
+    if item is None:
         raise HTTPException(404, "Service tidak ditemukan")
-    return item
+    uid = _uid(user)
+    owner_id = item.get("ownerId", "")
+    if owner_id == uid:
+        return item
+    if owner_id.startswith("system:"):
+        ws_id = owner_id.split(":", 1)[1]
+        from services.workspace_store import find_workspace_by_id, get_membership
+        ws = await find_workspace_by_id(ws_id)
+        if ws and (get_membership(ws, uid) is not None or str(ws.get("ownerId", "")) == uid):
+            return item
+    raise HTTPException(404, "Service tidak ditemukan")
 
 
 async def _project_ws_admin_guard(project_id: str, user: dict, require_admin: bool):
@@ -221,6 +235,9 @@ async def unlink_service_knowledge(
     return {"removed": ref_id}
 
 
+
+
+
 # ── Services dalam project ────────────────────────────────────────────────────
 
 @router.get("/workspace/{ws_id}")
@@ -261,6 +278,41 @@ async def link_service_to_project(
         raise HTTPException(409, str(e))
     logger.info(f"Service linked to project={project_id} svc='{svc.get('serviceId')}' by {current_user.get('email')}")
     return service_store._public_project_ref(ref, svc)
+
+
+@router.post("/{service_id}/link-projects")
+async def link_service_to_projects(
+    service_id: str,
+    body: LinkProjectsRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Bulk link service ke multiple projects. Skip jika sudah ter-link."""
+    svc = await _owned_service_or_404(service_id, current_user)
+    uid = _uid(current_user)
+    linked = []
+    skipped = []
+    for pid in body.project_ids:
+        try:
+            project = await find_project_by_id(pid)
+            if project is None:
+                skipped.append({"project_id": pid, "reason": "not_found"})
+                continue
+            ws = await find_workspace_by_id(str(project["workspaceId"]))
+            if ws is None:
+                skipped.append({"project_id": pid, "reason": "workspace_not_found"})
+                continue
+            if get_membership(ws, uid) is None and str(ws.get("ownerId", "")) != uid:
+                skipped.append({"project_id": pid, "reason": "not_member"})
+                continue
+            ref = await service_store.add_project_ref(pid, service_id, uid)
+            linked.append(pid)
+        except ValueError:
+            skipped.append({"project_id": pid, "reason": "already_linked"})
+        except Exception as e:
+            logger.warning(f"[Services] Failed to link service {service_id} to project {pid}: {e}")
+            skipped.append({"project_id": pid, "reason": "error"})
+    logger.info(f"[Services] Bulk link service={service_id} -> linked={len(linked)} skipped={len(skipped)} by {current_user.get('email')}")
+    return {"linked": linked, "skipped": skipped}
 
 
 @router.delete("/projects/{project_id}/{ref_id}")

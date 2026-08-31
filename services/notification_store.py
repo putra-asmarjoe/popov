@@ -43,7 +43,7 @@ from services.mongodb_client import get_db
 
 logger = logging.getLogger(__name__)
 
-# Fix #54: cache resolusi channel broadcast per (ws, project, channel) — telegram_agent
+# Fix #54: cache resolusi channel broadcast per (ws, project, channel) — response_agent
 # TIDAK buka DB per kirim. TTL 30s + invalidate saat mutasi channel/link.
 _CHANNEL_CACHE: Dict[Tuple[Optional[str], Optional[str], str], Tuple[float, List[Dict[str, Any]]]] = {}
 _CHANNEL_TTL = 30.0
@@ -59,10 +59,25 @@ NOTIFICATION_TARGETS_COLLECTION = "notification_targets"
 NOTIFICATIONS_COLLECTION = "notifications"  # FE-4 user bell
 
 # Channel yang didukung saat ini; lainnya schema-ready (UI tampilkan disabled)
-SUPPORTED_CHANNELS = ["telegram"]
+SUPPORTED_CHANNELS = ["telegram", "email"]
 CHANNEL_FIELDS = {
     "telegram": ["bot_token", "chat_id"],
+    "email": [
+        "smtp_host",
+        "smtp_port",
+        "security",           # "starttls" | "ssl" | "none"
+        "ignore_tls_error",   # bool — skip verifikasi sertifikat (dev/test)
+        "disable_starttls",   # bool — kirim plain walau port 25/587
+        "smtp_user",          # opsional (open relay dev)
+        "smtp_pass",          # opsional; Fernet-encrypted at-rest (prefix "f:" bila terenkripsi)
+        "from_addr",          # wajib, support "Nama" <email>
+        "to_addrs",           # [str] wajib ≥1
+        "cc_addrs",           # [str] opsional
+        "bcc_addrs",          # [str] opsional
+    ],
 }
+# Field berisi secret yang harus di-strip dari API response → `{field}_masked`
+_SECRET_FIELDS = {"telegram": ["bot_token"], "email": ["smtp_pass"]}
 
 
 def _now() -> datetime:
@@ -77,21 +92,27 @@ def _collection():
     return get_db()[NOTIFICATION_TARGETS_COLLECTION]
 
 
-def mask_bot_token(token: Optional[str]) -> Optional[str]:
+def mask_secret(token: Optional[str]) -> Optional[str]:
     """Tampilkan hanya 4 karakter terakhir untuk verifikasi visual."""
     if not token:
         return None
     return f"***{token[-4:]}" if len(token) > 8 else "***"
 
 
+# Backward-compat alias (api/config_api.py legacy endpoint masih memakai nama lama)
+mask_bot_token = mask_secret
+
+
 def _strip_secrets(doc: dict) -> dict:
-    """Hapus bot_token dari dokumen sebelum keluar API; sisakan mask + chat_id."""
+    """Hapus field secret (bot_token / smtp_pass) dari dokumen sebelum keluar API;
+    sisakan `{field}_masked` + non-secret fields. Generalize utk semua channel."""
     d = dict(doc)
     cfg = dict(d.get("config") or {})
-    tg = dict(cfg.get("telegram") or {})
-    tg["bot_token_masked"] = mask_bot_token(tg.pop("bot_token", None))
-    tg.pop("bot_token", None)
-    cfg["telegram"] = tg
+    for channel, secret_fields in _SECRET_FIELDS.items():
+        ch_cfg = dict(cfg.get(channel) or {})
+        for field in secret_fields:
+            ch_cfg[f"{field}_masked"] = mask_secret(ch_cfg.pop(field, None))
+        cfg[channel] = ch_cfg
     d["config"] = cfg
     return d
 
@@ -117,13 +138,22 @@ async def create_target(
 ) -> dict:
     if channel not in SUPPORTED_CHANNELS:
         raise ValueError(f"channel '{channel}' belum didukung (opsi: {SUPPORTED_CHANNELS})")
+    # Secret di-encrypt best-effort saat create (smtp_pass / bot_token)
+    cfg = dict(config or {})
+    ch_cfg = dict(cfg.get(channel) or {})
+    from services.secret_crypto import reencrypt_if_needed
+
+    for field in _SECRET_FIELDS.get(channel, []):
+        if ch_cfg.get(field):
+            ch_cfg[field] = reencrypt_if_needed(ch_cfg[field])
+    cfg[channel] = ch_cfg
     doc = {
         "notif_id": generate_notif_id(),
         "name": name,
         "channel": channel,
         "workspace_id": workspace_id,
         "project_ids": project_ids or [],
-        "config": config or {},
+        "config": cfg,
         "enabled": True,
         "created_at": _now(),
         "updated_at": _now(),
@@ -192,7 +222,8 @@ async def update_notification(notif_id: str, patch: Dict[str, Any]) -> bool:
 
 
 async def update_notification_config(notif_id: str, channel: str, config: Dict[str, Any]) -> bool:
-    """Update config per-channel (partial merge). Token kosong = biarkan token lama."""
+    """Update config per-channel (partial merge). Secret kosong = biarkan lama.
+    Secret (bot_token/smtp_pass) di-encrypt best-effort (Fernet) sebelum simpan."""
     if channel not in SUPPORTED_CHANNELS:
         return False
     doc = await get_notification(notif_id)
@@ -201,8 +232,13 @@ async def update_notification_config(notif_id: str, channel: str, config: Dict[s
     existing_cfg = dict((doc.get("config") or {}).get(channel) or {})
     for k in CHANNEL_FIELDS[channel]:
         v = config.get(k)
-        if v:  # hanya set field yang diisi (token tidak ter-blank-kan tak sengaja)
-            existing_cfg[k] = v.strip() if isinstance(v, str) else v
+        if v:  # hanya set field yang diisi (secret tidak ter-blank-kan tak sengaja)
+            if k in _SECRET_FIELDS.get(channel, []):
+                from services.secret_crypto import reencrypt_if_needed
+
+                existing_cfg[k] = reencrypt_if_needed(v.strip() if isinstance(v, str) else v)
+            else:
+                existing_cfg[k] = v.strip() if isinstance(v, str) else v
     result = await _collection().update_one(
         {"notif_id": notif_id},
         {"$set": {f"config.{channel}": existing_cfg, "updated_at": _now()}},
@@ -276,7 +312,8 @@ def extract_telegram_creds(notification: Optional[dict]) -> tuple[Optional[str],
     if not notification or notification.get("channel") != "telegram":
         return None, None
     tg = (notification.get("config") or {}).get("telegram") or {}
-    return tg.get("bot_token") or None, tg.get("chat_id") or None
+    from services.secret_crypto import decrypt_secret
+    return decrypt_secret(tg.get("bot_token")) or None, tg.get("chat_id") or None
 
 
 async def verify_bot_token(bot_token: str) -> Dict[str, Any]:
@@ -299,6 +336,72 @@ async def verify_bot_token(bot_token: str) -> Dict[str, Any]:
         return {"ok": False, "error": str(e)[:200]}
 
 
+def extract_email_creds(notification: Optional[dict]) -> Optional[dict]:
+    """Dari dokumen notifikasi → config email lengkap (smtp_pass TERDEKRIPSI).
+    None bila bukan channel email / empty. Dipakai email_client utk kirim."""
+    if not notification or notification.get("channel") != "email":
+        return None
+    cfg = (notification.get("config") or {}).get("email") or {}
+    from services.secret_crypto import decrypt_secret
+
+    def _lst(v):
+        if isinstance(v, list):
+            return [str(x).strip() for x in v if str(x).strip()]
+        if isinstance(v, str):
+            return [x.strip() for x in v.split(",") if x.strip()]
+        return []
+
+    return {
+        "host": (cfg.get("smtp_host") or "").strip() or None,
+        "port": int(cfg.get("smtp_port") or 587),
+        "security": (cfg.get("security") or "starttls").lower(),
+        "ignore_tls_error": bool(cfg.get("ignore_tls_error")),
+        "disable_starttls": bool(cfg.get("disable_starttls")),
+        "user": (cfg.get("smtp_user") or "").strip() or None,
+        "password": decrypt_secret(cfg.get("smtp_pass")) or None,
+        "from_addr": (cfg.get("from_addr") or "").strip() or None,
+        "to": _lst(cfg.get("to_addrs")),
+        "cc": _lst(cfg.get("cc_addrs")),
+        "bcc": _lst(cfg.get("bcc_addrs")),
+    }
+
+
+async def verify_smtp(
+    host: str,
+    port: int = 587,
+    security: str = "starttls",
+    user: Optional[str] = None,
+    password: Optional[str] = None,
+    ignore_tls_error: bool = False,
+    disable_starttls: bool = False,
+) -> Dict[str, Any]:
+    """Probe koneksi SMTP: connect + EHLO + AUTH opsional + QUIT. Return {ok, banner, error}."""
+    import aiosmtplib
+
+    if not host:
+        return {"ok": False, "error": "smtp_host kosong"}
+    try:
+        use_tls = security == "ssl"
+        start_tls = security == "starttls" and not disable_starttls
+        smtp = aiosmtplib.SMTP(
+            hostname=host,
+            port=int(port),
+            use_tls=use_tls,
+            start_tls=start_tls,
+            validate_certs=not ignore_tls_error,
+            timeout=8,
+        )
+        await smtp.connect()
+        ehlo = await smtp.ehlo()
+        if user:
+            await smtp.login(user, password or "")
+        banner = (getattr(ehlo, "message", None) or getattr(ehlo, "response", "") or "").decode("utf-8", "ignore")[:120] if hasattr(ehlo, "decode") else str(getattr(ehlo, "message", "") or "")[:120]
+        await smtp.quit()
+        return {"ok": True, "banner": banner or "connected"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
 async def set_project_link(notif_id: str, project_id: str, link: bool) -> bool:
     """Link/unlink channel ↔ project ($addToSet/$pull project_ids)."""
     update = {"$addToSet": {"project_ids": project_id}} if link else {"$pull": {"project_ids": project_id}}
@@ -309,15 +412,17 @@ async def set_project_link(notif_id: str, project_id: str, link: bool) -> bool:
     return result.matched_count > 0
 
 
-async def record_health(notif_id: str, ok: bool, username: Optional[str] = None) -> None:
-    """Simpan hasil probe getMe: cache bot_username + status health (Fix #40)."""
+async def record_health(notif_id: str, ok: bool, meta: Optional[str] = None, channel: str = "telegram") -> None:
+    """Simpan hasil probe koneksi channel: status health + meta (bot_username / smtp_banner).
+    Generalize — field di `config.{channel}.health_status` (Fix #40 utk telegram)."""
     sets: Dict[str, Any] = {
-        "config.telegram.last_health_check_at": _now().isoformat(),
-        "config.telegram.health_status": "ok" if ok else "error",
+        f"config.{channel}.last_health_check_at": _now().isoformat(),
+        f"config.{channel}.health_status": "ok" if ok else "error",
         "updated_at": _now(),
     }
-    if username:
-        sets["config.telegram.bot_username"] = username
+    if meta:
+        meta_field = "bot_username" if channel == "telegram" else "smtp_banner"
+        sets[f"config.{channel}.{meta_field}"] = meta
     try:
         await _collection().update_one({"notif_id": notif_id}, {"$set": sets})
     except Exception as e:

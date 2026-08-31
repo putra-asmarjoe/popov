@@ -9,7 +9,7 @@ import { api, apiErrorMessage } from "@/lib/api"
 export interface NotificationChannel {
   notif_id: string
   name: string
-  channel: "telegram" // whatsapp/slack/discord = roadmap
+  channel: "telegram" | "email" // whatsapp/slack/discord = roadmap
   workspace_id: string | null
   project_ids: string[]
   enabled: boolean
@@ -21,16 +21,71 @@ export interface NotificationChannel {
       health_status?: "ok" | "error"
       last_health_check_at?: string
     }
+    email?: {
+      smtp_host?: string
+      smtp_port?: number
+      security?: "starttls" | "ssl" | "none"
+      ignore_tls_error?: boolean
+      disable_starttls?: boolean
+      smtp_user?: string | null
+      smtp_pass_masked?: string | null
+      from_addr?: string
+      to_addrs?: string[]
+      cc_addrs?: string[]
+      bcc_addrs?: string[]
+      smtp_banner?: string | null
+      health_status?: "ok" | "error"
+      last_health_check_at?: string
+    }
   }
   /** hanya ada pada GET /projects/{pid}/notification-channels */
   linked?: boolean
 }
 
 export interface ChannelTestResult {
-  getMe: { ok: boolean; bot_id?: number; username?: string; error?: string }
+  getMe?: { ok: boolean; bot_id?: number; username?: string; error?: string }
+  smtp?: { ok: boolean; banner?: string; error?: string }
   test_sent: boolean
   error: string | null
 }
+
+// Input union — telegram | email (discriminated by channel)
+export type ChannelCreateInput =
+  | { channel: "telegram"; name: string; bot_token: string; chat_id: string; project_ids?: string[] }
+  | {
+      channel: "email"
+      name: string
+      smtp_host: string
+      smtp_port: number
+      security: "starttls" | "ssl" | "none"
+      ignore_tls_error: boolean
+      disable_starttls: boolean
+      smtp_user?: string | null
+      smtp_pass?: string | null
+      from_addr: string
+      to_addrs: string[]
+      cc_addrs: string[]
+      bcc_addrs: string[]
+      project_ids?: string[]
+    }
+
+export type ChannelUpdateInput =
+  | { name?: string; enabled?: boolean; bot_token?: string; chat_id?: string }
+  | {
+      name?: string
+      enabled?: boolean
+      smtp_host?: string
+      smtp_port?: number
+      security?: string
+      ignore_tls_error?: boolean
+      disable_starttls?: boolean
+      smtp_user?: string | null
+      smtp_pass?: string | null
+      from_addr?: string
+      to_addrs?: string[]
+      cc_addrs?: string[]
+      bcc_addrs?: string[]
+    }
 
 /** Error 409 delete: channel masih ter-link project (detail.projects berisi daftarnya). */
 export class ChannelLinkedError extends Error {
@@ -63,19 +118,19 @@ export function useChannelMutations(wsId: string | null) {
   const onError = (e: unknown) => toast.error(apiErrorMessage(e))
 
   const create = useMutation({
-    mutationFn: async (input: { name: string; bot_token: string; chat_id: string }) =>
-      (await api.post(`/workspaces/${wsId}/notification-channels`, { ...input, channel: "telegram" })).data as {
+    mutationFn: async (input: ChannelCreateInput) =>
+      (await api.post(`/workspaces/${wsId}/notification-channels`, input)).data as {
         channel: NotificationChannel
       },
     onSuccess: () => {
-      toast.success("Channel dibuat & token tervalidasi")
+      toast.success("Channel dibuat & kredensial tervalidasi")
       invalidate()
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal membuat channel (cek token/chat_id)")),
+    onError: (e) => toast.error(apiErrorMessage(e, "Gagal membuat channel (cek kredensial)")),
   })
 
   const update = useMutation({
-    mutationFn: async ({ notif_id, ...input }: { notif_id: string; name?: string; enabled?: boolean; bot_token?: string; chat_id?: string }) =>
+    mutationFn: async ({ notif_id, ...input }: { notif_id: string } & ChannelUpdateInput) =>
       (await api.patch(`/notification-channels/${notif_id}`, input)).data,
     onSuccess: () => {
       toast.success("Channel diperbarui")
@@ -111,15 +166,47 @@ export function useChannelMutations(wsId: string | null) {
     mutationFn: async (notif_id: string) =>
       (await api.post(`/notification-channels/${notif_id}/test`)).data as ChannelTestResult,
     onSuccess: (d) => {
-      if (!d.getMe.ok) toast.error(`Token invalid: ${d.getMe.error ?? "?"}`)
-      else if (d.test_sent) toast.success(`Tes terkirim via @${d.getMe.username}`)
-      else toast.warning(`Bot @${d.getMe.username} aktif, tapi pesan tes gagal: ${d.error ?? "?"}`)
+      // Telegram: d.getMe; Email: d.smtp — salah satu harus ada
+      const probe = d.getMe ?? d.smtp
+      if (!probe?.ok) toast.error(`Kredensial invalid: ${probe?.error ?? d.error ?? "?"}`)
+      else if (d.test_sent) {
+        if (d.getMe?.username) toast.success(`Tes terkirim via @${d.getMe.username}`)
+        else toast.success("Tes terkirim via email")
+      } else toast.warning(`Koneksi OK, tapi pesan tes gagal: ${d.error ?? "?"}`)
       invalidate()
     },
     onError,
   })
 
   return { create, update, remove, test }
+}
+
+// ── Test raw credentials (before save — create dialog) ───────────────────────
+
+export interface TestCredentialsInput {
+  channel: "telegram" | "email"
+  bot_token?: string
+  chat_id?: string
+  smtp_host?: string
+  smtp_port?: number
+  security?: "starttls" | "ssl" | "none"
+  ignore_tls_error?: boolean
+  disable_starttls?: boolean
+  smtp_user?: string
+  smtp_pass?: string
+}
+
+export interface TestCredentialsResult {
+  getMe?: { ok: boolean; bot_id?: number; username?: string; error?: string }
+  smtp?: { ok: boolean; banner?: string; error?: string }
+  error: string | null
+}
+
+export function useTestChannelCredentials() {
+  return useMutation({
+    mutationFn: async (input: TestCredentialsInput) =>
+      (await api.post("/notification-channels/test-credentials", input)).data as TestCredentialsResult,
+  })
 }
 
 // ── Project-scoped (ProjectNotificationSelector) ─────────────────────────────

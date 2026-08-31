@@ -229,13 +229,18 @@ async def get_services():
 
 
 @router.get("/docs/context/{service_id}")
-async def get_context(service_id: str):
-    """Preview konteks LLM untuk service tertentu."""
-    context = await build_agent_context(service_id)
+async def get_context(service_id: str, workspace_id: Optional[str] = None):
+    """Preview konteks LLM untuk service tertentu.
+
+    Bila workspace_id diberikan, hanya tampilkan grounding docs yang linked
+    ke workspace tersebut (workspace-scoped).
+    """
+    context = await build_agent_context(service_id=service_id, workspace_id=workspace_id)
     if not context:
         raise HTTPException(status_code=404, detail=f"Dokumen service '{service_id}' tidak ditemukan.")
     return {
         "service_id": service_id,
+        "workspace_id": workspace_id,
         "context_length": len(context),
         "context": context,
     }
@@ -311,6 +316,23 @@ async def get_request_logs(limit: int = 50, status: Optional[str] = None):
         return {"total": len(docs), "logs": docs}
     except Exception as e:
         logger.error(f"Failed to fetch request logs: {e}")
+        raise HTTPException(status_code=500, detail=f"Log fetch error: {str(e)}")
+
+
+@router.get("/logs/{request_id}")
+async def get_request_log_detail(request_id: str):
+    """Detail satu request: agent_traces (per-agent durasi + summary) utk UI trace (Fase 1)."""
+    try:
+        collection = get_db()["request_logs"]
+        doc = await collection.find_one({"request_id": request_id})
+        if not doc:
+            raise HTTPException(status_code=404, detail=f"Request {request_id} tidak ditemukan")
+        doc["_id"] = str(doc["_id"])
+        return doc
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch request log detail: {e}")
         raise HTTPException(status_code=500, detail=f"Log fetch error: {str(e)}")
 
 

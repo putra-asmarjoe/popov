@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from api.deps import get_current_user
+from api.messages import msg, M
 from services.notification_store import create_notification
 from services.ticket_alert_store import list_alerts_for_ticket, public_alert
 from services.ticket_store import (
@@ -35,7 +36,7 @@ from services.ticket_store import (
     set_assignees,
     update_ticket,
 )
-from services.user_store import get_user
+from services.user_store import get_user, get_user_locale
 from services.workspace_store import (
     find_project_by_id,
     find_workspace_by_id,
@@ -83,15 +84,20 @@ class ProgressRequest(BaseModel):
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
 
+async def _get_user_locale(user_id: str) -> str:
+    return await get_user_locale(user_id)
+
+
 async def _project_and_ws_or_403(project_id: str, user: Dict[str, Any]):
+    locale = await _get_user_locale(str(user["_id"]))
     project = await find_project_by_id(project_id)
     if project is None:
-        raise HTTPException(status_code=404, detail="Project tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg(locale, M.PROJECT_NOT_FOUND))
     ws = await find_workspace_by_id(project.get("workspaceId", ""))
     if ws is None:
-        raise HTTPException(status_code=404, detail="Workspace tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg(locale, M.WORKSPACE_NOT_FOUND))
     if get_membership(ws, str(user["_id"])) is None:
-        raise HTTPException(status_code=403, detail="Kamu bukan member workspace ini")
+        raise HTTPException(status_code=403, detail=msg(locale, M.NOT_WORKSPACE_MEMBER))
     return project, ws
 
 
@@ -130,6 +136,7 @@ async def _attach_assignees_detail(tickets: List[Dict[str, Any]]) -> List[Dict[s
 
 async def _require_editor(ticket: Dict[str, Any], user: Dict[str, Any]) -> None:
     """Edit hanya pembuat, assignee, ATAU admin workspace."""
+    locale = await _get_user_locale(str(user["_id"]))
     uid = str(user["_id"])
     if uid == str(ticket.get("createdBy")) or uid in ticket.get("assignees", []):
         return
@@ -139,7 +146,7 @@ async def _require_editor(ticket: Dict[str, Any], user: Dict[str, Any]) -> None:
         ws = await find_workspace_by_id(str(project.get("workspaceId", "")))
         if ws and is_workspace_admin(ws, uid):
             return
-    raise HTTPException(status_code=403, detail="Hanya pembuat, assignee, atau admin workspace yang bisa mengedit")
+    raise HTTPException(status_code=403, detail=msg(locale, M.TICKET_EDIT_FORBIDDEN))
 
 
 # ── List & Create ──────────────────────────────────────────────────────────────
@@ -188,10 +195,11 @@ async def create_project_ticket(
     current_user: dict = Depends(get_current_user),
 ):
     project, _ws = await _project_and_ws_or_403(project_id, current_user)
+    locale = await _get_user_locale(str(current_user["_id"]))
     if len(body.title.strip()) < 5:
-        raise HTTPException(status_code=422, detail="Judul minimal 5 karakter")
+        raise HTTPException(status_code=422, detail=msg(locale, M.TITLE_TOO_SHORT))
     if len(body.description.strip()) < 10:
-        raise HTTPException(status_code=422, detail="Deskripsi minimal 10 karakter")
+        raise HTTPException(status_code=422, detail=msg(locale, M.DESCRIPTION_TOO_SHORT))
     try:
         ticket = await create_ticket(
             project,
@@ -241,6 +249,7 @@ async def edit_ticket(
 ):
     ticket = await _check_ticket_access(ticket_id, current_user)
     await _require_editor(ticket, current_user)
+    locale = await _get_user_locale(str(current_user["_id"]))
     try:
         updated = await update_ticket(
             ticket_id,
@@ -256,7 +265,7 @@ async def edit_ticket(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     if updated is None:
-        raise HTTPException(status_code=404, detail="Tiket tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg(locale, M.TICKET_NOT_FOUND))
     return (await _attach_assignees_detail([updated]))[0]
 
 
@@ -271,17 +280,18 @@ async def assign_users(
     ticket = await _check_ticket_access(ticket_id, current_user)
     project = await find_project_by_id(str(ticket["projectId"]))
     ws = await find_workspace_by_id(project.get("workspaceId", ""))
+    locale = await _get_user_locale(str(current_user["_id"]))
     if ws is None:
-        raise HTTPException(status_code=404, detail="Workspace tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg(locale, M.WORKSPACE_NOT_FOUND))
     member_ids = {m.get("userId") for m in ws.get("members", [])}
     invalid = [uid for uid in body.userIds if uid not in member_ids]
     if invalid:
-        raise HTTPException(status_code=422, detail="Ada assignee yang bukan member workspace")
+        raise HTTPException(status_code=422, detail=msg(locale, M.ASSIGNEE_NOT_MEMBER))
     old_assignees = set(ticket.get("assignees", []))
     actor_id = str(current_user["_id"])
     updated = await set_assignees(ticket_id, list(dict.fromkeys(body.userIds)))
     if updated is None:
-        raise HTTPException(status_code=404, detail="Tiket tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg(locale, M.TICKET_NOT_FOUND))
 
     # FE-4: notifikasi assignee baru (skip actor sendiri)
     display = f"{project.get('key', '?')}-{updated.get('ticketNumber', '?')}"
@@ -291,7 +301,7 @@ async def assign_users(
                 await create_notification(
                     uid,
                     "ticket:assigned",
-                    f'Kamu di-assign ke {display} "{updated.get("title", "")}"',
+                    msg(locale, M.ASSIGNMENT_NOTIFICATION, display=display, title=updated.get("title", "")),
                     {
                         "ticketId": ticket_id,
                         "ticketNumber": updated.get("ticketNumber"),
@@ -312,9 +322,10 @@ async def unassign_user(
     current_user: dict = Depends(get_current_user),
 ):
     await _check_ticket_access(ticket_id, current_user)
+    locale = await _get_user_locale(str(current_user["_id"]))
     updated = await remove_assignee(ticket_id, user_id)
     if updated is None:
-        raise HTTPException(status_code=404, detail="Tiket tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg(locale, M.TICKET_NOT_FOUND))
     return (await _attach_assignees_detail([updated]))[0]
 
 
@@ -339,8 +350,9 @@ async def reopen(
     current_user: dict = Depends(get_current_user),
 ):
     ticket = await _check_ticket_access(ticket_id, current_user)
+    locale = await _get_user_locale(str(current_user["_id"]))
     if not can_reopen(ticket.get("status", "open")):
-        raise HTTPException(status_code=422, detail="Hanya tiket resolved/closed yang bisa dibuka kembali")
+        raise HTTPException(status_code=422, detail=msg(locale, M.TICKET_REOPEN_FORBIDDEN))
     updated = await reopen_ticket(ticket, current_user)
     return (await _attach_assignees_detail([updated]))[0]
 
@@ -353,9 +365,10 @@ async def mark_ticket_opened(
     """Tandai tiket 'new' → 'open' (tiket sudah dibuka user). Idempotent & silent —
     selain 'new' → no-op (kembalikan tiket saat ini)."""
     ticket = await _check_ticket_access(ticket_id, current_user)
+    locale = await _get_user_locale(str(current_user["_id"]))
     updated = await mark_opened(ticket, current_user)
     if updated is None:
-        raise HTTPException(status_code=404, detail="Tiket tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg(locale, M.TICKET_NOT_FOUND))
     return (await _attach_assignees_detail([updated]))[0]
 
 
@@ -366,9 +379,10 @@ async def add_progress(
     current_user: dict = Depends(get_current_user),
 ):
     ticket = await _check_ticket_access(ticket_id, current_user)
+    locale = await _get_user_locale(str(current_user["_id"]))
     if len(body.note.strip()) < 2:
-        raise HTTPException(status_code=422, detail="Catatan minimal 2 karakter")
+        raise HTTPException(status_code=422, detail=msg(locale, M.NOTE_TOO_SHORT))
     updated = await add_progress_note(ticket, body.note, current_user)
     if updated is None:
-        raise HTTPException(status_code=404, detail="Tiket tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg(locale, M.TICKET_NOT_FOUND))
     return (await _attach_assignees_detail([updated]))[0]

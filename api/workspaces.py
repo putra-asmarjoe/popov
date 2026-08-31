@@ -18,8 +18,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from api.deps import get_current_user
+from api.messages import msg, M
 from services.mongodb_client import get_db
-from services.user_store import find_by_email, get_user
+from services.user_store import find_by_email, get_user, get_user_locale
 from services.workspace_store import (
     add_member,
     create_project,
@@ -63,6 +64,10 @@ class UpdateProjectRequest(BaseModel):
 
 # ── Helper ─────────────────────────────────────────────────────────────────────
 
+async def _get_user_locale(user_id: str) -> str:
+    return await get_user_locale(user_id)
+
+
 def _require_membership(ws: Dict[str, Any], user: Dict[str, Any]) -> None:
     if get_membership(ws, str(user["_id"])) is None and str(ws.get("ownerId")) != str(user["_id"]):
         raise HTTPException(status_code=403, detail="Kamu bukan member workspace ini")
@@ -85,10 +90,10 @@ async def _get_workspace_or_404(ws_id: str) -> Dict[str, Any]:
 
 @router.get("")
 async def list_my_workspaces(current_user: dict = Depends(get_current_user)):
-    """Workspace milik user. Bila belum punya → auto-create workspace default."""
+    """Workspace milik user. Hanya user pertama (admin) yang auto-create workspace default."""
     user_id = str(current_user["_id"])
     workspaces = await list_workspaces_for_user(user_id)
-    if not workspaces:
+    if not workspaces and current_user.get("role") == "admin":
         default_name = f"Workspace {current_user.get('name', 'Saya')}".strip()
         ws = await create_workspace(default_name, current_user)
         workspaces = [ws]
@@ -100,13 +105,14 @@ async def create_new_workspace(
     body: CreateWorkspaceRequest,
     current_user: dict = Depends(get_current_user),
 ):
+    locale = await _get_user_locale(str(current_user["_id"]))
     try:
         ws = await create_workspace(body.name, current_user)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         logger.error(f"Create workspace failed: {e}")
-        raise HTTPException(status_code=500, detail="Gagal membuat workspace")
+        raise HTTPException(status_code=500, detail=msg(locale, M.FAILED_CREATE_WORKSPACE))
     return public_workspace(ws)
 
 
@@ -119,12 +125,13 @@ async def workspace_detail(
     _require_membership(ws, current_user)
 
     # Join info user untuk tiap member
+    locale = await _get_user_locale(str(current_user["_id"]))
     members: List[Dict[str, Any]] = []
     for m in ws.get("members", []):
         user = await get_user(m.get("userId", ""))
         members.append({
             "userId": m.get("userId"),
-            "name": user.get("name", "(terhapus)") if user else "(terhapus)",
+            "name": user.get("name", msg(locale, M.DELETED_LABEL)) if user else msg(locale, M.DELETED_LABEL),
             "email": user.get("email", "-") if user else "-",
             "globalRole": user.get("role", "member") if user else "-",
             "wsRole": m.get("role", "member"),
@@ -148,17 +155,18 @@ async def invite_member(
     """Invite user (harus sudah terdaftar) ke workspace. Admin workspace only."""
     ws = await _get_workspace_or_404(ws_id)
     _require_admin(ws, current_user)
+    locale = await _get_user_locale(str(current_user["_id"]))
 
     if body.role not in ("admin", "member"):
-        raise HTTPException(status_code=422, detail="Role harus admin atau member")
+        raise HTTPException(status_code=422, detail=msg(locale, M.ROLE_MUST_BE_ADMIN_OR_MEMBER))
 
     target = await find_by_email(body.email)
     if target is None:
-        raise HTTPException(status_code=404, detail=f"User dengan email {body.email} belum terdaftar")
+        raise HTTPException(status_code=404, detail=msg(locale, M.USER_NOT_REGISTERED, email=body.email))
 
     target_id = str(target["_id"])
     if target_id == str(ws.get("ownerId")):
-        raise HTTPException(status_code=409, detail="Owner sudah admin workspace")
+        raise HTTPException(status_code=409, detail=msg(locale, M.OWNER_ALREADY_ADMIN))
 
     await add_member(ws_id, target_id, body.role)
     return {
@@ -180,8 +188,9 @@ async def kick_member(
 ):
     ws = await _get_workspace_or_404(ws_id)
     _require_admin(ws, current_user)
+    locale = await _get_user_locale(str(current_user["_id"]))
     if user_id == str(ws.get("ownerId")):
-        raise HTTPException(status_code=403, detail="Owner tidak bisa dikeluarkan")
+        raise HTTPException(status_code=403, detail=msg(locale, M.OWNER_CANNOT_BE_REMOVED))
     await remove_member(ws_id, user_id)
     return {"removed": True}
 
@@ -207,13 +216,14 @@ async def create_new_project(
 ):
     ws = await _get_workspace_or_404(ws_id)
     _require_membership(ws, current_user)
+    locale = await _get_user_locale(str(current_user["_id"]))
     try:
         project = await create_project(ws_id, body.name, body.key, str(current_user["_id"]))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         logger.error(f"Create project failed: {e}")
-        raise HTTPException(status_code=500, detail="Gagal membuat project")
+        raise HTTPException(status_code=500, detail=msg(locale, M.FAILED_CREATE_PROJECT))
     return public_project(project)
 
 
@@ -227,16 +237,17 @@ async def rename_workspace_project(    ws_id: str,
     URL lama dan nomor tiket (KEY-N) tetap valid."""
     ws = await _get_workspace_or_404(ws_id)
     _require_admin(ws, current_user)
+    locale = await _get_user_locale(str(current_user["_id"]))
     # Pastikan project memang milik workspace ini (bukan project workspace lain)
     project = await find_project_by_id(project_id)
     if project is None or str(project.get("workspaceId")) != ws_id:
-        raise HTTPException(status_code=404, detail="Project tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg(locale, M.PROJECT_NOT_FOUND))
     try:
         updated = await update_project(project_id, body.name)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     if updated is None:
-        raise HTTPException(status_code=404, detail="Project tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg(locale, M.PROJECT_NOT_FOUND))
     return public_project(updated)
 
 
@@ -257,12 +268,13 @@ async def delete_workspace_project(
 
     ws = await _get_workspace_or_404(ws_id)
     _require_admin(ws, current_user)
+    locale = await _get_user_locale(str(current_user["_id"]))
     user_id = str(current_user["_id"])
 
     # Pastikan project milik workspace ini dan masih aktif
     project = await find_project_by_id(project_id)
     if project is None or str(project.get("workspaceId")) != ws_id:
-        raise HTTPException(status_code=404, detail="Project tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg(locale, M.PROJECT_NOT_FOUND))
 
     # 1. Lepas semua service refs
     detached = await detach_project_refs(project_id)
@@ -279,7 +291,7 @@ async def delete_workspace_project(
     # 3. Soft-delete
     deleted = await soft_delete_project(project_id, user_id)
     if deleted is None:
-        raise HTTPException(status_code=404, detail="Project tidak ditemukan")
+        raise HTTPException(status_code=404, detail=msg(locale, M.PROJECT_NOT_FOUND))
 
     logger.info(
         f"Project '{project.get('name')}' soft-deleted by {current_user.get('email')} — "
@@ -291,5 +303,5 @@ async def delete_workspace_project(
         "slugRenamedTo": deleted.get("slug"),
         "servicesDetached": detached,
         "targetsUpdated": r_obs.modified_count + r_notif.modified_count,
-        "note": "Tiket & chat ikut terarsip (data utuh di DB). Pemulihan manual via DB.",
+        "note": msg(locale, M.ARCHIVE_NOTE),
     }

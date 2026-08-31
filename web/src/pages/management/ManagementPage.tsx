@@ -1,21 +1,18 @@
-import { useEffect } from "react"
 import { useTranslation } from "react-i18next"
 import { useSearchParams } from "react-router-dom"
-import { Database, FileText, KeyRound, Radio, ShieldAlert } from "lucide-react"
-import { ServiceLibrary } from "@/components/management/ServiceLibrary"
+import { FileText, KeyRound, ShieldAlert, Unlock } from "lucide-react"
 import { ApiKeyForm } from "@/components/management/ApiKeyForm"
+import { ApiKeyManager } from "@/components/management/ApiKeyManager"
 import { KnowledgeManager } from "@/components/management/KnowledgeManager"
 import { MemoryViewer } from "@/components/management/MemoryViewer"
-import { ObservabilityTargets } from "@/components/workspace/ObservabilityTargets"
 import { OnboardingBackStrip } from "@/components/workspace/OnboardingBackStrip"
 import { useAuth } from "@/hooks/useAuth"
 import { cn } from "@/lib/utils"
 
 const TABS = [
-  { id: "services", icon: Database },
   { id: "knowledge", icon: FileText },
-  { id: "stacks", icon: Radio },
   { id: "apikeys", icon: KeyRound },
+  { id: "apitokens", icon: Unlock },
   { id: "memory", icon: ShieldAlert },
 ] as const
 
@@ -23,30 +20,26 @@ type TabId = (typeof TABS)[number]["id"]
 
 /**
  * ManagementPage (/management) — admin global.
- * Fix #58: tab Docs + Knowledge diKONSOLIDASI jadi satu tab "Knowledge"
- * (sub-view Grounding Sistem / Knowledge Tenant). /management?tab=docs → redirect.
+ * Tab "Knowledge" renders Grounding — System (AgentDocsManager) only.
+ * Tab "API Keys" renders LLM provider credentials (BYOK).
+ * Tab "API Tokens" renders API key management for external integrations.
+ * Tab "Memory" renders Second Brain episodes.
  */
 export function ManagementPage() {
   const { t } = useTranslation("management")
+  const { t: tc } = useTranslation("common")
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
-  const tab = (searchParams.get("tab") ?? "services") as TabId
-
-  // Backward-compat: ?tab=docs (lama) → tab=knowledge&view=grounding
-  useEffect(() => {
-    if (searchParams.get("tab") === "docs") {
-      setSearchParams({ tab: "knowledge", view: "grounding" }, { replace: true })
-    }
-  }, [searchParams, setSearchParams])
+  const tab = (searchParams.get("tab") ?? "knowledge") as TabId
 
   if (user?.role !== "admin") {
     return (
       <div className="p-8">
         <div className="mx-auto max-w-md rounded-lg border border-dashed p-8 text-center">
           <ShieldAlert className="mx-auto size-8 text-muted-foreground/60" />
-          <p className="mt-3 text-sm font-medium">Akses ditolak</p>
+          <p className="mt-3 text-sm font-medium">{tc("notif.access_denied")}</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Panel management hanya untuk admin.
+            {tc("notif.admin_only")}
           </p>
         </div>
       </div>
@@ -82,9 +75,8 @@ export function ManagementPage() {
       </div>
 
       <div className="space-y-10 pt-6">
-        {tab === "services" && <ServiceLibrary />}
-        {tab === "stacks" && <ObservabilityTargets />}
         {tab === "apikeys" && <ApiKeyForm />}
+        {tab === "apitokens" && <ApiKeyManager />}
         {tab === "knowledge" && <KnowledgeManager />}
         {tab === "memory" && <MemoryViewer />}
       </div>

@@ -22,7 +22,7 @@ export interface LlmConfig {
   baseUrls: Record<string, string>
   keys: Record<string, "set" | "unset">
   keysMasked: Record<string, string>
-  embedding: { mode: "local" | "provider"; provider?: string | null; model?: string }
+  embedding: { mode: "local" | "provider"; provider?: string | null; model?: string; maxChars?: number }
   restart_required?: boolean
 }
 
@@ -95,7 +95,7 @@ export function useUpdateLlm() {
       models?: Record<string, string> // Fix #56
       baseUrls?: Record<string, string>
       apiKey?: Record<string, string>
-      embedding?: { mode: string; provider?: string; model?: string }
+      embedding?: { mode: string; provider?: string; model?: string; maxChars?: number }
     }) => (await api.put("/config/llm", input)).data as LlmConfig,
     onSuccess: (data) => {
       toast.success(t("toasts.llm_saved"))
@@ -334,6 +334,7 @@ export interface RegistryInput {
   db_name?: string
   db_collection?: string
   enabled?: boolean
+  project_ids?: string[]
 }
 
 export function useWsRegistryMutations(wsId?: string) {

@@ -122,7 +122,7 @@ export function ApiKeyForm() {
     model: string // Fix #56: model per provider
   } | null>(null)
   // Modal Embedding (konfigurasi embedding provider)
-  const [embModal, setEmbModal] = useState<{ provider: string; model: string } | null>(null)
+  const [embModal, setEmbModal] = useState<{ provider: string; model: string; maxChars: number } | null>(null)
 
   if (isLoading || !data) {
     return <Skeleton className="h-64 w-full rounded-lg" />
@@ -212,6 +212,7 @@ export function ApiKeyForm() {
     setEmbModal({
       provider: data.embedding?.provider ?? "openrouter",
       model: data.embedding?.model ?? "",
+      maxChars: data.embedding?.maxChars ?? 8000,
     })
   }
 
@@ -229,6 +230,7 @@ export function ApiKeyForm() {
           mode: "provider",
           provider: embModal.provider,
           model: embModal.model.trim(),
+          maxChars: embModal.maxChars,
         },
       },
       { onSuccess: () => closeEmbModal() },
@@ -256,7 +258,7 @@ export function ApiKeyForm() {
         <p className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
           {t("apikeys.eyebrow")}
         </p>
-        <h2 className="mt-1 text-lg font-semibold tracking-tight">API Keys</h2>
+        <h2 className="mt-1 text-lg font-semibold tracking-tight">{t("apikeys.title")}</h2>
         <p
           className="mt-1 max-w-2xl text-sm text-muted-foreground"
           dangerouslySetInnerHTML={{ __html: t("apikeys.description") }}
@@ -358,7 +360,7 @@ export function ApiKeyForm() {
           <li className="flex items-center gap-3 rounded-lg border px-3 py-2.5">
             <HardDrive className="size-4 shrink-0 text-muted-foreground/70" />
             <div className="min-w-0 flex-1">
-              <span className="text-sm font-medium">Local Only</span>
+              <span className="text-sm font-medium">{t("apikeys.local_only")}</span>
               <span className="ml-2 text-[11px] text-muted-foreground">{t("apikeys.local_only_hint")}</span>
             </div>
             {data.embedding?.mode === "local" ? (
@@ -388,12 +390,17 @@ export function ApiKeyForm() {
               {data.embedding?.mode === "provider" ? (
                 <>
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium">Provider</span>
+                    <span className="text-sm font-medium">{t("apikeys.provider_label")}</span>
                     {data.embedding.mode === "provider" && <ActiveBadge />}
                   </div>
                   <span className="font-mono text-[11px] text-muted-foreground">
                     {data.embedding.provider} · {data.embedding.model || "-"}
                   </span>
+                  {data.embedding.maxChars && (
+                    <span className="ml-2 inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      {data.embedding.maxChars.toLocaleString()} chars
+                    </span>
+                  )}
                   {rowResult?.id === "embed-provider" && !rowTesting && (
                     <div className="mt-1.5">
                       <TestResultChip text={rowResult.text} />
@@ -478,7 +485,7 @@ export function ApiKeyForm() {
           {llmModal && (
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <Label>Provider</Label>
+                <Label>{t("apikeys.provider_label")}</Label>
                 <Select
                   value={llmModal.provider}
                   onValueChange={(v) =>
@@ -586,7 +593,7 @@ export function ApiKeyForm() {
           {embModal && (
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <Label>Provider</Label>
+                <Label>{t("apikeys.provider_label")}</Label>
                 <Select
                   value={embModal.provider}
                   onValueChange={(v) => setEmbModal((s) => (s ? { ...s, provider: v } : s))}
@@ -608,6 +615,22 @@ export function ApiKeyForm() {
                   placeholder={t("apikeys.emb_model_placeholder")}
                   className="font-mono text-xs"
                 />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="emb-modal-maxchars">{t("apikeys.emb_max_chars_label")}</Label>
+                <Input
+                  id="emb-modal-maxchars"
+                  type="number"
+                  min={256}
+                  max={32000}
+                  value={embModal.maxChars}
+                   onChange={(e) => setEmbModal((s) => (s ? { ...s, maxChars: parseInt(e.target.value) || 8000 } : s))}
+                   placeholder="8000"
+                  className="font-mono text-xs"
+                />
+                <p className="text-[0.7rem] text-muted-foreground">
+                  {t("apikeys.emb_max_chars_hint")}
+                </p>
               </div>
               <div className="flex flex-col items-stretch gap-2">
                 <div className="flex flex-wrap items-center gap-2">
