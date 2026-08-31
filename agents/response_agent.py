@@ -43,7 +43,9 @@ def _append_confidence_block(formatted: str, confidence: float, data_gaps: list,
         _CONFIDENCE_BLOCK_TEXTS["en"],
     )
     header = f"\n\n---\n{texts['header'].format(pct=int(confidence * 100))}"
-    gap_section = f"\n{texts['gaps_title']}\n" + "\n".join(f"• {g}" for g in data_gaps)
+    gap_section = f"\n{texts['gaps_title']}\n" + "\n".join(
+        f"• {(g.get('description') if isinstance(g, dict) else g)}" for g in data_gaps
+    )
     suggest_section = ""
     if suggested_next:
         suggest_section = f"\n\n{texts['suggest_title']}\n" + "\n".join(
