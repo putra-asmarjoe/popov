@@ -8,7 +8,9 @@ PREVIOUS CONVERSATION (use to resolve "that one"/"continue"):
 
 User question: "{{intent}}"
 
-Explain this ticket's condition in concise Indonesian or the user's language, in Telegram Markdown
+Explain this ticket's condition in {{reply_language}}, in Telegram Markdown
 (single asterisk for bold, example *text*). Mention: status, severity, service, who created it &
 assignees, tags, and summarize the progress log (if any). DO NOT invent data not present in the JSON.
 If the question refers to previous conversation, use that context.
+
+IMPORTANT: Reply in {{reply_language}}. All prose must be in {{reply_language}} — never mix or default to another language.

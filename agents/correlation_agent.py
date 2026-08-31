@@ -3,7 +3,6 @@ import logging
 from typing import Dict, Any
 from langchain_core.messages import SystemMessage, HumanMessage
 from state.schema import AgentState
-from services.doc_loader import build_agent_context
 from services.llm_factory import get_chat_llm
 from services.prompt_loader import render as render_prompt
 from config.settings import settings
@@ -13,7 +12,7 @@ logger = logging.getLogger(__name__)
 # Fix #54: LLM dibangun lazily saat invoke (config BYOK dari DB, refresh tanpa restart).
 
 # Fix #53: pesan profesional saat LLM tidak tersedia — dipakai correlation fallback
-# & telegram_agent (semua branch LLM). Arahkan user cek config/limit, bukan bingung.
+# & response_agent (semua branch LLM). Arahkan user cek config/limit, bukan bingung.
 # Fix #113: bilingual — locale dari preferensi user (localePreference), fallback "id".
 _LLM_UNAVAILABLE_TEXTS = {
     "id": (
@@ -77,6 +76,133 @@ def infra_diag_steps(title: str) -> str:
 # Prompt system RCA dipindah ke file-driven: prompts/correlation_system.md
 # (editable, hot-reload via POST /prompts/reload).
 
+from state.constants import CONFIDENCE_THRESHOLD, AUTO_LOOP_MAX
+
+
+async def _resolve_investigation_locale(state: dict) -> str:
+    """Resolusi locale utk teks V2.1 (gap/suggested): web chat → preferensi user
+    (detect dari isi percakapan dulu), telegram → locale owner workspace (Fix #105)."""
+    try:
+        from services.conversation import detect_chat_locale
+        from services.user_store import get_user_locale
+
+        sender = state.get("sender") or {}
+        if sender.get("channel") == "telegram":
+            from services.locale_pref import get_workspace_locale
+            return await get_workspace_locale(state.get("workspace_id"))
+        user_locale = await get_user_locale(sender.get("user_id"))
+        return detect_chat_locale(state.get("conversation_history") or [], default=user_locale)
+    except Exception:
+        return "id"
+
+
+# ── CHATFLOW V2.1 (Tahap 1): gap, confidence, suggested_next — TANPA LLM ──────
+# Semua teks user-facing bilingual (konvensi multi-bahasa Popov), bukan if/else.
+
+_GAP_DESCRIPTIONS = {
+    "id": {
+        "metrics_agent": "Error rate & HPA metrics belum diperiksa (relevan untuk traffic spike / resource exhaustion)",
+        "mongo_agent":   "Application logs belum diperiksa (relevan untuk error patterns & database issues)",
+        "trace_agent":   "Distributed traces belum diperiksa (relevan untuk downstream timeout & latency)",
+        "health_agent":  "Koneksi database belum diuji (relevan untuk downstream connection failures)",
+        "span_agent":    "Detail span central log belum diperiksa (relevan untuk tracing error spesifik)",
+    },
+    "en": {
+        "metrics_agent": "Error rate & HPA metrics not yet examined (relevant for traffic spike / resource exhaustion)",
+        "mongo_agent":   "Application logs not yet examined (relevant for error patterns & database issues)",
+        "trace_agent":   "Distributed traces not yet examined (relevant for downstream timeout & latency)",
+        "health_agent":  "Database connection not yet tested (relevant for downstream connection failures)",
+        "span_agent":    "Central log span detail not yet examined (relevant for specific error tracing)",
+    },
+}
+
+
+def _compute_data_gaps(state: dict, locale: str = "id") -> tuple[list[str], list[str]]:
+    """
+    Bandingkan lanes yang SEHARUSNYA dijalankan (planned_nodes) vs yang BENAR-BENAR
+    dijalankan (agents_visited). Return (gap_descriptions, gap_nodes) — sinkron index.
+
+    CHATFLOW V2.1: tuple memisahkan teks human-readable dari nama node graph.
+    """
+    planned = set(state.get("planned_nodes") or [])
+    visited = set(state.get("agents_visited") or [])
+    missing = planned - visited
+    texts = _GAP_DESCRIPTIONS.get(locale, _GAP_DESCRIPTIONS["id"])
+
+    gap_descriptions = []
+    gap_nodes = []
+    for node in missing:
+        desc = texts.get(node)
+        if desc:
+            gap_descriptions.append(desc)
+            gap_nodes.append(node)
+    return gap_descriptions, gap_nodes
+
+
+def _compute_confidence(state: dict, gap_descriptions: list[str]) -> float:
+    """
+    Heuristic confidence (tanpa LLM):
+    - Penalti per gap (maks -30%)
+    - Penalti hypothesis 'unknown' (-20%)
+    - Bonus historical context Second Brain (+10%) — sinyal = second_brain_context
+      (bukan knowledge_context yang merupakan playbook universal)
+    """
+    planned = state.get("planned_nodes") or []
+    hypothesis = (state.get("triage_result") or {}).get("hypothesis", "unknown")
+    # Fix #6 adaptasi: knowledge_context = playbook universal (bukan Second Brain);
+    # sinyal historis yang benar = second_brain_context / historical_block.
+    has_history = bool(state.get("second_brain_context")) or bool(state.get("historical_block"))
+
+    base = 1.0
+    if planned:
+        gap_ratio = len(gap_descriptions) / max(len(planned), 1)
+        base -= gap_ratio * 0.30
+    if hypothesis == "unknown":
+        base -= 0.20
+    if has_history:
+        base += 0.10
+    return round(max(0.0, min(1.0, base)), 2)
+
+
+def _compute_suggested_next(state: dict, gap_descriptions: list[str], confidence: float,
+                            locale: str = "id") -> list[str]:
+    """
+    Bila confidence >= threshold & tidak ada gap → [].
+    Bila ada gap → 2-3 aksi spesifik (deterministik mapping). Tanpa LLM.
+    """
+    from state.constants import CONFIDENCE_THRESHOLD
+
+    if confidence >= CONFIDENCE_THRESHOLD and not gap_descriptions:
+        return []
+
+    hypothesis = (state.get("triage_result") or {}).get("hypothesis", "unknown")
+    service = state.get("service_name") or "service ini"
+    visited = set(state.get("agents_visited") or [])
+    lang_id = locale == "id"
+    suggestions = []
+
+    if "metrics_agent" not in visited:
+        suggestions.append(
+            f"Cek error rate & CPU/memory metrics {service} 1 jam terakhir" if lang_id
+            else f"Check error rate & CPU/memory metrics {service} for the last 1 hour"
+        )
+    if "health_agent" not in visited and hypothesis in ("downstream_timeout", "db_connection"):
+        suggestions.append(
+            f"Uji koneksi database {service}" if lang_id else f"Test database connection {service}"
+        )
+    if "trace_agent" not in visited:
+        suggestions.append(
+            f"Lihat distributed trace {service} untuk request yang gagal" if lang_id
+            else f"View distributed trace {service} for failed requests"
+        )
+    if state.get("preset_trace_ids") and "span_agent" not in visited:
+        suggestions.append(
+            "Periksa detail span traceId yang terlampir di tiket" if lang_id
+            else "Check the span detail of the traceId attached to the ticket"
+        )
+
+    return suggestions[:3]
+
 
 async def correlation_agent(state: AgentState) -> dict:
     """
@@ -92,10 +218,24 @@ async def correlation_agent(state: AgentState) -> dict:
     span_available = state.get("span_available", False)
     health_result = state.get("health_result")
     agents_visited = ["correlation_agent"]
+    # Fix #143: bahasa analisis eksplisit — dipakai utk reply_language di prompt LLM
+    # DAN teks V2.1 (gap/suggested). Web chat = detect → user pref; telegram = owner ws.
+    locale = await _resolve_investigation_locale(state)
 
     logger.info(f"CorrelationAgent performing root cause analysis for service='{service_name}'")
 
-    doc_context = (await build_agent_context(service_name)) or "Tidak ada grounding doc khusus."
+    doc_context = ""
+    # Gap 1 Fase 6: Pipeline B removed — knowledge_agent now handles all knowledge retrieval
+    # via search_relevant_knowledge() including agent_docs. doc_context kept as empty string
+    # for prompt template compatibility. Rollback: uncomment below to restore Pipeline B.
+    # try:
+    #     from services.doc_loader import build_agent_context
+    #     doc_context = await build_agent_context(
+    #         service_id=service_name,
+    #         workspace_id=state.get("workspace_id"),
+    #     )
+    # except Exception as e:
+    #     logger.warning(f"[Correlation] build_agent_context failed: {e}")
 
     # ── Second Brain Fase 2: READ (Hybrid Search + confidence boost, non-blocking) ─
     second_brain_context: dict | None = None
@@ -195,6 +335,7 @@ explain from the ticket description what might be happening; stay honest about d
         trace_summary=trace_summary,
         span_section=span_section,
         health_section=health_section,
+        reply_language=("English" if locale == "en" else "Bahasa Indonesia"),
     )
 
     try:
@@ -220,6 +361,28 @@ explain from the ticket description what might be happening; stay honest about d
             "trace_available": state.get("trace_available", False),
         }
 
+        # ── CHATFLOW V2.1 (Tahap 1): gap, confidence, suggested_next — tanpa LLM ──
+        # locale sudah di-resolve di awal fungsi (utk reply_language + teks V2.1).
+        gap_descriptions, gap_nodes = _compute_data_gaps(state, locale)
+        confidence = _compute_confidence(state, gap_descriptions)
+        suggested_next = _compute_suggested_next(state, gap_descriptions, confidence, locale)
+        # Increment loop counter DI SINI (node), bukan di router — router pure.
+        loop_count = state.get("internal_loop_count", 0)
+        if confidence < CONFIDENCE_THRESHOLD and loop_count < AUTO_LOOP_MAX:
+            loop_count += 1
+        base_return = {
+            "correlation_result": correlation_result,
+            "root_cause_assessment": assessment,
+            "episode_id": None,
+            "second_brain_context": second_brain_context,
+            "agents_visited": agents_visited,
+            "investigation_confidence": confidence,
+            "data_gaps": gap_descriptions,
+            "gap_nodes": gap_nodes,
+            "suggested_next": suggested_next,
+            "internal_loop_count": loop_count,
+        }
+
         # ── Second Brain Fase 1: Writer (fire-and-forget, non-blocking) ─────
         try:
             from services.second_brain import generate_episode_id, write_episode_bg
@@ -231,22 +394,19 @@ explain from the ticket description what might be happening; stay honest about d
             state_snapshot["episode_id"] = episode_id
             asyncio.create_task(write_episode_bg(state_snapshot, episode_id))
             logger.info(f"[SecondBrain] Episode {episode_id} scheduled for service={service_name}")
-            return {
-                "correlation_result": correlation_result,
-                "root_cause_assessment": assessment,
-                "episode_id": episode_id,
-                "second_brain_context": second_brain_context,
-                "agents_visited": agents_visited,
-            }
+            # Gap 2 Fase 3: link episode → ticket (jika ada ticket di context, non-blocking)
+            tc = state.get("ticket_context") or {}
+            ticket_id = tc.get("ticket_id") or state.get("ticket_id")
+            if ticket_id and episode_id:
+                try:
+                    from services.ticket_store import link_episode_to_ticket
+                    asyncio.create_task(link_episode_to_ticket(str(ticket_id), episode_id))
+                except Exception as e3:
+                    logger.warning(f"[SecondBrain] link_episode_to_ticket scheduling failed (non-fatal): {e3}")
+            return {**base_return, "episode_id": episode_id}
         except Exception as e2:
             logger.warning(f"[SecondBrain] scheduling write_episode failed (non-fatal): {e2}")
-            return {
-                "correlation_result": correlation_result,
-                "root_cause_assessment": assessment,
-                "episode_id": None,
-                "second_brain_context": second_brain_context,
-                "agents_visited": agents_visited,
-            }
+            return {**base_return, "episode_id": None}
 
     except Exception as e:
         logger.error(f"CorrelationAgent failed for service='{service_name}': {e}", exc_info=True)
@@ -270,6 +430,25 @@ explain from the ticket description what might be happening; stay honest about d
             "metrics_available": state.get("metrics_available", False),
             "trace_available": state.get("trace_available", False),
         }
+        # CHATFLOW V2.1: fallback juga hitung gap/confidence (transparansi walau LLM gagal)
+        fb_gaps, fb_gap_nodes = _compute_data_gaps(state, locale)
+        fb_conf = _compute_confidence(state, fb_gaps)
+        fb_next = _compute_suggested_next(state, fb_gaps, fb_conf, locale)
+        fb_loop = state.get("internal_loop_count", 0)
+        if fb_conf < CONFIDENCE_THRESHOLD and fb_loop < AUTO_LOOP_MAX:
+            fb_loop += 1
+        fallback_base = {
+            "correlation_result": fallback_result,
+            "root_cause_assessment": "unknown",
+            "episode_id": None,
+            "second_brain_context": second_brain_context,
+            "agents_visited": agents_visited,
+            "investigation_confidence": fb_conf,
+            "data_gaps": fb_gaps,
+            "gap_nodes": fb_gap_nodes,
+            "suggested_next": fb_next,
+            "internal_loop_count": fb_loop,
+        }
         # Still generate episode_id with unknown assessment (additive, jangan drop)
         try:
             from services.second_brain import generate_episode_id, write_episode_bg
@@ -279,18 +458,6 @@ explain from the ticket description what might be happening; stay honest about d
             state_snapshot["correlation_result"] = fallback_result
             state_snapshot["episode_id"] = episode_id
             asyncio.create_task(write_episode_bg(state_snapshot, episode_id))
-            return {
-                "correlation_result": fallback_result,
-                "root_cause_assessment": "unknown",
-                "episode_id": episode_id,
-                "second_brain_context": second_brain_context,
-                "agents_visited": agents_visited,
-            }
+            return {**fallback_base, "episode_id": episode_id}
         except Exception:
-            return {
-                "correlation_result": fallback_result,
-                "root_cause_assessment": "unknown",
-                "episode_id": None,
-                "second_brain_context": second_brain_context,
-                "agents_visited": agents_visited,
-            }
+            return {**fallback_base, "episode_id": None}

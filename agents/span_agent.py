@@ -126,7 +126,7 @@ async def span_agent(state: AgentState) -> dict:
             "span_available": False,
             "span_mode": True,
             "trace_id": None,
-            "next_agent": "telegram_agent",
+            "next_agent": "response_agent",
             "agents_visited": agents_visited,
         }
     logger.info(
@@ -161,7 +161,7 @@ async def span_agent(state: AgentState) -> dict:
                 "span_available": False,
                 "span_mode": True,
                 "trace_id": None,
-                "next_agent": "telegram_agent",
+                "next_agent": "response_agent",
                 "agents_visited": agents_visited,
             }
         except Exception as e:
@@ -172,7 +172,7 @@ async def span_agent(state: AgentState) -> dict:
                 "span_available": False,
                 "span_mode": True,
                 "trace_id": None,
-                "next_agent": "telegram_agent",
+                "next_agent": "response_agent",
                 "agents_visited": agents_visited,
             }
 
@@ -184,7 +184,7 @@ async def span_agent(state: AgentState) -> dict:
             "span_mode": True,
             "trace_id": None,
             "raw_documents": spans,
-            "next_agent": "telegram_agent",
+            "next_agent": "response_agent",
             "agents_visited": agents_visited,
         }
 
@@ -204,7 +204,7 @@ async def span_agent(state: AgentState) -> dict:
                 "span_available": False,
                 "span_mode": True,
                 "trace_id": None,
-                "next_agent": "telegram_agent",
+                "next_agent": "response_agent",
                 "agents_visited": agents_visited,
             }
         except Exception as e:
@@ -215,7 +215,7 @@ async def span_agent(state: AgentState) -> dict:
                 "span_available": False,
                 "span_mode": True,
                 "trace_id": None,
-                "next_agent": "telegram_agent",
+                "next_agent": "response_agent",
                 "agents_visited": agents_visited,
             }
 
@@ -227,7 +227,7 @@ async def span_agent(state: AgentState) -> dict:
             "span_mode": True,
             "trace_id": None,
             "raw_documents": spans,
-            "next_agent": "telegram_agent",
+            "next_agent": "response_agent",
             "agents_visited": agents_visited,
         }
 
@@ -242,7 +242,7 @@ async def span_agent(state: AgentState) -> dict:
             "span_available": False,
             "span_mode": True,
             "trace_id": None,
-            "next_agent": "telegram_agent",
+            "next_agent": "response_agent",
             "agents_visited": agents_visited,
         }
 
@@ -262,7 +262,7 @@ async def span_agent(state: AgentState) -> dict:
             "span_available": False,
             "span_mode": True,
             "trace_id": trace_id,
-            "next_agent": "telegram_agent",
+            "next_agent": "response_agent",
             "agents_visited": agents_visited,
         }
     except Exception as e:
@@ -273,7 +273,7 @@ async def span_agent(state: AgentState) -> dict:
             "span_available": False,
             "span_mode": True,
             "trace_id": trace_id,
-            "next_agent": "telegram_agent",
+            "next_agent": "response_agent",
             "agents_visited": agents_visited,
         }
 
@@ -305,6 +305,6 @@ async def span_agent(state: AgentState) -> dict:
         "trace_id": trace_id,
         "raw_documents": spans,
         "service_name": final_service,
-        "next_agent": "telegram_agent",
+        "next_agent": "response_agent",
         "agents_visited": agents_visited,
     }

@@ -117,6 +117,6 @@ async def data_agent(state: AgentState) -> dict:
         "data_limit": limit,
         "collection_name": resolved_collection,
         "query_used": {},
-        "next_agent": "telegram_agent",
+        "next_agent": "response_agent",
         "agents_visited": agents_visited,
     }

@@ -116,7 +116,7 @@ async def mongo_agent(state: AgentState) -> dict:
                 f"Analisis mengandalkan observability (metrics/trace/alert)."
             ),
             "mongo_available": False,
-            "next_agent": "telegram_agent",
+            "next_agent": "response_agent",
             "agents_visited": agents_visited,
         }
 
@@ -156,7 +156,7 @@ async def mongo_agent(state: AgentState) -> dict:
                 f"Data log dari DB tidak tersedia saat ini."
             ),
             "mongo_available": False,
-            "next_agent": "telegram_agent",
+            "next_agent": "response_agent",
             "agents_visited": agents_visited,
         }
     except Exception as e:
@@ -176,7 +176,7 @@ async def mongo_agent(state: AgentState) -> dict:
             "raw_documents": [],
             "query_used": query_used,
             "mongo_summary": mongo_summary,
-            "next_agent": "telegram_agent",
+            "next_agent": "response_agent",
             "agents_visited": agents_visited,
         }
 
@@ -185,7 +185,7 @@ async def mongo_agent(state: AgentState) -> dict:
         "raw_documents": docs,
         "query_used": query_used,
         "mongo_summary": mongo_summary,
-        "next_agent": "telegram_agent",
+        "next_agent": "response_agent",
         "agents_visited": agents_visited,
     }
 

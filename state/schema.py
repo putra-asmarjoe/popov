@@ -61,7 +61,7 @@ class AgentState(TypedDict):
     formatted_message: str             # pesan yang sudah di-format LLM
     telegram_sent: bool
     telegram_error: Optional[str]
-    # FE-5: True bila dipicu dari chat web — telegram_agent hanya format, TIDAK kirim ke Telegram
+    # FE-5: True bila dipicu dari chat web — response_agent hanya format, TIDAK kirim ke Telegram
     suppress_telegram: Optional[bool]
 
     # Supervisor routing
@@ -121,7 +121,7 @@ class AgentState(TypedDict):
     conversation_history: Optional[list]  # [{role: user|assistant, content}]
 
     # Fix #40 — notifikasi multi-bot: channel asal pesan masuk (mention/callback/webhook).
-    # Diisi listener/webhook; telegram_agent membalas via channel ini saja.
+    # Diisi listener/webhook; response_agent membalas via channel ini saja.
     origin_notif_id: Optional[str]
 
     # Chat by Project — lane project_agent (read-only fase 1).
@@ -131,5 +131,18 @@ class AgentState(TypedDict):
     #   {type, ticket_refs?: [{ticketNumber,ticketId}], suggestions?: [str]}
     chat_depth: Optional[str]
     project_result: Optional[dict]
+
+    # Chat suggestions (chips follow-up) — diisi agent terminal (ticket_agent/
+    # response_agent/project_agent) utk meta FE; bilingual, deterministik
+    # (services/offer_planner.build_chat_suggestions).
+    chat_suggestions: Optional[list]
+
+    # CHATFLOW V2.1 (Tahap 1) — transparansi & investigasi otonom.
+    # Diisi correlation_agent setelah RCA (tanpa LLM tambahan).
+    investigation_confidence: float   # 0.0 – 1.0, default 0.0
+    data_gaps: list[str]              # deskripsi human-readable lane yang di-skip
+    gap_nodes: list[str]              # nama node graph yang di-skip (utk router Tahap 4)
+    suggested_next: list[str]         # aksi investigasi spesifik (maks 3)
+    internal_loop_count: int          # jumlah kali autonomous loop berjalan, default 0
 
 

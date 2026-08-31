@@ -1,131 +1,121 @@
 """
-Knowledge Agent — FE-7.
-Node pipeline TANPA LLM: menyatukan dua sumber knowledge kontekstual menjadi
-satu blok `knowledge_context` untuk correlation_agent:
+Knowledge Agent — FE-7 (Gap 1 refactor).
+Node pipeline TANPA LLM: menyusun `knowledge_context` untuk correlation_agent.
 
-1. Knowledge Universal (bawaan backend/repo — diubah via git, bukan UI):
-   playbook infra umum (oom_killed, pod crash, dll) yang dicocokkan KEYWORD dari
-   intent + hypothesis + nama alert. Playbook service-specific TIDAK diduplikasi
-   di sini (sudah masuk grounding doc correlation via build_agent_context).
-2. Knowledge Workspace (FE-7): referensi library milik workspace bila
-   `workspace_id` tersedia (jalur chat/tiket web).
+Gap 1: dari flat document dump → relevance-based ranked retrieval.
+- Query builder: bersih dari hypothesis + service_name + intent
+- Retrieval: vector search (cosine similarity) + deterministic bypass
+- Fallback: keyword overlap jika embedding tidak tersedia
+- Output: ranked docs dengan relevance score
 
 Fan-in dari fan-out observability → knowledge_agent → correlation_agent.
 """
 import logging
-import re
 from typing import Any, Dict, List
+
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-STOPWORDS = {
-    "pada", "dengan", "yang", "untuk", "error", "masalah", "kenapa", "mengapa",
-    "tolong", "cek", "lihat", "ada", "apakah", "terakhir",
-    # Fix #40: tanpa kata brand di stopwords — backend netral; nama brand/deployment
-    # milik workspace boleh jadi token playbook matching.
-    "service", "agent", "data", "bantu", "beri", "berapa", "status", "sekarang",
-    "this", "that", "with", "from", "have", "has", "the", "and", "not", "what",
-}
-MAX_PLAYBOOKS = 3
-MAX_PLAYBOOK_CHARS = 1200
-MIN_TOKEN_LEN = 4
 
+def _build_query_text(state: dict) -> str:
+    """
+    Build clean query text from investigation context.
+    Prioritas: hypothesis > service_name > intent.
+    TIDAK menggunakan raw logs/summaries (merusak embedding quality).
+    """
+    query_parts = []
 
-def _extract_tokens(state: Dict[str, Any]) -> List[str]:
-    texts = [state.get("intent") or "", state.get("message_raw") or ""]
-    hyp = (state.get("triage_result") or {}).get("hypothesis")
-    if hyp:
-        texts.append(str(hyp).replace("_", " "))
-    # nama alert watchdog ikut dalam intent/message_raw — cukup dari situ
-    blob = " ".join(texts).lower()
-    tokens = set(re.findall(r"[a-z][a-z_\-]{%d,}" % (MIN_TOKEN_LEN - 1), blob))
-    return sorted(t.strip("_-") for t in tokens if t not in STOPWORDS)
+    # Hypothesis dari triage (paling spesifik)
+    triage = state.get("triage_result") or {}
+    hypothesis = triage.get("hypothesis") if isinstance(triage, dict) else None
+    if hypothesis and hypothesis != "unknown":
+        query_parts.append(hypothesis.replace("_", " "))
 
+    # Service name
+    service_name = state.get("service_name") or ""
+    if service_name:
+        query_parts.append(f"service {service_name}")
 
-async def _match_universal_playbooks(tokens: List[str], service_name: str) -> List[Dict[str, str]]:
-    """Cocokkan token ke docs/playbooks/*.md (universal), skip yang service-specific."""
-    try:
-        from services.doc_loader import load_all_docs
-        docs = await load_all_docs()
-    except Exception as e:
-        logger.warning(f"[KnowledgeAgent] load_all_docs failed: {e}")
-        return []
+    # Error type / alert name dari triage signals (jika ada)
+    signals = triage.get("signals") if isinstance(triage, dict) else {}
+    if isinstance(signals, dict):
+        # focus_hints bisa berisi info tambahan
+        focus = triage.get("focus_hints") or []
+        if isinstance(focus, list) and focus:
+            query_parts.append(" ".join(focus[:2]))
 
-    matches = []
-    seen_tokens: Dict[str, set] = {}
-    for key, doc in docs.get("playbooks", {}).items():
-        if service_name and service_name in key:
-            continue  # service-specific → sudah di grounding doc correlation
-        meta_blob = str(doc.get("meta", {})).lower()
-        body_head = (doc.get("body") or "")[:MAX_PLAYBOOK_CHARS].lower()
-        haystack = f"{key} {meta_blob} {body_head}"
-        hits = [t for t in tokens if t in haystack]
-        if hits:
-            matches.append({
-                "id": key,
-                "hits": ",".join(hits[:5]),
-                "body": (doc.get("body") or "").strip()[:MAX_PLAYBOOK_CHARS],
-            })
-            seen_tokens[key] = set(hits)
+    # Intent sebagai fallback
+    intent = state.get("intent") or ""
+    query_str = " ".join(filter(None, query_parts)).strip()
+    if len(query_str) < settings.knowledge_min_query_len and intent:
+        query_parts.append(intent)
+        query_str = " ".join(filter(None, query_parts)).strip()
 
-    # prioritas playbook dengan keyword terbanyak
-    matches.sort(key=lambda m: -len(seen_tokens[m["id"]]))
-    return matches[:MAX_PLAYBOOKS]
+    return query_str
 
 
 async def knowledge_agent(state: dict) -> dict:
-    """Susun knowledge_context: universal + (per-service project ATAU workspace)."""
-    from state.schema import AgentState  # noqa: F401 — dokumentasi tipe
-    service_name = state.get("service_name", "") or ""
+    """
+    Susun knowledge_context dengan relevance-based retrieval.
+    Fallback ke build_workspace_context jika search tidak tersedia.
+    """
+    from state.schema import AgentState  # noqa: F401
     workspace_id = state.get("workspace_id")
-    project_id = state.get("project_id")  # FE-8
+    service_name = state.get("service_name") or ""
     agents_visited = ["knowledge_agent"]
 
-    sections: List[str] = []
-    service_matched = False
+    if not workspace_id:
+        return {
+            "knowledge_context": "",
+            "agents_visited": agents_visited,
+        }
 
-    # 1) Knowledge Universal — keyword match playbook infra umum
+    # Build clean query
+    query_text = _build_query_text(state)
+    logger.info(f"[knowledge_agent] query_text={query_text[:100]!r}")
+
+    # Relevance-based retrieval
     try:
-        tokens = _extract_tokens(state)
-        matched = await _match_universal_playbooks(tokens, service_name)
-        if matched:
-            lines = ["## Knowledge Universal (Playbook Infra Bawaan)", ""]
-            for m in matched:
-                lines.append(f"### Playbook: {m['id']} (cocok: {m['hits']})")
-                lines.append(m["body"])
-                lines.append("")
-            sections.append("\n".join(lines).strip())
-            logger.info(f"[KnowledgeAgent] universal playbooks: {[m['id'] for m in matched]}")
+        from services.knowledge_retrieval import search_relevant_knowledge, format_knowledge_context
+
+        results, retrieval_method = await search_relevant_knowledge(
+            query_text=query_text,
+            workspace_id=workspace_id,
+            service_name=service_name,
+        )
+
+        logger.info(
+            f"[knowledge_agent] retrieval_method={retrieval_method}, "
+            f"results={len(results)}, "
+            f"top_score={results[0][1] if results else 0:.3f}"
+        )
+
+        context = format_knowledge_context(results, retrieval_method)
+
+        if context:
+            return {
+                "knowledge_context": context,
+                "agents_visited": agents_visited,
+            }
+
     except Exception as e:
-        logger.warning(f"[KnowledgeAgent] universal section failed: {e}")
+        logger.warning(f"[knowledge_agent] search_relevant_knowledge failed, falling back: {e}")
 
-    # 2) FE-8: knowledge spesifik service milik project (match routing service)
-    if project_id:
-        try:
-            from services.service_store import build_service_context_for_agent
-            service_matched, svc_ctx = await build_service_context_for_agent(project_id, service_name)
-            if svc_ctx:
-                sections.append(svc_ctx)
-                logger.info(
-                    f"[KnowledgeAgent] PROJECT-SERVICE knowledge injected "
-                    f"project={project_id} svc={service_name} matched={service_matched}"
-                )
-        except Exception as e:
-            logger.warning(f"[KnowledgeAgent] project-service section failed: {e}")
+    # Fallback: legacy flat context
+    try:
+        from services.workspace_knowledge import build_workspace_context
+        ws_ctx = await build_workspace_context(workspace_id)
+        if ws_ctx:
+            logger.info(f"[knowledge_agent] fallback: legacy context injected ws={workspace_id}")
+            return {
+                "knowledge_context": ws_ctx,
+                "agents_visited": agents_visited,
+            }
+    except Exception as e:
+        logger.warning(f"[knowledge_agent] legacy fallback also failed: {e}")
 
-    # 3) Fallback workspace-level (FE-7): hanya bila routing TIDAK match service project
-    if workspace_id and not service_matched:
-        try:
-            from services.workspace_knowledge import build_workspace_context
-            ws_ctx = await build_workspace_context(workspace_id)
-            if ws_ctx:
-                sections.append(ws_ctx)
-                logger.info(f"[KnowledgeAgent] workspace knowledge injected ws={workspace_id}")
-        except Exception as e:
-            logger.warning(f"[KnowledgeAgent] workspace section failed: {e}")
-
-    knowledge_context = "\n\n---\n\n".join(sections)
     return {
-        "knowledge_context": knowledge_context,
+        "knowledge_context": "",
         "agents_visited": agents_visited,
     }

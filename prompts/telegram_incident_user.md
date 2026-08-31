@@ -6,3 +6,5 @@ Incident notification inputs:
 {{incident_history_block}}
 
 {{history_block}}
+
+IMPORTANT: Reply in {{reply_language}}. All prose, labels, and explanations must be in {{reply_language}} — never mix or default to another language.

@@ -5,12 +5,20 @@ from agents.supervisor import is_data_request
 
 logger = logging.getLogger(__name__)
 
+# CHATFLOW V2.1 (Tahap 3C): auto-route ke lane yang belum dijalankan (lanes_skipped)
+LANE_KEYWORDS = {
+    "metrics_agent": ["error rate", "cpu", "memory", "hpa", "metrics"],
+    "health_agent":  ["koneksi", "ping", "connection", "health", "database"],
+    "trace_agent":   ["trace", "distributed", "request path"],
+    "span_agent":    ["span", "detail span", "central log"],
+}
+
 
 async def follow_up_agent(state: AgentState) -> dict:
     """
     Resolve pertanyaan lanjutan (Phase 1):
     ambil riwayat request terakhir milik sender yang sama dari request_logs,
-    lalu serahkan konteksnya ke telegram_agent untuk dijawab.
+    lalu serahkan konteksnya ke response_agent untuk dijawab.
     """
     agents_visited = state.get("agents_visited", []) + ["follow_up_agent"]
     intent = state.get("intent", "")
@@ -54,6 +62,27 @@ async def follow_up_agent(state: AgentState) -> dict:
         statuses=["success", "failed"],
     )
 
+    # CHATFLOW V2.1 (Tahap 3C): auto-route ke lane yang belum dijalankan.
+    # Bila user menanyakan topik yang ada di lanes_skipped investigasi sebelumnya,
+    # langsung route ke lane tsb tanpa menunggu supervisor (early return).
+    inv_state = (prev or {}).get("investigation_state") or {}
+    skipped = inv_state.get("lanes_skipped") or []
+    if skipped:
+        intent_lower = (state.get("intent") or "").lower()
+        for lane, keywords in LANE_KEYWORDS.items():
+            if lane in skipped and any(kw in intent_lower for kw in keywords):
+                logger.info(
+                    f"FollowUpAgent: auto-route ke {lane} (skipped di investigasi sebelumnya) "
+                    f"intent='{intent}'"
+                )
+                return {
+                    "service_name": state.get("service_name") or inv_state.get("service_name"),
+                    "is_follow_up": False,
+                    "follow_up_context": None,
+                    "next_agent": lane,
+                    "agents_visited": agents_visited,
+                }
+
     # Tidak ada riwayat ATAU riwayat tanpa snapshot data mentah →
     # jangan menjawab dari konteks; lakukan pekerjaan yang diminta dari awal.
     if not prev or not prev.get("raw_documents_snapshot"):
@@ -83,7 +112,7 @@ async def follow_up_agent(state: AgentState) -> dict:
         logger.info("FollowUpAgent: no previous request found")
         return {
             "follow_up_context": {"not_found": True},
-            "next_agent": "telegram_agent",
+            "next_agent": "response_agent",
             "agents_visited": agents_visited,
         }
 
@@ -95,12 +124,45 @@ async def follow_up_agent(state: AgentState) -> dict:
         "prev_date": prev.get("incoming_date"),
         "prev_status": prev.get("status"),
     }
+    # CHATFLOW V2.1 (Tahap 3B): inject investigation_state ke context follow-up
+    investigation_context = _build_investigation_context(inv_state)
+    if investigation_context:
+        context["investigation_state"] = inv_state
+        context["investigation_context"] = investigation_context
     logger.info(
         f"FollowUpAgent found previous request_id={prev.get('request_id')} at {prev.get('incoming_date')}"
     )
 
     return {
         "follow_up_context": context,
-        "next_agent": "telegram_agent",
+        "next_agent": "response_agent",
         "agents_visited": agents_visited,
     }
+
+
+def _build_investigation_context(inv_state: dict) -> str:
+    """Bangun teks konteks investigasi sebelumnya (bilingual) utk prompt follow-up."""
+    if not inv_state:
+        return ""
+    hypothesis = inv_state.get("hypothesis", "unknown")
+    confidence = inv_state.get("confidence", 0.0)
+    executed = inv_state.get("lanes_executed") or []
+    skipped = inv_state.get("lanes_skipped") or []
+    corr_summary = inv_state.get("correlation_summary") or ""
+    suggested = inv_state.get("suggested_next") or []
+    loop_count = inv_state.get("loop_count", 0)
+
+    parts = []
+    loop_note = f" (autonomous loop {loop_count}x)" if loop_count > 0 else ""
+    parts.append(
+        f"[Previous investigation{loop_note}]\n"
+        f"Hypothesis: {hypothesis} (confidence: {int(confidence * 100)}%)\n"
+        f"Lanes executed: {', '.join(executed) or 'none'}\n"
+        f"Lanes skipped: {', '.join(skipped) or 'all done'}\n"
+        f"Summary: {corr_summary}"
+    )
+    if suggested:
+        parts.append(
+            "Previously suggested actions:\n" + "\n".join(f"• {s}" for s in suggested)
+        )
+    return "\n\n".join(parts)

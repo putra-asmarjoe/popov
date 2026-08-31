@@ -47,7 +47,7 @@ async def health_agent(state: AgentState) -> dict:
     return {
         "health_target": health_target,
         "health_result": sanitize_health_result(result),
-        "next_agent": "telegram_agent",
+        "next_agent": "response_agent",
         "agents_visited": agents_visited,
         "error": None,
     }

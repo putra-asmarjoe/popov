@@ -9,7 +9,7 @@ from agents.correlation_agent import correlation_agent
 from agents.health_agent import health_agent
 from agents.data_agent import data_agent
 from agents.follow_up_agent import follow_up_agent
-from agents.telegram_agent import telegram_agent
+from agents.response_agent import response_agent
 from agents.span_agent import span_agent
 from agents.triage_agent import triage_agent
 from agents.knowledge_agent import knowledge_agent
@@ -18,6 +18,37 @@ from agents.project_agent import project_agent
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# CHATFLOW V2.1 (Tahap 4): router otonom setelah correlation — PURE FUNCTION.
+# Hanya membaca state, TIDAK memodifikasinya (semua mutasi di correlation_agent).
+def route_after_correlation(state: AgentState) -> List[str]:
+    """
+    Router pure — hanya membaca state, tidak memodifikasinya.
+
+    Logika:
+    1. Bila AUTONOMOUS_LOOP_ENABLED=False → selalu ke response_agent (feature flag off)
+    2. Bila confidence rendah + ada gap_nodes + loop belum melebihi batas
+       → trigger agen-agen yang terlewat secara paralel (fan-out)
+    3. Selain itu → ke response_agent
+
+    PENTING: gap_nodes berisi nama node graph valid (mis. "metrics_agent"),
+    BUKAN deskripsi human-readable dari data_gaps.
+    """
+    from state.constants import CONFIDENCE_THRESHOLD, AUTO_LOOP_MAX, AUTONOMOUS_LOOP_ENABLED
+
+    if not AUTONOMOUS_LOOP_ENABLED:
+        return ["response_agent"]
+
+    confidence = state.get("investigation_confidence", 1.0)
+    gap_nodes = state.get("gap_nodes") or []
+    loop_count = state.get("internal_loop_count", 0)
+
+    # loop_count sudah di-increment di correlation_agent sebelum router dipanggil.
+    if confidence < CONFIDENCE_THRESHOLD and gap_nodes and loop_count <= AUTO_LOOP_MAX:
+        return gap_nodes  # fan-out paralel agen yang terlewat
+
+    return ["response_agent"]
 
 
 def _route(state: AgentState) -> Union[str, List[str]]:
@@ -58,7 +89,7 @@ def _route(state: AgentState) -> Union[str, List[str]]:
         "health_agent":    "health_agent",
         "data_agent":      "data_agent",
         "follow_up_agent": "follow_up_agent",
-        "telegram_agent":  "telegram_agent",
+        "response_agent":  "response_agent",
         "span_agent":      "span_agent",
         "ticket_agent":    "ticket_agent",
         "project_agent":   "project_agent",
@@ -70,7 +101,7 @@ def _route(state: AgentState) -> Union[str, List[str]]:
 def _route_span_agent(state: AgentState) -> str:
     """
     FASE 4A: Span sebagai bagian fan-out incident → knowledge_agent (FE-7, lalu correlation),
-    Span mandiri (detail trace) → telegram_agent.
+    Span mandiri (detail trace) → response_agent.
     DRY: cek next_agent (reliable) + fallback agents_visited.
     """
     # Incident fan-out: supervisor next_agent == mongo_agent dengan preset_trace_ids
@@ -79,14 +110,14 @@ def _route_span_agent(state: AgentState) -> str:
     # Fallback non-deterministik parallel: mongo sudah visited
     if "mongo_agent" in state.get("agents_visited", []):
         return "knowledge_agent"
-    return "telegram_agent"
+    return "response_agent"
 
 
 def _route_health_agent(state: AgentState) -> str:
     """
     Fix duplicate telegram untuk downstream_timeout fan-out.
     Health sebagai bagian incident (triage_result ada) → knowledge_agent (fan-in single telegram).
-    Health mandiri (supervisor langsung health_agent tanpa triage) → telegram_agent.
+    Health mandiri (supervisor langsung health_agent tanpa triage) → response_agent.
     """
     if state.get("triage_result") is not None:
         return "knowledge_agent"
@@ -94,7 +125,7 @@ def _route_health_agent(state: AgentState) -> str:
     visited = state.get("agents_visited", [])
     if any(a in visited for a in ("mongo_agent", "metrics_agent", "trace_agent")):
         return "knowledge_agent"
-    return "telegram_agent"
+    return "response_agent"
 
 
 def build_graph() -> StateGraph:
@@ -110,7 +141,7 @@ def build_graph() -> StateGraph:
     workflow.add_node("health_agent",      health_agent)
     workflow.add_node("data_agent",        data_agent)
     workflow.add_node("follow_up_agent",   follow_up_agent)
-    workflow.add_node("telegram_agent",    telegram_agent)
+    workflow.add_node("response_agent",    response_agent)
     workflow.add_node("span_agent",        span_agent)
     workflow.add_node("knowledge_agent",   knowledge_agent)  # FE-7
     workflow.add_node("ticket_agent",      ticket_agent)     # Ticket Agent (lane pengelolaan tiket)
@@ -131,34 +162,46 @@ def build_graph() -> StateGraph:
     # span_agent → conditional (incident fan-in vs mandiri) — FASE 4A
     workflow.add_conditional_edges("span_agent", _route_span_agent, {
         "knowledge_agent": "knowledge_agent",
-        "telegram_agent": "telegram_agent",
+        "response_agent": "response_agent",
     })
 
     # Knowledge agent (universal + workspace) → correlation agent — FE-7
     workflow.add_edge("knowledge_agent", "correlation_agent")
 
     # Ticket Agent → telegram (konfirmasi deterministik, tanpa LLM tambahan)
-    workflow.add_edge("ticket_agent", "telegram_agent")
+    workflow.add_edge("ticket_agent", "response_agent")
 
     # Project Agent → telegram (jawaban Q&A project / pengarah detail tiket)
-    workflow.add_edge("project_agent", "telegram_agent")
+    workflow.add_edge("project_agent", "response_agent")
 
-    # Correlation agent → telegram_agent
-    workflow.add_edge("correlation_agent", "telegram_agent")
+    # Correlation agent → conditional (CHATFLOW V2.1 Tahap 4): autonomous loop
+    # fan-out ke agen kolektor yang terlewat, atau langsung ke response_agent.
+    workflow.add_conditional_edges(
+        "correlation_agent",
+        route_after_correlation,
+        {
+            "response_agent": "response_agent",
+            "metrics_agent": "metrics_agent",
+            "mongo_agent": "mongo_agent",
+            "trace_agent": "trace_agent",
+            "health_agent": "health_agent",
+            "span_agent": "span_agent",
+        },
+    )
 
-    # Jalur khusus independen (langsung ke telegram_agent)
+    # Jalur khusus independen (langsung ke response_agent)
     # health_agent conditional: fan-out incident → correlation, standalone → telegram (fix duplicate)
     workflow.add_conditional_edges("health_agent", _route_health_agent, {
         "knowledge_agent": "knowledge_agent",
-        "telegram_agent": "telegram_agent",
+        "response_agent": "response_agent",
     })
-    workflow.add_edge("data_agent",        "telegram_agent")
+    workflow.add_edge("data_agent",        "response_agent")
 
-    # follow_up_agent → routing kondisional (telegram_agent atau fallback fan-out)
+    # follow_up_agent → routing kondisional (response_agent atau fallback fan-out)
     workflow.add_conditional_edges("follow_up_agent", _route)
 
-    # telegram_agent → END
-    workflow.add_edge("telegram_agent", END)
+    # response_agent → END
+    workflow.add_edge("response_agent", END)
 
     return workflow.compile()
 

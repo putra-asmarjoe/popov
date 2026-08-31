@@ -46,6 +46,13 @@ _ERROR_KW = ("error", "gagal", "masalah", "down", "5xx", "500", "bermasalah")
 _KNOWLEDGE_KW = ("knowledge", "dokumen", "playbook", "grounding")
 
 
+def _detect_chat_locale(history: Optional[List[dict]], default: str = "en") -> str:
+    """Alias DRY — implementasi di services/conversation.detect_chat_locale."""
+    from services.conversation import detect_chat_locale as _impl
+
+    return _impl(history, default)
+
+
 def _hours_from_intent(intent_lower: str, default: float) -> float:
     """Ambil 'N jam' / 'N menit' / 'hari ini' dari intent; default bila tak disebut."""
     import re as _re
@@ -67,7 +74,7 @@ def _hours_from_intent(intent_lower: str, default: float) -> float:
 async def _gather_ticket_stats(project_id: str, hours_today: float) -> tuple[List[str], Dict[str, int]]:
     """Return (facts_blocks, today_status_groups) — grup terpisah agar caller
     tidak parsing balik dari teks (Fix G5 gap-scan)."""
-    from services.ticket_store import count_by_project
+    from services.ticket_store import OPEN_STATUSES, count_by_project
 
     blocks: List[str] = []
     groups: Dict[str, int] = {}
@@ -76,9 +83,11 @@ async def _gather_ticket_stats(project_id: str, hours_today: float) -> tuple[Lis
         today = await count_by_project(project_id, since_hours=hours_today, group_by="status")
         kinds = await count_by_project(project_id, since_hours=hours_today, group_by="kind")
         groups = {str(k): int(v) for k, v in (today.get("groups") or {}).items()}
+        open_groups = {str(k): int(v) for k, v in (all_time.get("groups") or {}).items() if k in OPEN_STATUSES}
         blocks.append(
             "[TICKETS]\n"
             f"- Total tiket (semua waktu): {all_time['total']}\n"
+            f"- Tiket terbuka (semua waktu): {sum(open_groups.values())} — status: {open_groups}\n"
             f"- Tiket masuk hari ini (~{int(hours_today)} jam): {today['total']}\n"
             f"- Status hari ini: {groups}\n"
             f"- Jenis hari ini: {kinds['groups'] or '{}'}"
@@ -86,7 +95,7 @@ async def _gather_ticket_stats(project_id: str, hours_today: float) -> tuple[Lis
     except Exception as e:
         logger.warning(f"[project_agent] ticket stats gagal: {e}")
         blocks.append("[TICKETS] unavailable (database error)")
-    return blocks, groups
+    return blocks, groups, open_groups
 
 
 async def _gather_activity(project_id: Optional[str], ws_id: Optional[str], hours: float) -> List[str]:
@@ -200,18 +209,22 @@ async def _gather_knowledge(project_id: Optional[str], ws_id: Optional[str]) -> 
 def _build_suggestions(
     *, want_tickets: bool, want_errors: bool, want_knowledge: bool,
     open_count: int, alert_services: List[str], error_services: List[str],
+    locale: str = "en",
 ) -> List[str]:
-    """Predictive offers deterministik dari whitelist (bukan LLM)."""
-    out: List[str] = []
-    if want_errors and error_services:
-        out.append(f"Investigasi lebih dalam error pada {error_services[0]}")
-    elif alert_services:
-        out.append(f"Cek detail alert pada {alert_services[0]}")
-    if want_tickets and open_count > 0:
-        out.append("Tampilkan tiket yang masih terbuka")
-    if not want_knowledge:
-        out.append("Knowledge apa saja pada project ini")
-    return out[:3]
+    """Predictive offers deterministik dari whitelist (bukan LLM) — bahasa ikut locale chat.
+    DRY: delegasi ke services.offer_planner.build_chat_suggestions (satu sumber teks)."""
+    from services.offer_planner import build_chat_suggestions
+
+    return build_chat_suggestions(
+        service_name=(error_services[0] if want_errors and error_services else
+                      (alert_services[0] if alert_services else "")),
+        root_cause=("service-fault" if want_errors and error_services else
+                    ("downstream" if alert_services else "unknown")),
+        has_open_tickets=bool(want_tickets and open_count > 0),
+        want_knowledge=True,  # perilaku lama: chips knowledge hampir selalu default
+        locale=locale,
+        max_items=3,
+    )
 
 
 async def _fallback_answer(question: str, facts_blocks: List[str], locale: str = "id") -> str:
@@ -238,7 +251,7 @@ async def project_agent(state: AgentState) -> dict:
                 "⚠️ Sesi ini tidak punya konteks project. "
                 "Buka chat dari halaman project untuk pertanyaan level project."
             ),
-            "next_agent": "telegram_agent",
+            "next_agent": "response_agent",
             "agents_visited": agents_visited,
             "error": None,
         }
@@ -273,7 +286,7 @@ async def project_agent(state: AgentState) -> dict:
                         "status": ticket.get("status"),
                     }],
                 },
-                "next_agent": "telegram_agent",
+                "next_agent": "response_agent",
                 "agents_visited": agents_visited,
                 "routing_strategy": "project_query",
                 "error": None,
@@ -298,11 +311,34 @@ async def project_agent(state: AgentState) -> dict:
     error_services: List[str] = []
 
     if want_tickets:
-        stats, today_groups = await _gather_ticket_stats(project_id, hours)
+        stats, today_groups, open_groups = await _gather_ticket_stats(project_id, hours)
         facts_blocks.extend(stats)
-        open_count = sum(
-            v for k, v in today_groups.items() if k in ("new", "open", "in_progress", "needs_review")
-        )
+        open_count = sum(v for v in open_groups.values())
+        # Grounding detail tiket: daftar tiket TERBUKA nyata (nomor asli `KEY-N`,
+        # judul, status, severity, service) — mencegah LLM mengarang "TICKET-N" saat
+        # user minta detail ("send me detail ticket", "tiket apa saja yang terbuka").
+        try:
+            from services.ticket_store import OPEN_STATUSES, recent_tickets_by_project
+            from services.workspace_store import find_project_by_id
+
+            proj_doc = await find_project_by_id(project_id)
+            proj_key = (proj_doc or {}).get("key") or ""
+            open_tickets = await recent_tickets_by_project(project_id, since_hours=None, limit=20)
+            open_tickets = [t for t in open_tickets if (t.get("status") or "") in OPEN_STATUSES]
+            if open_tickets:
+                lines = []
+                for t in open_tickets:
+                    key = t.get("projectKey") or proj_key or "?"
+                    title = (t.get("title") or "")[:80]
+                    lines.append(
+                        f"- `{key}-{t.get('ticketNumber')}` {title} "
+                        f"(status={t.get('status')}, sev={t.get('severity')}, "
+                        f"service={t.get('serviceName') or '-'}, source={t.get('source')})"
+                    )
+                facts_blocks.append("[OPEN TICKETS (detail)]\n" + "\n".join(lines))
+        except Exception as e:
+            logger.warning(f"[project_agent] open ticket detail gagal: {e}")
+            facts_blocks.append("[OPEN TICKETS (detail)] unavailable")
 
     if want_activity or want_errors:
         activity = await _gather_activity(project_id, ws_id, hours)
@@ -330,13 +366,20 @@ async def project_agent(state: AgentState) -> dict:
     if want_knowledge:
         facts_blocks.append(await _gather_knowledge(project_id, ws_id))
 
+    # ── 4. Deteksi bahasa chat: isi percakapan dulu, preferensi user fallback ──
+    from services.user_store import get_user_locale
+
+    history = state.get("conversation_history") or []
+    user_locale = await get_user_locale((state.get("sender") or {}).get("user_id"))
+    locale = _detect_chat_locale(history, default=user_locale)
+
     suggestions = _build_suggestions(
         want_tickets=want_tickets, want_errors=want_errors, want_knowledge=want_knowledge,
         open_count=open_count, alert_services=alert_services, error_services=error_services,
+        locale=locale,
     )
 
-    # ── 4. Satu LLM call sintesis (fallback deterministik) ────────────────────
-    history = state.get("conversation_history") or []
+    # ── 5. Satu LLM call sintesis (fallback deterministik) ────────────────────
     history_block = ""
     if history:
         hist_lines = "\n".join(f"[{h.get('role')}] {h.get('content', '')}" for h in history[-6:])
@@ -355,6 +398,7 @@ async def project_agent(state: AgentState) -> dict:
                     question=intent_raw,
                     facts_block="\n\n".join(facts_blocks),
                     history_block=history_block,
+                    reply_language=("English" if locale == "en" else "Bahasa Indonesia"),
                 )),
             ]
             resp = await llm.ainvoke(messages)
@@ -365,9 +409,7 @@ async def project_agent(state: AgentState) -> dict:
 
     if not formatted:
         from agents.correlation_agent import llm_unavailable_note
-        from services.user_store import get_user_locale
 
-        locale = await get_user_locale((state.get("sender") or {}).get("user_id"))
         formatted = (
             await _fallback_answer(intent_raw, facts_blocks, locale)
             + llm_unavailable_note(locale)
@@ -375,7 +417,10 @@ async def project_agent(state: AgentState) -> dict:
 
     medium_note = ""
     if depth == "medium" and error_services:
-        medium_note = f"\n\n💡 Mau saya investigasi lebih dalam error pada `{error_services[0]}`?"
+        medium_note = (
+            f"\n\n💡 {('Investigate deeper the error on' if locale == 'en' else 'Mau saya investigasi lebih dalam error pada')} "
+            f"`{error_services[0]}`?"
+        )
 
     return {
         "formatted_message": (formatted + medium_note).strip(),
@@ -385,7 +430,7 @@ async def project_agent(state: AgentState) -> dict:
             "suggestions": suggestions,
         },
         "routing_strategy": "project_query",
-        "next_agent": "telegram_agent",
+        "next_agent": "response_agent",
         "agents_visited": agents_visited,
         "error": None,
     }

@@ -15,6 +15,43 @@ from agents.correlation_agent import llm_unavailable_note_for  # Fix #53/#113: p
 logger = logging.getLogger(__name__)
 
 
+# ── CHATFLOW V2.1 (Tahap 1C): blok confidence bilingual ───────────────────────
+_CONFIDENCE_BLOCK_TEXTS = {
+    "id": {
+        "header": "⚠️ **Confidence analisis: {pct}%**",
+        "gaps_title": "Data yang belum diperiksa:",
+        "suggest_title": "Lanjutkan investigasi:",
+    },
+    "en": {
+        "header": "⚠️ **Analysis confidence: {pct}%**",
+        "gaps_title": "Data not yet examined:",
+        "suggest_title": "Continue investigation:",
+    },
+}
+
+
+def _append_confidence_block(formatted: str, confidence: float, data_gaps: list,
+                             suggested_next: list, reply_language: str) -> str:
+    """Tambahkan blok confidence bila confidence < threshold dan ada gaps.
+    Bilingual via dict (bukan if/else). Tidak mengubah format utama."""
+    from state.constants import CONFIDENCE_THRESHOLD
+
+    if confidence >= CONFIDENCE_THRESHOLD or not data_gaps:
+        return formatted
+    texts = _CONFIDENCE_BLOCK_TEXTS.get(
+        "id" if reply_language.lower() == "bahasa indonesia" else "en",
+        _CONFIDENCE_BLOCK_TEXTS["en"],
+    )
+    header = f"\n\n---\n{texts['header'].format(pct=int(confidence * 100))}"
+    gap_section = f"\n{texts['gaps_title']}\n" + "\n".join(f"• {g}" for g in data_gaps)
+    suggest_section = ""
+    if suggested_next:
+        suggest_section = f"\n\n{texts['suggest_title']}\n" + "\n".join(
+            f"→ {s}" for s in suggested_next
+        )
+    return formatted + header + gap_section + suggest_section
+
+
 async def _resolve_channels_for_state(state) -> List[dict]:
     """Channel tujuan delivery (Fix #40, broadcast):
     - origin_notif_id (mention/callback/webhook via channel tertentu) → kirim balik ke
@@ -104,7 +141,7 @@ def _build_dynamic_buttons(state: dict) -> Optional[dict]:
     return {"inline_keyboard": buttons}
 
 
-async def telegram_agent(state: AgentState) -> dict:
+async def response_agent(state: AgentState) -> dict:
     """
     1. Jika ini task Health Check (state memuat health_result): Format laporan status konektivitas & latency.
     2. Jika ini task Log Analysis: Load konteks dokumen + LLM analisis log error.
@@ -118,7 +155,7 @@ async def telegram_agent(state: AgentState) -> dict:
     follow_up_context = state.get("follow_up_context")
     data_mode = state.get("data_mode", False)
     span_mode = state.get("span_mode", False)
-    agents_visited = state.get("agents_visited", []) + ["telegram_agent"]
+    agents_visited = state.get("agents_visited", []) + ["response_agent"]
 
     # 0. Handling Span Detail (span_agent) — ringkasan "apa yang sebenarnya terjadi" dari traceId
     if span_mode:
@@ -138,9 +175,7 @@ async def telegram_agent(state: AgentState) -> dict:
                 )
                 if svc_counts:
                     span_service = svc_counts.most_common(1)[0][0].lower().replace("-", "_")
-        doc_context = await build_agent_context(span_service) if span_service and span_service != "unknown" else ""
-        if doc_context:
-            logger.info(f"Loaded doc context for span trace '{span_service}' ({len(doc_context)} chars)")
+        doc_context = ""
         try:
             formatted = await _format_span_with_llm(intent, trace_id, span_summary, span_data, doc_context,
                                                 history=state.get("conversation_history"))
@@ -243,11 +278,7 @@ async def telegram_agent(state: AgentState) -> dict:
     # 2. Handling Log Analysis Incident Alert
     logger.info(f"TelegramAgent processing service='{service_name}', docs={len(documents)}")
 
-    doc_context = await build_agent_context(service_name)
-    if doc_context:
-        logger.info(f"Loaded doc context for '{service_name}' ({len(doc_context)} chars)")
-    else:
-        logger.warning(f"No doc context found for service '{service_name}', proceeding without it")
+    doc_context = ""
 
     incident_history = await get_incident_history(service_name, hours=24, limit=5)
     if incident_history:
@@ -256,12 +287,35 @@ async def telegram_agent(state: AgentState) -> dict:
     try:
         correlation_result = state.get("correlation_result")
         # FASE 4A: span turut dianalisis di correlation → LLM telegram otomatis lebih kaya, cukup tambah catatan
+        # Fix #140: bahasa jawaban eksplisit — web chat (suppress_telegram) = deteksi dari isi
+        # percakapan (fallback preferensi user); Telegram = locale owner workspace (Fix #105).
+        if state.get("suppress_telegram"):
+            from services.conversation import detect_chat_locale
+            from services.user_store import get_user_locale
+
+            hist_locale = state.get("conversation_history") or []
+            user_locale = await get_user_locale((state.get("sender") or {}).get("user_id"))
+            locale = detect_chat_locale(hist_locale, default=user_locale)
+        else:
+            from services.locale_pref import get_workspace_locale
+
+            locale = await get_workspace_locale(state.get("workspace_id"))
         formatted = await _format_with_llm(
             intent, service_name, documents, doc_context, incident_history, correlation_result,
             history=state.get("conversation_history"),
+            locale=locale,
         )
         if state.get("span_available") and state.get("correlation_result"):
             formatted += "\n\n📡 _Span detail OTel turut dianalisis dalam root cause assessment_"
+        # CHATFLOW V2.1 (Tahap 1C): blok confidence bila confidence rendah + ada gap.
+        # Bilingual via _append_confidence_block (dict en/id).
+        formatted = _append_confidence_block(
+            formatted=formatted,
+            confidence=state.get("investigation_confidence", 1.0),
+            data_gaps=state.get("data_gaps", []),
+            suggested_next=state.get("suggested_next", []),
+            reply_language=("English" if locale == "en" else "Bahasa Indonesia"),
+        )
     except Exception as e:
         logger.error(f"LLM formatting failed: {e}")
         formatted = await _fallback_message(service_name, documents, state) + await llm_unavailable_note_for(state)
@@ -359,6 +413,24 @@ async def telegram_agent(state: AgentState) -> dict:
     except Exception as e:
         logger.warning(f"[Diagnostic] setup failed: {e}")
 
+    # ── Chat suggestions (chips follow-up) — HANYA web chat (suppress_telegram) ──
+    # CHATFLOW V2.1 (Tahap 2): build_contextual_suggestions — chips berbasis temuan
+    # investigasi (deploy/Second Brain/trace/data_gaps), fallback generik.
+    chat_suggestions = []
+    try:
+        if state.get("suppress_telegram"):
+            from services.conversation import detect_chat_locale
+            from services.offer_planner import build_contextual_suggestions
+            from services.user_store import get_user_locale
+
+            history = state.get("conversation_history") or []
+            user_locale = await get_user_locale((state.get("sender") or {}).get("user_id"))
+            locale = detect_chat_locale(history, default=user_locale)
+            reply_language = "English" if locale == "en" else "Bahasa Indonesia"
+            chat_suggestions = build_contextual_suggestions(state, reply_language)
+    except Exception as e:
+        logger.warning(f"[TelegramAgent] chat suggestions gagal: {e}")
+
     return {
         "formatted_message": formatted,
         "telegram_sent": success,
@@ -366,6 +438,7 @@ async def telegram_agent(state: AgentState) -> dict:
         "next_agent": "end",
         "agents_visited": agents_visited,
         "session_id": f"DS-{episode_id}" if state.get("episode_id") else None,
+        **({"chat_suggestions": chat_suggestions} if chat_suggestions else {}),
     }
 
 
@@ -412,8 +485,13 @@ async def _format_with_llm(
     incident_history: list = None,
     correlation_result: dict = None,
     history: Optional[list] = None,
+    locale: str = "id",
 ) -> str:
-    """LLM analisis log dengan grounding dari dokumen service + riwayat insiden + observability correlation."""
+    """LLM analisis log dengan grounding dari dokumen service + riwayat insiden + observability correlation.
+
+    locale (Fix #136/#140): bahasa jawaban eksplisit — web chat = deteksi dari isi
+    percakapan (fallback preferensi user); Telegram = locale owner workspace (Fix #105).
+    """
 
     # System prompt: template file-driven + konteks dokumen dari docs/
     system_content = render_prompt("telegram_incident_system")
@@ -439,12 +517,17 @@ async def _format_with_llm(
     if correlation_result:
         analysis_text = correlation_result.get("analysis", "")
         rc_assessment = correlation_result.get("root_cause_assessment", "unknown")
+        # Fix #143: instruksi translate eksplisit — analysis LLM bisa saja dalam bahasa
+        # berbeda; WAJIB disajikan ulang dalam reply_language (bukan disalin mentah).
+        reply_lang_name = "English" if locale == "en" else "Bahasa Indonesia"
         correlation_block = (
             f"# OBSERVABILITY & ROOT CAUSE CORRELATION AGENT RESULT\n"
             f"Root Cause Assessment: `{rc_assessment}`\n"
             f"Correlation Agent analysis:\n{analysis_text}\n\n"
             f"Include this Root Cause Assessment ({rc_assessment}) and the Correlation Agent "
-            f"recommendations in the Telegram notification."
+            f"recommendations in the Telegram notification.\n"
+            f"IMPORTANT: Restate the analysis and recommendations in {reply_lang_name} — "
+            f"translate if needed, never copy the analysis verbatim in another language."
         )
 
     incident_history_block = ""
@@ -476,6 +559,7 @@ async def _format_with_llm(
         correlation_block=correlation_block,
         incident_history_block=incident_history_block,
         history_block=history_block,
+        reply_language=("English" if locale == "en" else "Bahasa Indonesia"),
     )
 
     messages = [

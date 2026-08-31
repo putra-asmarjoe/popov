@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import json
 import re
@@ -78,7 +79,10 @@ DATA_INTENT_KEYWORDS = [
     "table", "tabel",
 ]
 DATA_COUNT_RE = re.compile(r"(\d+)\s*(?:data|record|row)", re.IGNORECASE)
+# Pola collection eksplisit: "collection X" / "table Y" (nama SETELAH kata),
+# atau "X collection" / "Y table" (nama SEBELUM kata — Fix #141).
 COLLECTION_RE = re.compile(r"(?:collection|table|tabel)\s+([\w\-.]+)", re.IGNORECASE)
+COLLECTION_SUFFIX_RE = re.compile(r"([\w\-.]+)\s+(?:collection|table|tabel)", re.IGNORECASE)
 
 # Chat by Project — pertanyaan level project (tanpa menyebut service spesifik).
 # Aktif HANYA bila state punya project_id & BUKAN sesi terikat tiket.
@@ -90,10 +94,38 @@ PROJECT_QUERY_KW = [
 
 
 def is_data_request(intent: str) -> bool:
-    """Deteksi intent pengambilan data mentah (bukan analisis error)."""
+    """Deteksi intent pengambilan data mentah (bukan analisis error).
+
+    True bila:
+    - match keyword data (DATA_INTENT_KEYWORDS), ATAU
+    - pola "N data/record/row", ATAU
+    - intent menyebut collection/table eksplisit ("collection X", "table Y", "cek
+      pengecekan pada Z collection") — KECUALI intent jelas insiden (mengandung
+      "error"/"gagal"/"trace" yang menunjuk ke analisis error, bukan query mentah).
+    Fix #141: "lakukan pengecekan pada received_release_logs collection" sebelumnya
+    tidak match keyword data → jatuh ke insiden (preset service) padahal user minta
+    query collection langsung.
+    """
     if any(kw in intent for kw in DATA_INTENT_KEYWORDS):
         return True
-    return bool(DATA_COUNT_RE.search(intent))
+    if DATA_COUNT_RE.search(intent):
+        return True
+    low = intent.lower()
+    # kata pengecekan/inspeksi + collection eksplisit → data request
+    check_verb = any(v in low for v in ("pengecekan", "periksa", "inspeksi", "lihat", "cek "))
+    if not check_verb:
+        return False
+    has_explicit_collection = bool(
+        re.search(r"(?:collection|table|tabel)\s+[\w\-.]+", low)
+        or re.search(r"->\s*[\w\-.]+", low)
+        or re.search(r"(?:collection|table|tabel)\b", low)
+    )
+    if not has_explicit_collection:
+        return False
+    # jangan hijack intent insiden yang menyebut collection (mis. "cek error pada X collection")
+    if any(k in low for k in ("error", "gagal", "trace", "5xx", "500", "bermasalah", "down")):
+        return False
+    return True
 
 
 def extract_data_count(intent: str, default: int = 5) -> int:
@@ -123,10 +155,16 @@ def _collection_candidates(service_map: Dict[str, str]) -> list[str]:
 
 
 def extract_collection_name(intent: str, known_collections: Optional[list[str]] = None):
-    """Ekstrak nama collection eksplisit dari intent: 'collection couponrequestlogs'."""
-    # 1) pola eksplisit: "table X", "collection Y", "tabel Z"
+    """Ekstrak nama collection eksplisit dari intent: 'collection couponrequestlogs',
+    'lakukan pengecekan pada received_release_logs collection' (Fix #141: nama di depan)."""
+    # 1) pola eksplisit: "table X", "collection Y", "tabel Z" (nama setelah kata),
+    #    lalu "X collection" / "Y table" (nama sebelum kata — Fix #141).
     m = COLLECTION_RE.search(intent)
-    explicit = m.group(1) if m else None
+    if m:
+        explicit = m.group(1)
+    else:
+        m2 = COLLECTION_SUFFIX_RE.search(intent)
+        explicit = m2.group(1) if m2 else None
 
     # 2) pola panah: "... -> incominglogs" (user sering tulis "DB -> table")
     arrow = re.search(r"->\s*([\w\-.]+)", intent)
@@ -231,7 +269,7 @@ def _ticket_redirect(state: dict, agents_visited: list) -> dict:
     title = tc.get("title") or ""
     head = f"⚠️ Saya fokus membantu tiket yang sedang dibuka (nomor {num}." + (f" — {title}" if title else "") + ")"
     return {
-        "next_agent": "telegram_agent",
+        "next_agent": "response_agent",
         "formatted_message": (
             f"{head}\nPertanyaan itu di luar konteks tiket ini. Mau saya bantu:\n"
             "  • Menutup / membuka kembali tiket\n"
@@ -273,7 +311,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                 await cancel_offer(_active["offer_id"])
                 logger.info(f"[Offer] declined {_active['offer_id']}")
                 return {
-                    "next_agent": "telegram_agent",
+                    "next_agent": "response_agent",
                     "formatted_message": "Oke, tawaran dibatalkan.",
                     "agents_visited": agents_visited,
                     "routing_strategy": None, "routing_flag": None, "error": None,
@@ -299,7 +337,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                     await set_awaiting(_active["offer_id"], _active["needs_param"])
                     _hint = "catatan progress" if _active["needs_param"] == "note" else _active["needs_param"]
                     return {
-                        "next_agent": "telegram_agent",
+                        "next_agent": "response_agent",
                         "formatted_message": (f"Oke! {_active.get('question')}\n"
                                               f"Silakan ketik {_hint}-nya."),
                         "agents_visited": agents_visited,
@@ -454,6 +492,27 @@ async def supervisor_agent(state: AgentState) -> dict:
                 llm_conf = llm_res.get("confidence", 0)
                 logger.info(f"[Supervisor] Strategy 5 LLM → service={llm_service} conf={llm_conf:.2f} type={llm_res.get('intent_type')}")
                 if llm_service and llm_service in service_map:
+                    # Fix #125: guard sesi PROJECT — pertanyaan level project (match
+                    # PROJECT_QUERY_KW) jangan di-route ke service oleh tebakan LLM.
+                    # "Tampilkan tiket yang masih terbuka" → LLM salah asosiasi
+                    # service (kuponku_interfaces) → pipeline insiden, padahal
+                    # harusnya project_agent. Prioritas: project query > llm fallback.
+                    if (
+                        state.get("project_id")
+                        and not state.get("ticket_context")
+                        and any(kw in intent for kw in PROJECT_QUERY_KW)
+                    ):
+                        logger.info("[Supervisor] Strategy 5 project-query guard → project_agent "
+                                    f"(ignore llm_service={llm_service})")
+                        return {
+                            "service_name": "",
+                            "collection_name": "",
+                            "next_agent": "project_agent",
+                            "agents_visited": agents_visited,
+                            "routing_strategy": "project_query",
+                            "routing_flag": "llm_guard_project_query",
+                            "error": None,
+                        }
                     matched_service = llm_service
                     routing_strategy = "llm_fallback"
                     routing_flag = "low_confidence_routing"
@@ -546,7 +605,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             "service_name": matched_service,
             "collection_name": service_map.get(matched_service, ""),
             "formatted_message": inventory,
-            "next_agent": "telegram_agent",
+            "next_agent": "response_agent",
             "agents_visited": agents_visited,
             "routing_strategy": routing_strategy,
             "routing_flag": routing_flag,
@@ -593,43 +652,52 @@ async def supervisor_agent(state: AgentState) -> dict:
 
     # 3. Deteksi permintaan data mentah (mis. "berikan 1 data terakhir ...") →
     #    route ke data_agent (bukan mongo_agent yang khusus analisis error).
+    #    Guard: sesi project dengan query level project (tiket/aktivitas/alert) → skip, biarkan project query check handle.
     if is_data_request(intent):
-        logger.info(f"Data request intent detected: '{intent}'")
-        if not matched_service:
-            # Fix #50: fuzzy-suggest sebelum menyerah (typo user → service terdekat)
-            suggest = _fuzzy_suggest_service(
-                intent, list(service_map.keys()), (state.get("ticket_context") or {}).get("serviceName")
+        # Project session + project query keywords → bukan data request mentah
+        if not (
+            state.get("project_id")
+            and not state.get("ticket_context")
+            and any(kw in intent for kw in PROJECT_QUERY_KW)
+        ):
+            logger.info(f"Data request intent detected: '{intent}'")
+            if not matched_service:
+                # Fix #50: fuzzy-suggest sebelum menyerah (typo user → service terdekat)
+                suggest = _fuzzy_suggest_service(
+                    intent, list(service_map.keys()), (state.get("ticket_context") or {}).get("serviceName")
+                )
+                if not suggest:
+                    logger.warning(f"No service matched for data request intent: '{intent}'")
+                    if state.get("ticket_context"):
+                        return _ticket_redirect(state, agents_visited)
+                    return {
+                        "error": f"Tidak bisa mengenali service dari intent: '{intent}'. "
+                                 f"Service yang tersedia: {list(service_map.keys())}",
+                        "next_agent": "end",
+                        "agents_visited": agents_visited,
+                        "routing_strategy": routing_strategy,
+                        "routing_flag": routing_flag,
+                    }
+                matched_service = suggest
+                logger.info(f"[Supervisor] data-request fuzzy-suggest → '{suggest}' (auto-route)")
+                routing_flag = routing_flag or "fuzzy_suggest"
+            # Hormati collection eksplisit bila disebut (mis. "collection couponrequestlogs")
+            explicit_collection = (
+                extract_collection_name(intent, _collection_candidates(service_map))
+                or service_map.get(matched_service)
+                or f"logs_{matched_service}"
             )
-            if not suggest:
-                logger.warning(f"No service matched for data request intent: '{intent}'")
-                if state.get("ticket_context"):
-                    return _ticket_redirect(state, agents_visited)
-                return {
-                    "error": f"Tidak bisa mengenali service dari intent: '{intent}'. "
-                             f"Service yang tersedia: {list(service_map.keys())}",
-                    "next_agent": "end",
-                    "agents_visited": agents_visited,
-                    "routing_strategy": routing_strategy,
-                    "routing_flag": routing_flag,
-                }
-            matched_service = suggest
-            logger.info(f"[Supervisor] data-request fuzzy-suggest → '{suggest}' (auto-route)")
-            routing_flag = routing_flag or "fuzzy_suggest"
-        # Hormati collection eksplisit bila disebut (mis. "collection couponrequestlogs")
-        explicit_collection = (
-            extract_collection_name(intent, _collection_candidates(service_map))
-            or service_map.get(matched_service)
-            or f"logs_{matched_service}"
-        )
-        return {
-            "service_name": matched_service,
-            "collection_name": explicit_collection,
-            "next_agent": "data_agent",
-            "agents_visited": agents_visited,
-            "routing_strategy": routing_strategy,
-            "routing_flag": routing_flag,
-            "error": None,
-        }
+            return {
+                "service_name": matched_service,
+                "collection_name": explicit_collection,
+                "next_agent": "data_agent",
+                "agents_visited": agents_visited,
+                "routing_strategy": routing_strategy,
+                "routing_flag": routing_flag,
+                "error": None,
+            }
+        else:
+            logger.info(f"Data request overridden → project query: '{intent}'")
 
     # 4. Deteksi apakah intent merupakan Pengecekan Koneksi / Health Check
     # Note: norm_intent sudah pakai underscore, jadi keyword harus normalized (tanpa spasi)
@@ -680,10 +748,10 @@ async def supervisor_agent(state: AgentState) -> dict:
 
     # ── Chat by Project: pertanyaan level project (tanpa service eksplisit) ───
     # Fix #123: chat_depth sudah di-inisialisasi di awal function; reassign dihapus.
+    # chat_depth "thinking" tidak blok project query — fallback di bawah juga handle.
     if (
         project_id
         and not state.get("ticket_context")
-        and chat_depth != "thinking"
         and not matched_service
         and any(kw in intent for kw in PROJECT_QUERY_KW)
     ):
