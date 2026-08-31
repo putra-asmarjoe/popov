@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     # Opsional override URL (kosong = pakai default provider)
     embedding_api_url: str = ""
     embedding_max_chars: int = 8000   # max chars to embed (truncation limit)
+    deploy_event_ttl_hours: int = 2   # Gap 4: TTL deploy_events (auto-cleanup MongoDB)
 
     # Observability
     prometheus_url: str = ""
