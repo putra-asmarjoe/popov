@@ -226,12 +226,14 @@ _CONTEXTUAL_CHIP_TEXTS = {
 }
 
 
-def build_contextual_suggestions(state: Dict[str, Any], reply_language: str = "English") -> List[str]:
-    """Chips berbasis temuan investigasi (CHATFLOW V2.1 Tahap 2).
+def build_contextual_suggestions(state: Dict[str, Any], reply_language: str = "English") -> List[Any]:
+    """Chips berbasis temuan investigasi (CHATFLOW V2.1 Tahap 2 + Gap 5).
 
     Fallback ke build_chat_suggestions bila tidak ada temuan spesifik.
-    Return list[str] (label chip) — intent teks chip = label itu sendiri, dikirim
-    sebagai pesan saat user klik (pola yang sama dgn chips existing di Fix #138/#139).
+    Return list[Union[str, dict]]:
+      - str = chip generik (label → isi input saat klik, pola Fix #138/#139)
+      - dict = chip investigasi {label, action, type:"investigation"} → auto-send via
+        action identifier "investigate:<node>" (bypass NLU di supervisor).
     """
     lang_id = reply_language.lower() == "bahasa indonesia"
     texts = _CONTEXTUAL_CHIP_TEXTS.get("id" if lang_id else "en", _CONTEXTUAL_CHIP_TEXTS["en"])
@@ -256,16 +258,29 @@ def build_contextual_suggestions(state: Dict[str, Any], reply_language: str = "E
     if "timeout" in trace_summary or "downstream" in trace_summary:
         suggestions.append(texts["downstream"])
 
-    # — Chip dari data_gaps (Tahap 1) — ambil 1 gap paling atas saja —
-    for gap in (state.get("data_gaps") or [])[:1]:
-        gap_low = gap.lower()
-        if "metrics" in gap_low:
-            suggestions.append(texts["metrics"])
-        elif "span" in gap_low or "trace" in gap_low:
-            suggestions.append(texts["span"])
+    # — Chip dari data_gaps (Gap 5): structured read, semua gaps, sorted by priority, max 3 —
+    data_gaps = state.get("data_gaps") or []
+    gap_chips: List[Dict[str, Any]] = []
+    if data_gaps:
+        dict_gaps = [g for g in data_gaps if isinstance(g, dict)]
+        sorted_gaps = sorted(dict_gaps, key=lambda x: x.get("priority", 99))
+        for gap in sorted_gaps[:3]:
+            action = (gap.get("suggested_action") or "").strip()
+            node = (gap.get("node") or "").strip()
+            if action and node:
+                gap_chips.append({
+                    "label": action,
+                    "action": f"investigate:{node}",
+                    "type": "investigation",
+                })
+        logger.info(
+            f"[offer_planner] data_gaps={len(data_gaps)} gap_chips_generated={len(gap_chips)} "
+            f"nodes_covered={[g.get('node') for g in sorted_gaps[:3]]} "
+            f"total_suggestions={len(suggestions)}"
+        )
 
     # — Fallback ke chips generik bila tidak ada temuan spesifik —
-    if not suggestions:
+    if not suggestions and not gap_chips:
         return build_chat_suggestions(
             service_name=service,
             root_cause=state.get("root_cause_assessment") or "unknown",
@@ -278,12 +293,21 @@ def build_contextual_suggestions(state: Dict[str, Any], reply_language: str = "E
     # — Selalu tambah chip tiket di akhir —
     suggestions.append(texts["ticket"])
 
-    # dedup + batas (maksimal 4)
+    # Gabungkan: gap chips selalu di posisi pertama (primary CTA)
+    all_suggestions: List[Any] = gap_chips + suggestions
+
+    # dedup + batas (maksimal 4) — string biasa dedup, dict gap chips dipertahankan
     seen: List[str] = []
-    for s in suggestions:
-        if s not in seen:
-            seen.append(s)
-    return seen[:4]
+    out: List[Any] = []
+    for s in all_suggestions:
+        if isinstance(s, dict):
+            key = s["label"]
+        else:
+            key = s
+        if key not in seen:
+            seen.append(key)
+            out.append(s)
+    return out[:4]
 
 
 def render_offer_buttons(offer: dict) -> list:

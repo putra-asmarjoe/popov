@@ -14,6 +14,7 @@ ke grup Telegram). Konteks tiket di-inject frontend sebagai prefix [context: ...
 import asyncio
 import json
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
@@ -55,12 +56,126 @@ TOKEN_CHUNK_SIZE = 80
 TOKEN_CHUNK_DELAY = 0.02
 
 
+# ── CHATFLOW V2.1 (Tahap 3): investigation_state utk snapshot follow-up ────────
+_COLLECTOR_NODES = {"mongo_agent", "metrics_agent", "trace_agent", "span_agent", "health_agent"}
+
+
+# ── Per-Agent Tracing (Fase 1) — ringkasan hasil per node graph ───────────────
+# Field kunci per node utk ditampilkan di UI trace. RAW DOCUMENTS TIDAK masuk
+# (kontrol ukuran request_logs). String dipotong 200 char.
+_NODE_SUMMARY_FIELDS = {
+    "supervisor":        ["service_name", "routing_strategy", "routing_flag", "next_agent"],
+    "triage_agent":      ["triage_result"],
+    "mongo_agent":       ["mongo_summary", "query_used"],
+    "metrics_agent":     ["metrics_summary"],
+    "trace_agent":       ["trace_summary", "trace_id"],
+    "span_agent":        ["span_summary"],
+    "health_agent":      ["health_result"],
+    "knowledge_agent":   ["knowledge_context"],
+    "correlation_agent": ["root_cause_assessment", "investigation_confidence", "data_gaps", "gap_nodes"],
+    "response_agent":    ["formatted_message"],
+    "data_agent":        ["collection_name", "data_limit"],
+    "follow_up_agent":   ["follow_up_context"],
+    "ticket_agent":      ["ticket_result", "ticket_action"],
+    "project_agent":     ["project_result"],
+}
+
+
+def _truncate_trace_value(value, max_len: int = 200):
+    """Truncate nilai summary (string/dict/list) agar request_logs tetap ringkas."""
+    if isinstance(value, str):
+        return value[:max_len] + ("..." if len(value) > max_len else "")
+    if isinstance(value, list):
+        return [_truncate_trace_value(v, max_len) for v in value[:5]]
+    if isinstance(value, dict):
+        return {k: _truncate_trace_value(v, max_len) for k, v in list(value.items())[:10]}
+    return value
+
+
+def _summarize_node_output(node_name: str, delta: dict) -> dict:
+    """Ringkasan hasil satu node graph dari delta state — untuk agent_traces."""
+    try:
+        fields = _NODE_SUMMARY_FIELDS.get(node_name, [])
+        out = {}
+        for f in fields:
+            if f in delta and delta[f] is not None:
+                out[f] = _truncate_trace_value(delta[f])
+        return out
+    except Exception:
+        return {}
+
+
+def _extract_correlation_summary(state: dict) -> str:
+    """Ringkasan singkat dari root_cause_assessment (maks 500 char)."""
+    rca = state.get("root_cause_assessment") or ""
+    if not rca:
+        return ""
+    return rca[:500] + ("..." if len(rca) > 500 else "")
+
+
+def _build_investigation_state(final_state: dict) -> dict:
+    """Ringkasan investigasi utk request_logs — dipakai follow_up_agent (Tahap 3)."""
+    visited = final_state.get("agents_visited") or []
+    planned = final_state.get("planned_nodes") or []
+    visited_set = set(visited)
+    return {
+        "hypothesis": (final_state.get("triage_result") or {}).get("hypothesis", "unknown"),
+        "confidence": final_state.get("investigation_confidence", 0.0),
+        "lanes_executed": [n for n in visited if n in _COLLECTOR_NODES],
+        "lanes_skipped": [n for n in planned if n not in visited_set],
+        "data_gaps": final_state.get("data_gaps", []),
+        "suggested_next": final_state.get("suggested_next", []),
+        "correlation_summary": _extract_correlation_summary(final_state),
+        "service_name": final_state.get("service_name", ""),
+        "ticket_id": (final_state.get("ticket_context") or {}).get("ticket_id", ""),
+        "loop_count": final_state.get("internal_loop_count", 0),
+    }
+
+
+# Teks SSE status autonomous loop (CHATFLOW V2.1 Tahap 4C) — bilingual via dict.
+_LOOP_STATUS_TEXTS = {
+    "id": {
+        "initial": "Analisis awal selesai (Confidence {pct}%). Memeriksa data tambahan secara otomatis...",
+        "fetch": "Mengambil data dari {agent}...",
+    },
+    "en": {
+        "initial": "Initial analysis complete (Confidence {pct}%). Automatically fetching additional data...",
+        "fetch": "Fetching data from {agent}...",
+    },
+}
+
+
+def _publish_loop_status(session_id: str, state: dict, locale: str) -> None:
+    """Kirim SSE status ke FE saat autonomous loop akan berjalan (Tahap 4C)."""
+    from state.constants import CONFIDENCE_THRESHOLD, AUTO_LOOP_MAX, AUTONOMOUS_LOOP_ENABLED
+
+    if not AUTONOMOUS_LOOP_ENABLED:
+        return
+    confidence = state.get("investigation_confidence", 1.0)
+    gap_nodes = state.get("gap_nodes") or []
+    loop_count = state.get("internal_loop_count", 0)
+    if not (confidence < CONFIDENCE_THRESHOLD and gap_nodes and loop_count <= AUTO_LOOP_MAX):
+        return
+    texts = _LOOP_STATUS_TEXTS.get("id" if locale == "id" else "en", _LOOP_STATUS_TEXTS["en"])
+    publish(session_id, {
+        "type": "status",
+        "data": texts["initial"].format(pct=int(confidence * 100)),
+    })
+    for node in gap_nodes:
+        agent_label = node.replace("_agent", "").capitalize()
+        publish(session_id, {"type": "status", "data": texts["fetch"].format(agent=agent_label)})
+
+
 # ── Request schema ─────────────────────────────────────────────────────────────
 
 class CreateSessionRequest(BaseModel):
     projectId: Optional[str] = None
     ticketId: Optional[str] = None
     title: str = ""
+
+
+class UpdateSessionRequest(BaseModel):
+    title: str
 
 
 class SendMessageRequest(BaseModel):
@@ -246,11 +361,21 @@ async def _run_pipeline(
             "conversation_history": await build_conversation_history(session_id),
             "next_agent": "supervisor",
             "error": None,
+            # CHATFLOW V2.1 (Tahap 1) — default kosong, diisi correlation_agent
+            "investigation_confidence": 0.0,
+            "data_gaps": [],
+            "gap_nodes": [],
+            "suggested_next": [],
+            "internal_loop_count": 0,
         }
 
         publish(session_id, {"type": "status", "data": "Pipeline dimulai"})
         deadline = asyncio.get_event_loop().time() + PIPELINE_TIMEOUT_S
         stream = langgraph_app.astream(initial_state, stream_mode="updates")
+        # Per-Agent Tracing (Fase 1): kumpulkan {agent, order, duration_ms, summary}
+        agent_traces: list = []
+        _trace_start = None
+        _trace_order = 0
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
@@ -263,8 +388,27 @@ async def _run_pipeline(
                 if not isinstance(delta, dict):
                     continue
                 merged.update(delta)
+                # Catat durasi node SEBELUMNYA (selesai saat node baru mulai)
+                now = time.perf_counter()
+                if _trace_start is not None and agent_traces:
+                    agent_traces[-1]["duration_ms"] = round((now - _trace_start) * 1000, 1)
+                _trace_start = now
                 if node_name and node_name != "__end__":
                     publish(session_id, {"type": "agent", "data": str(node_name)})
+                    _trace_order += 1
+                    agent_traces.append({
+                        "agent": node_name,
+                        "order": _trace_order,
+                        "duration_ms": None,
+                        "summary": _summarize_node_output(node_name, delta),
+                    })
+                # CHATFLOW V2.1 (Tahap 4C): SSE status saat autonomous loop akan berjalan
+                # (confidence rendah + gap + loop belum melebihi batas).
+                if node_name == "correlation_agent" and delta.get("gap_nodes"):
+                    _publish_loop_status(session_id, merged, locale)
+        # Tutup durasi node terakhir
+        if agent_traces and _trace_start is not None:
+            agent_traces[-1]["duration_ms"] = round((time.perf_counter() - _trace_start) * 1000, 1)
 
         answer = (
             merged.get("formatted_message")
@@ -285,8 +429,15 @@ async def _run_pipeline(
             answer = empty_msg.get(locale, empty_msg["id"])
 
         # ── Audit: tutup request_logs (success/failed + snapshot data mentah) ──
+        # CHATFLOW V2.1 (Tahap 3): bangun investigation_state utk follow_up_agent
+        investigation_state = _build_investigation_state(merged)
+        # Per-Agent Tracing (Fase 1): simpan agent_traces ke request_logs + meta FE
         if merged.get("error"):
-            await update_request_log(request_id, merged, "failed", error=merged["error"])
+            await update_request_log(
+                request_id, merged, "failed", error=merged["error"],
+                investigation_state=investigation_state,
+                agent_traces=agent_traces or None,
+            )
         else:
             await update_request_log(
                 request_id,
@@ -294,6 +445,8 @@ async def _run_pipeline(
                 "success",
                 reply={"text": answer},
                 raw_documents=merged.get("raw_documents"),
+                investigation_state=investigation_state,
+                agent_traces=agent_traces or None,
             )
 
         meta = {
@@ -302,11 +455,19 @@ async def _run_pipeline(
             "episode_id": merged.get("episode_id"),
             "agents_visited": merged.get("agents_visited", []),
         }
+        # Per-Agent Tracing (Fase 1): meta utk FE — bubble assistant bisa diklik
+        if agent_traces:
+            meta["agent_traces"] = agent_traces
+            meta["agent_sequence"] = [t["agent"] for t in agent_traces]
         # Chat by Project: meta utk FE — chips saran follow-up + link tiket
         project_result = merged.get("project_result") or {}
         if isinstance(project_result, dict) and project_result:
             meta["ticket_refs"] = project_result.get("ticket_refs") or []
             meta["suggestions"] = project_result.get("suggestions") or []
+        # Chat tiket (ticket_agent/response_agent): suggestions dari state langsung
+        chat_suggestions = merged.get("chat_suggestions") or []
+        if chat_suggestions and not meta.get("suggestions"):
+            meta["suggestions"] = chat_suggestions
         await add_message(session_id, "assistant", answer, meta=meta)
 
         for chunk in _chunks(answer, TOKEN_CHUNK_SIZE):
@@ -385,7 +546,7 @@ async def create_chat_session(
     session = await create_session(
         str(current_user["_id"]), body.projectId, body.ticketId, body.title
     )
-    # Auto-title sesi project (bila user tidak memberi judul): "Chat Project · <nama> · <tgl>"
+    # Auto-title sesi project (bila user tidak memberi judul): "<nama project> · <tgl>"
     if (
         project_doc is not None
         and not (body.title or "").strip()
@@ -397,7 +558,7 @@ async def create_chat_session(
         tgl = datetime.now(_tz.utc).strftime("%d %b %Y")
         from services.chat_store import _now_iso, get_db, SESSIONS_COLLECTION
 
-        title = f"Chat Project · {pname} · {tgl}"
+        title = f"{pname} · {tgl}"
         await get_db()[SESSIONS_COLLECTION].update_one(
             {"_id": session["_id"]}, {"$set": {"title": title}}
         )
@@ -423,6 +584,23 @@ async def chat_history(
     await _owned_session(session_id, current_user)
     messages = await get_messages(session_id)
     return {"messages": [_public_message(m) for m in messages]}
+
+
+@router.patch("/sessions/{session_id}")
+async def update_chat_session(
+    session_id: str,
+    body: UpdateSessionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Update session title (owner only)."""
+    session = await _owned_session(session_id, current_user)
+    if session.get("ticketId"):
+        raise HTTPException(status_code=409, detail="Sesi terikat tiket tidak bisa diubah dari sini")
+    from services.chat_store import update_session_title
+    updated = await update_session_title(session_id, body.title)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Session tidak ditemukan")
+    return _public_session(updated)
 
 
 # ── Send + Stream ──────────────────────────────────────────────────────────────

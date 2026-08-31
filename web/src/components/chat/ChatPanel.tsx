@@ -143,7 +143,7 @@ export function ChatPanel({
                   </div>
                 </div>
               )}
-              <ChatSuggestions suggestions={suggestions} onPick={setDraft} />
+              <ChatSuggestions suggestions={suggestions} onPick={setDraft} onSend={(t) => void sendMessage(ticketSession.id, t)} />
               <ChatInput sessionId={ticketSession.id} value={draft} onTextChange={setDraft} />
             </>
           ) : (

@@ -113,7 +113,7 @@ export function ProjectChatPage() {
             </div>
           </div>
         )}
-        <ChatSuggestions suggestions={suggestions} onPick={setText} contentClassName="max-w-3xl" />
+        <ChatSuggestions suggestions={suggestions} onPick={setText} onSend={(t) => void sendMessage(sessionId, t, mode)} contentClassName="max-w-3xl" />
 
         {/* Mode selector + input */}
         <div className="border-t px-4 py-2.5">

@@ -2,9 +2,17 @@ import type { ChatMessage } from "@/types/chat"
 
 /** Meta pesan assistant TERAKHIR — sumber chips (suggestions/ticket_refs).
  *  Persist server (chat_messages.meta), refresh-safe. Dipakai chat tiket & project. */
+export interface SuggestionChip {
+  label: string
+  action?: string
+  type?: "investigation" | "general"
+}
+
+export type Suggestion = string | SuggestionChip
+
 export interface AssistantMeta {
   ticket_refs?: { ticketNumber: number; ticketId: string; projectKey?: string; title?: string | null; status?: string | null }[]
-  suggestions?: string[]
+  suggestions?: Suggestion[]
   [key: string]: unknown
 }
 
