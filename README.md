@@ -25,6 +25,10 @@ Today, Popov focuses on production incidents: automatically triaging signals, in
   <a href="https://ko-fi.com/popovagent">
     <img src="https://img.shields.io/badge/☕%20Buy%20me%20a%20coffee-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Buy me a coffee on Ko-fi">
   </a>
+  &nbsp;&nbsp;
+  <a href="https://saweria.co/putraasmarjoe">
+    <img src="https://img.shields.io/badge/Donasi-Saweria-orange?style=for-the-badge" alt="Donasi via Saweria">
+  </a>
 </p>
 
 ---
@@ -387,20 +391,18 @@ See [`deploy/README.md`](deploy/README.md) for the full step-by-step guide (priv
 
 ## Project Status
 
-> 🚧 **Active development.** Popov powers incident response for its origin team's production services today, but it should be treated as an early-stage open-source project:
->
-> - Expect breaking API and schema changes.
-> - Single-replica constraints (Telegram long-polling, watchdog singleton) limit horizontal scaling for now.
-> - Test coverage exists for the agent pipeline and prompt rendering (pytest); the project ships periodic release candidates (current: **v0.2.0-rc183**) but does not have CI badges yet.
+> 🚧 **Active development.** Popov powers incident response for its origin team's production services today, but it should be treated as an early-stage open-source project: 
 
-Good fit today: small-to-medium engineering teams that already run Prometheus/Tempo/Loki, want automated triage and investigation, and are comfortable self-hosting and tolerating some churn. Not yet pitched for large enterprise fleets.
+**v0.2.0-rc186** — current release: War Room incident operations shipped end-to-end (project overview + ticket war room with answer-first diagnosis, Classic/War Room mode toggle, plug-and-play overview widgets), plus Knowledge Agent active retrieval, episode enrichment, adaptive fan-out, non-K8s deploy detection, closed-loop post-fix verification, follow-up chips, and agent trace. Full release notes: [v0.2-rc186](https://github.com/putra-asmarjoe/popov/releases/tag/v0.2-rc186).
+
+Good fit today: small-to-medium engineering teams that already run Prometheus/Tempo/Loki, want automated triage and investigation, and are comfortable self-hosting and tolerating some churn. An observability stack is optional — Popov degrades gracefully without it. Not yet pitched for large enterprise fleets.
 
 ## Roadmap
 
 Implemented plans live in `devdocs/`; near-term directions visible in the codebase include:
 
 - Moving the Telegram listener out of the API process so the API can scale beyond one replica
-- Slack, Discord, and WhatsApp notification channels (schema-ready; Telegram + email shipped in rc183)
+- Slack, Discord, and WhatsApp notification channels (schema-ready; Telegram + email shipped in rc186)
 - Restore flow for soft-deleted projects (currently archive-only)
 
 ## 💡 Motivation
