@@ -1,3 +1,5 @@
+import type { WarroomSymptoms } from "./warroom"
+
 /** Project Overview — GET /api/v1/projects/{id}/overview (backend verified). */
 
 export interface OverviewTicket {
@@ -31,6 +33,7 @@ export interface OverviewEpisode {
   ticket_id: string | null
   actual_ttr_minutes: number | null
   enriched_at: string | null
+  symptoms?: WarroomSymptoms | null
 }
 
 export interface StackHealth {

@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next"
-import { Search, Ticket, X } from "lucide-react"
+import { Search, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { MultiSelectPopover } from "@/components/ticket/MultiSelectPopover"
@@ -14,8 +14,8 @@ const ALL_STATUSES: TicketStatus[] = ["new", "open", "in_progress", "needs_revie
 const ALL_SEVERITIES: TicketSeverity[] = ["critical", "high", "medium", "low"]
 const SEV_ORDER: TicketSeverity[] = ["critical", "high", "medium", "low"]
 
-/** TicketSummaryCard — presentational. State/filter/query dipegang ProjectOverview
- *  (biar klik tiket → overlay detail di warroom, mode tidak pindah ke classic). */
+/** TicketSummaryCard — body-only (chrome di WidgetShell). Presentational: state/filter
+ *  dipegang page (via WidgetDataContext → TicketSummaryWidget adapter). */
 export function TicketSummaryCard({
   tickets,
   isLoading,
@@ -63,18 +63,7 @@ export function TicketSummaryCard({
     })
 
   return (
-    <div className="flex min-h-0 flex-col rounded-xl border bg-card ring-1 ring-foreground/5">
-      {/* Header */}
-      <div className="flex items-center gap-1.5 border-b px-3 py-2">
-        <Ticket className="size-3.5 text-primary" aria-hidden="true" />
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {t("overview.open_tickets")}
-        </span>
-        <span className="ml-auto tabular-nums text-sm font-bold">
-          {isLoading ? "…" : tickets.length}
-        </span>
-      </div>
-
+    <div className="flex min-h-0 flex-col">
       {/* Filter bar */}
       <div className="flex flex-wrap items-center gap-1.5 border-b px-2 py-2">
         <div className="relative">

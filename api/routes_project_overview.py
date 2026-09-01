@@ -91,7 +91,7 @@ async def _query_episodes(db, workspace_id: str, observ_ids: List[str], limit: i
     cursor = db[INCIDENT_EPISODES_COLLECTION].find(
         q, {"_id": 1, "episode_id": 1, "service_name": 1, "root_cause": 1,
             "confidence": 1, "created_at": 1, "ticket_id": 1,
-            "actual_ttr_minutes": 1, "enriched_at": 1},
+            "actual_ttr_minutes": 1, "enriched_at": 1, "symptoms": 1},
     ).sort("created_at", -1).limit(limit)
     return await cursor.to_list(limit)
 

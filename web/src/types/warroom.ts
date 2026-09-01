@@ -18,6 +18,17 @@ export interface WarroomDiagnosis {
   correlation_summary: string
   data_gaps: string[]
   suggested_next: string[]
+  lanes_executed: string[]
+  lanes_skipped: string[]
+}
+
+export interface WarroomSymptoms {
+  error_rate: number | null
+  hpa_status: string | null
+  mongo_error_count: number | null
+  trace_available: boolean
+  metrics_available: boolean
+  mongo_available: boolean
 }
 
 export interface WarroomRun {
@@ -33,6 +44,7 @@ export interface WarroomEpisode {
   root_cause: string | null
   confidence: number
   correlation_result: string | null
+  symptoms?: WarroomSymptoms | null
   resolution_actions: string[]
   actual_ttr_minutes: number | null
 }

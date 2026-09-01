@@ -6,24 +6,25 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { FloatingPanel } from "@/components/panel/FloatingPanel"
 import { TicketDetailChatPanel } from "@/components/ticket/TicketDetailChatPanel"
-import { TicketSummaryCard } from "@/components/project/TicketSummaryCard"
-import { AlertFeedCard } from "@/components/project/AlertFeedCard"
-import { StackHealthCard } from "@/components/project/StackHealthCard"
-import { EpisodeTimeline } from "@/components/project/EpisodeTimeline"
 import { ProjectViewToggle } from "@/components/project/ProjectViewToggle"
+import { WidgetDataProvider } from "@/components/overview/WidgetDataContext"
+import { WidgetGrid } from "@/components/overview/WidgetGrid"
+import { WidgetCustomize } from "@/components/overview/WidgetCustomize"
 import { useProjectOverview } from "@/hooks/useProjectOverview"
 import { useTickets, useOpenTicket } from "@/hooks/useTickets"
 import { useProjects, useWorkspaceDetail, useWorkspaces } from "@/hooks/useWorkspaces"
 import { useTicketRealtime } from "@/hooks/useWebSocket"
 import { WarRoomPanel } from "@/components/warroom/WarRoomPanel"
 import { setProjectView } from "@/lib/project-view"
+import { useWidgetPrefs, widgetsNeedOverview, widgetsNeedTickets } from "@/lib/overview-widgets"
 import type { TicketFilters } from "@/store/ticket.store"
 import type { Ticket } from "@/types/ticket"
 
 const DEFAULT_FILTERS: TicketFilters = { status: ["open", "new"], severity: [], assignee: null, search: "" }
 
 /** Project Overview — health project sekilas (War Room mode).
- *  Klik tiket → overlay Detail|Chat TETAP di warroom (URL ?ticket=KEY-N, mode tidak pindah). */
+ *  Klik tiket → overlay Detail|Chat TETAP di warroom (URL ?ticket=KEY-N, mode tidak pindah).
+ *  Grid = widget plug-and-play (registry + localStorage prefs per project). */
 export function ProjectOverview() {
   const { t } = useTranslation("project")
   const { wsSlug, projSlug } = useParams<{ wsSlug: string; projSlug: string }>()
@@ -48,7 +49,16 @@ export function ProjectOverview() {
   // Realtime: ticket baru / berubah → invalidate list + overview (sama seperti classic)
   useTicketRealtime(project?.id ?? null)
 
-  const { data: overview, isLoading: ovLoading } = useProjectOverview(project?.id ?? null)
+  // Widget prefs — localStorage per project (default = widget defaultEnabled)
+  const { enabled, update, reset } = useWidgetPrefs(project?.id ?? null)
+
+  // Data fetch GATED by widget enabled — widget di-disable tidak fetch.
+  // Overview (4 collection) hanya bila ada widget dataKey; tickets hanya bila ada needsTickets.
+  const needOverview = widgetsNeedOverview(enabled)
+  const needTickets = widgetsNeedTickets(enabled)
+  const { data: overview, isLoading: ovLoading } = useProjectOverview(
+    needOverview ? project?.id ?? null : null,
+  )
 
   // Filter tiket — state lokal di halaman ini (default open)
   const [filters, setFilters] = useState<TicketFilters>(DEFAULT_FILTERS)
@@ -60,7 +70,7 @@ export function ProjectOverview() {
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchInput])
-  const ticketsQuery = useTickets(project?.id ?? null, filters, 1)
+  const ticketsQuery = useTickets(needTickets ? project?.id ?? null : null, filters, 1)
   const tickets = ticketsQuery.data?.tickets ?? []
 
   // Tiket terpilih — dari URL ?ticket=KEY-N (deep-link) atau klik row
@@ -140,6 +150,23 @@ export function ProjectOverview() {
               }
             }}
           />
+          <WidgetCustomize
+            enabled={enabled}
+            onToggle={(id) =>
+              update(
+                enabled.includes(id) ? enabled.filter((x) => x !== id) : [...enabled, id],
+              )
+            }
+            onMove={(id, dir) => {
+              const from = enabled.indexOf(id)
+              const to = from + dir
+              if (from < 0 || to < 0 || to >= enabled.length) return
+              const next = [...enabled]
+              ;[next[from], next[to]] = [next[to], next[from]]
+              update(next)
+            }}
+            onReset={reset}
+          />
           <Button asChild size="sm" className="h-8 gap-1">
             <Link to={`/w/${wsSlug}/${projSlug}/new`}>
               <Plus className="size-4" /> {t("page.new_ticket_title")}
@@ -160,24 +187,24 @@ export function ProjectOverview() {
           </div>
         )}
 
-        {!ovLoading && overview && (
-          <div className="space-y-3">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <TicketSummaryCard
-                tickets={tickets}
-                isLoading={ticketsQuery.isLoading}
-                activeTicketId={selectedTicket?.id ?? null}
-                filters={filters}
-                searchInput={searchInput}
-                onSearchInput={setSearchInput}
-                onFiltersChange={setFilters}
-                onSelectTicket={selectTicket}
-              />
-              <AlertFeedCard alerts={overview.alert_feed} />
-              <StackHealthCard stacks={overview.stack_health} generatedAt={overview.generated_at} />
-            </div>
-            <EpisodeTimeline episodes={overview.episode_timeline} />
-          </div>
+        {!ovLoading && (
+          <WidgetDataProvider
+            value={{
+              projectId: project?.id ?? null,
+              overview,
+              tickets,
+              ticketsLoading: ticketsQuery.isLoading,
+              members,
+              activeTicketId: selectedTicket?.id ?? null,
+              filters,
+              searchInput,
+              onSearchInput: setSearchInput,
+              onFiltersChange: setFilters,
+              onSelectTicket: selectTicket,
+            }}
+          >
+            <WidgetGrid enabled={enabled} onRemove={(id) => update(enabled.filter((x) => x !== id))} />
+          </WidgetDataProvider>
         )}
       </div>
 

@@ -14,6 +14,7 @@ import { useProjects } from "@/hooks/useWorkspaces"
 import { useWorkspaceStore } from "@/store/workspace.store"
 import { cn } from "@/lib/utils"
 import { lastAssistantMeta } from "@/lib/chat-meta"
+import type { Suggestion } from "@/lib/chat-meta"
 
 /**
  * ProjectChatPage — halaman chat ber-konteks project (Chat by Project fase 1).
@@ -113,8 +114,6 @@ export function ProjectChatPage() {
             </div>
           </div>
         )}
-        <ChatSuggestions suggestions={suggestions} onPick={setText} onSend={(t) => void sendMessage(sessionId, t, mode)} contentClassName="max-w-3xl" />
-
         {/* Mode selector + input */}
         <div className="border-t px-4 py-2.5">
           <div className="mx-auto w-full max-w-3xl space-y-2">
@@ -136,7 +135,7 @@ export function ProjectChatPage() {
                 </button>
               ))}
             </div>
-            <ProjectChatInput sessionId={sessionId} mode={mode} onTextChange={setText} draft={text} />
+            <ProjectChatInput sessionId={sessionId} mode={mode} onTextChange={setText} draft={text} suggestions={suggestions} />
           </div>
         </div>
       </div>
@@ -157,11 +156,13 @@ function ProjectChatInput({
   mode,
   onTextChange,
   draft,
+  suggestions,
 }: {
   sessionId: string
   mode: ChatMode
   onTextChange: (v: string) => void
   draft: string
+  suggestions: Suggestion[]
 }) {
   const { t } = useTranslation("pchat")
   const sendMessage = useChatStream().sendMessage
@@ -187,7 +188,9 @@ function ProjectChatInput({
   }
 
   return (
-    <div className="flex items-end gap-2">
+    <div className="space-y-2">
+      <ChatSuggestions suggestions={suggestions} onPick={onTextChange} onSend={(t) => void sendMessage(sessionId, t, mode)} contentClassName="max-w-3xl" />
+      <div className="flex items-end gap-2">
       <Textarea
         ref={taRef}
         value={draft}
@@ -217,6 +220,7 @@ function ProjectChatInput({
           <Send className="size-4" />
         </Button>
       )}
+      </div>
     </div>
   )
 }

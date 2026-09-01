@@ -1,7 +1,6 @@
 import { useTranslation } from "react-i18next"
-import { Activity } from "lucide-react"
 import { cn, timeAgo } from "@/lib/utils"
-import type { StackHealth } from "@/types/overview"
+import { useWidgetData } from "@/components/overview/WidgetDataContext"
 
 type Tone = "ok" | "degraded" | "error" | "unknown"
 
@@ -22,44 +21,36 @@ const TONE_DOT: Record<Tone, string> = {
 
 const STALE_MS = 90_000
 
-/** Stack health — baca health_status (watchdog), JANGAN probe ulang.
- *  Stale: last_health_check_at > 90s → muted + tag "stale". */
-export function StackHealthCard({
-  stacks,
-  generatedAt,
-}: {
-  stacks: StackHealth[]
-  generatedAt?: string
-}) {
+/** Stack health — body-only (chrome di WidgetShell). Data via WidgetDataContext.
+ *  Baca health_status (watchdog), JANGAN probe ulang. Stale: last check >90s → muted. */
+export function StackHealthCard() {
   const { t } = useTranslation("project")
+  const { overview } = useWidgetData()
+  const stacks = overview?.stack_health ?? []
+  const generatedAt = overview?.generated_at
   const okCount = stacks.filter((s) => healthTone(s.health_status) === "ok").length
-  const staleNow = () => Date.now()
+
+  if (!stacks.length) {
+    return (
+      <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+        {t("overview.stacks_empty")}
+      </p>
+    )
+  }
 
   return (
-    <div className="flex min-h-0 flex-col rounded-xl border bg-card ring-1 ring-foreground/5">
-      <div className="flex items-center gap-1.5 border-b px-3 py-2">
-        <Activity className="size-3.5 text-primary" aria-hidden="true" />
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {t("overview.stack_health")}
+    <div className="flex min-h-0 flex-col">
+      <div className="flex items-center gap-2 border-b px-3 py-1.5 text-[10px] text-muted-foreground">
+        <span className="tabular-nums">
+          <span className="font-bold text-foreground">{okCount}</span>/{stacks.length}
         </span>
-        <span className="ml-auto tabular-nums text-[10px] text-muted-foreground">
-          {t("overview.updated")} {timeAgo(generatedAt)}
-        </span>
-        <span className="text-xs tabular-nums">
-          <span className="font-bold">{okCount}</span>
-          <span className="text-muted-foreground">/{stacks.length}</span>
-        </span>
+        <span className="ml-auto tabular-nums">{t("overview.updated")} {timeAgo(generatedAt)}</span>
       </div>
       <ul className="min-h-0 flex-1 divide-y divide-border/50 overflow-y-auto">
-        {stacks.length === 0 && (
-          <li className="px-3 py-6 text-center text-xs text-muted-foreground">
-            {t("overview.stacks_empty")}
-          </li>
-        )}
         {stacks.map((s) => {
           const tone = healthTone(s.health_status)
           const last = s.last_health_check_at ? new Date(s.last_health_check_at).getTime() : 0
-          const stale = last !== 0 && staleNow() - last > STALE_MS
+          const stale = last !== 0 && Date.now() - last > STALE_MS
           return (
             <li key={s.id} className="flex items-center gap-2 px-3 py-2">
               <span

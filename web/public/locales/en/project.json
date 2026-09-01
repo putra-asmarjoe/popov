@@ -136,9 +136,15 @@
     "pillar_metrics": "Metrics",
     "pillar_trace": "Traces",
     "pillar_span": "OTel spans",
+    "pillar_health": "Health",
     "pillar_skipped_hint": "Pillar skipped by planner — not investigated",
     "second_brain": "Second Brain — similar episodes",
     "ttr": "to resolve",
+    "lanes_executed": "executed",
+    "lanes_skipped": "skipped",
+    "remediation": "Remediation",
+    "investigated_ago": "investigated",
+    "error_rate": "Error rate",
     "timeline": "Investigation timeline",
     "timeline_steps": "steps",
     "investigations": "Investigations",
@@ -170,7 +176,19 @@
     "episodes": "Episodes",
     "resolved": "resolved",
     "episodes_empty": "No episodes in the last 30 days",
-    "tickets_empty_filter": "No tickets match the selected filters"
+    "tickets_empty_filter": "No tickets match the selected filters",
+    "widgets": {
+      "title": "Customize widgets",
+      "reset": "Reset default",
+      "remove": "Remove {{title}}",
+      "add": "Add {{title}}",
+      "move_up": "Move {{title}} up",
+      "move_down": "Move {{title}} down",
+      "empty": "No widgets enabled — add them via customize.",
+      "error_rate": "Error rate",
+      "error_rate_trend": "Error rate trend: {{trend}}",
+      "alert_count": "{{count}} alerts in window"
+    }
   },
   "view": {
     "label": "Project view mode",

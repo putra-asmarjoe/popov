@@ -136,9 +136,15 @@
     "pillar_metrics": "Metrik",
     "pillar_trace": "Trace",
     "pillar_span": "Span OTel",
+    "pillar_health": "Kesehatan",
     "pillar_skipped_hint": "Pilar dilewati planner — tidak diinvestigasi",
     "second_brain": "Second Brain — episode serupa",
     "ttr": "untuk resolve",
+    "lanes_executed": "dijalankan",
+    "lanes_skipped": "dilewati",
+    "remediation": "Remediasi",
+    "investigated_ago": "diinvestigasi",
+    "error_rate": "Error rate",
     "timeline": "Timeline investigasi",
     "timeline_steps": "langkah",
     "investigations": "Investigasi",
@@ -170,7 +176,19 @@
     "episodes": "Episode",
     "resolved": "resolve",
     "episodes_empty": "Tidak ada episode dalam 30 hari terakhir",
-    "tickets_empty_filter": "Tidak ada tiket yang cocok dengan filter"
+    "tickets_empty_filter": "Tidak ada tiket yang cocok dengan filter",
+    "widgets": {
+      "title": "Atur widget",
+      "reset": "Reset default",
+      "remove": "Hapus {{title}}",
+      "add": "Tambah {{title}}",
+      "move_up": "Naikkan {{title}}",
+      "move_down": "Turunkan {{title}}",
+      "empty": "Tidak ada widget aktif — tambahkan via atur widget.",
+      "error_rate": "Error rate",
+      "error_rate_trend": "Tren error rate: {{trend}}",
+      "alert_count": "{{count}} alert dalam window"
+    }
   },
   "view": {
     "label": "Mode tampilan project",

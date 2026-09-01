@@ -1,16 +1,18 @@
 import { useMemo } from "react"
 import { useTranslation } from "react-i18next"
-import { CheckCircle2, Circle, Layers } from "lucide-react"
+import { CheckCircle2, Circle } from "lucide-react"
 import { cn, formatMs, timeAgo } from "@/lib/utils"
-import type { OverviewEpisode } from "@/types/overview"
+import { useWidgetData } from "@/components/overview/WidgetDataContext"
 
 const DAYS = 30
 
-/** Episode pulse — CSS bar sparkline (tanpa library chart) + list episode.
- *  Episode tak punya severity → tampilkan root_cause + confidence. Resolved
- *  ditandai enriched_at (terisi saat tiket resolved). */
-export function EpisodeTimeline({ episodes }: { episodes: OverviewEpisode[] }) {
+/** Episode pulse — body-only (chrome di WidgetShell). Data via WidgetDataContext.
+ *  CSS bar sparkline (tanpa library chart) + list episode. Episode tak punya severity
+ *  → tampilkan root_cause + confidence. Resolved ditandai enriched_at. */
+export function EpisodeTimeline() {
   const { t } = useTranslation("project")
+  const { overview } = useWidgetData()
+  const episodes = overview?.episode_timeline ?? []
 
   const buckets = useMemo(() => {
     const arr = new Array<number>(DAYS).fill(0)
@@ -29,17 +31,7 @@ export function EpisodeTimeline({ episodes }: { episodes: OverviewEpisode[] }) {
   const total = episodes.length
 
   return (
-    <div className="rounded-xl border bg-card ring-1 ring-foreground/5">
-      <div className="flex items-center gap-1.5 border-b px-3 py-2">
-        <Layers className="size-3.5 text-primary" aria-hidden="true" />
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {t("overview.episodes")}
-        </span>
-        <span className="ml-auto text-xs text-muted-foreground">
-          {total} · {resolvedCount} {t("overview.resolved")}
-        </span>
-      </div>
-
+    <div className="min-h-0">
       {/* Pulse: episode count per day (30d) — CSS bars, aksesibel via label */}
       <div
         role="img"

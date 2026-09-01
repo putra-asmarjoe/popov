@@ -11,13 +11,65 @@ import { InvestigationTimeline } from "@/components/warroom/InvestigationTimelin
 import { DataGapsList } from "@/components/warroom/DataGapsList"
 import { RunsList } from "@/components/warroom/RunsList"
 import { useWarRoom } from "@/hooks/useWarRoom"
-import { timeAgo } from "@/lib/utils"
+import { timeAgo, toPct } from "@/lib/utils"
 import type { Ticket } from "@/types/ticket"
 import type { WarroomDiagnosis } from "@/types/warroom"
 
 /**
+ * Hero strip — thesis ringkas (answer-first, frontend-design):
+ * service_name · error rate (episode symptoms) · hypothesis · confidence · investigated ago.
+ */
+function HeroStrip({
+  serviceName,
+  errorRate,
+  diagnosis,
+  investigatedAt,
+}: {
+  serviceName: string | null
+  errorRate: number | null
+  diagnosis: WarroomDiagnosis
+  investigatedAt: string | null
+}) {
+  const { t } = useTranslation("project")
+  const items = [
+    serviceName ? <span key="svc" className="font-mono text-xs font-bold">{serviceName}</span> : null,
+    errorRate != null ? (
+      <span key="err">
+        {t("warroom.error_rate")}{" "}
+        <span className="font-semibold tabular-nums">{errorRate}%</span>
+      </span>
+    ) : null,
+    <span key="hypo" className="min-w-0 truncate">
+      {t("warroom.hypothesis")}{" "}
+      <span className="font-semibold">{diagnosis.hypothesis || t("warroom.unknown")}</span>
+    </span>,
+    <span key="conf">
+      {t("warroom.confidence")}{" "}
+      <span className="font-semibold tabular-nums">{toPct(diagnosis.confidence)}%</span>
+    </span>,
+    investigatedAt ? (
+      <span key="inv" className="tabular-nums text-muted-foreground">
+        {t("warroom.investigated_ago")} {timeAgo(investigatedAt)}
+      </span>
+    ) : null,
+  ].filter(Boolean)
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border bg-muted/30 px-3 py-2 text-xs text-foreground/90">
+      {items.map((el, i) => (
+        <span key={i} className="flex items-center gap-1.5">
+          {i > 0 && <span className="text-border" aria-hidden="true">·</span>}
+          {el}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/**
  * War Room — answer-first. Mode `?ticket=KEY-N&view=warroom` (full-width,
  * menggantikan split 30/70 Detail|Chat). Chat default tetap utuh via back.
+ * Order: Header → Hero → RunsList → Verdict → Second Brain → Pillars → Timeline|Gaps.
  */
 export function WarRoomPanel({
   ticket,
@@ -43,8 +95,20 @@ export function WarRoomPanel({
           correlation_summary: data.episode.correlation_result ?? "",
           data_gaps: [],
           suggested_next: [],
+          lanes_executed: [],
+          lanes_skipped: [],
         }
-      : { hypothesis: t("warroom.unknown"), confidence: 0, correlation_summary: "", data_gaps: [], suggested_next: [] }
+      : {
+          hypothesis: t("warroom.unknown"),
+          confidence: 0,
+          correlation_summary: "",
+          data_gaps: [],
+          suggested_next: [],
+          lanes_executed: [],
+          lanes_skipped: [],
+        }
+
+  const errorRate = data?.episode?.symptoms?.error_rate ?? null
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -102,23 +166,36 @@ export function WarRoomPanel({
           </div>
         )}
 
-        {!isLoading && runs.length > 1 && (
-          <RunsList
-            runs={runs}
-            activeIndex={clamped}
-            onSelect={setActiveIndex}
-            onOpenChat={onBack}
-          />
-        )}
-
         {!isLoading && data?.source !== "none" && (
           <>
-            <DiagnosisStrip diagnosis={diagnosis} />
+            <HeroStrip
+              serviceName={data?.service_name ?? null}
+              errorRate={errorRate}
+              diagnosis={diagnosis}
+              investigatedAt={data?.meta.investigated_at ?? null}
+            />
+
+            {runs.length > 1 && (
+              <RunsList
+                runs={runs}
+                activeIndex={clamped}
+                onSelect={setActiveIndex}
+                onOpenChat={onBack}
+              />
+            )}
+
+            <DiagnosisStrip
+              diagnosis={diagnosis}
+              episode={data?.episode}
+              investigatedAt={data?.meta.investigated_at}
+            />
+
+            <SecondBrainPanel items={data?.second_brain ?? []} />
+
             {activeRun && <EvidencePillars pillars={activeRun.pillars} />}
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-              {activeRun && <InvestigationTimeline steps={activeRun.timeline} />}
-              <SecondBrainPanel items={data?.second_brain ?? []} />
-            </div>
+
+            {activeRun && <InvestigationTimeline steps={activeRun.timeline} />}
+
             {activeRun && (
               <DataGapsList
                 dataGaps={diagnosis.data_gaps}

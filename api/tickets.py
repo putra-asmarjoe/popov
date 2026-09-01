@@ -437,6 +437,8 @@ def _run_from_log(log: Dict[str, Any]) -> Dict[str, Any]:
             "correlation_summary": inv.get("correlation_summary", ""),
             "data_gaps": inv.get("data_gaps", []),
             "suggested_next": inv.get("suggested_next", []),
+            "lanes_executed": inv.get("lanes_executed", []),
+            "lanes_skipped": inv.get("lanes_skipped", []),
         },
         "pillars": _build_pillars(log.get("agent_traces")),
         "timeline": [
@@ -514,6 +516,7 @@ async def get_ticket_warroom(
             "root_cause": ep.get("root_cause") if ep else None,
             "confidence": ep.get("confidence", 0) if ep else 0,
             "correlation_result": corr_text,
+            "symptoms": ep.get("symptoms", {}) if ep else None,
             "resolution_actions": ep.get("resolution_actions", []) if ep else [],
             "actual_ttr_minutes": ep.get("actual_ttr_minutes") if ep else None,
         } if ep else None,

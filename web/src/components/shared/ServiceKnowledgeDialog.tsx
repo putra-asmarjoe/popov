@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 import { toast } from "sonner"
-import { Check, ChevronDown, ChevronRight, Copy, Eye, FilePlus2, FileText, Pencil, Terminal, Trash2, Upload } from "lucide-react"
+import { ChevronDown, ChevronRight, Copy, Eye, FilePlus2, FileText, Pencil, Terminal, Trash2, Upload } from "lucide-react"
 import { useTranslation } from "react-i18next"
 import { api, apiErrorMessage } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -99,9 +99,7 @@ export function ServiceKnowledgeDialog({
   // API guide state
   const [showApiGuide, setShowApiGuide] = useState(false)
   const [guideExpanded, setGuideExpanded] = useState(false)
-  const [hostInput, setHostInput] = useState(() => {
-    try { return window.location.origin } catch { return "http://localhost:8000" }
-  })
+  const hostInput = typeof window !== "undefined" ? window.location.origin : "http://localhost:8000"
 
   // Project selection (only when workspaceId provided)
   const { data: allProjects } = useProjects(workspaceId ?? null)
