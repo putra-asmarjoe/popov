@@ -8,6 +8,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { ChatMessages } from "@/components/chat/ChatMessages"
 import { ChatSuggestions } from "@/components/chat/ChatSuggestions"
 import { AgentTracePanel } from "@/components/chat/AgentTracePanel"
+import { SplitHandle } from "@/components/shared/SplitHandle"
+import { useDragResize } from "@/hooks/useDragResize"
 import { useChatMessages, useChatSessions, useChatStream } from "@/hooks/useChatStream"
 import { useChatStore } from "@/store/chat.store"
 import { useProjects } from "@/hooks/useWorkspaces"
@@ -38,6 +40,16 @@ export function ProjectChatPage() {
   const messagesQuery = useChatMessages(sessionId || null)
   const activeTraceMessages = useChatStore((s) => s.activeTraceMessages)
   const activeTraceRequestId = useChatStore((s) => s.activeTraceRequestId)
+
+  // Lebar panel Agent Trace — bisa di-resize user (drag divider), persist per user.
+  // Key sama dgn chat tiket → preferensi lebar trace konsisten di semua tempat.
+  const { width: traceWidth, onPointerDown: traceResize } = useDragResize({
+    initial: 420,
+    min: 240,
+    max: 640,
+    reverse: true, // pane di KANAN divider
+    storageKey: "popov:trace-width",
+  })
 
   // Tutup Agent Trace panel saat pindah session — trace milik session lama
   const closeTrace = useChatStore((s) => s.closeTrace)
@@ -140,11 +152,14 @@ export function ProjectChatPage() {
         </div>
       </div>
 
-      {/* Trace panel (right side, fixed width) */}
+      {/* Trace panel (right side, resizable) */}
       {activeTraceMessages.length > 0 && (
-        <div className="w-[420px] shrink-0 border-l">
-          <AgentTracePanel traces={activeTraceMessages} requestId={activeTraceRequestId} />
-        </div>
+        <>
+          <SplitHandle onPointerDown={traceResize} />
+          <div className="shrink-0" style={{ width: traceWidth }}>
+            <AgentTracePanel traces={activeTraceMessages} requestId={activeTraceRequestId} />
+          </div>
+        </>
       )}
     </div>
   )

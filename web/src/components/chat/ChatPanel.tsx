@@ -5,6 +5,8 @@ import { ChatInput } from "@/components/chat/ChatInput"
 import { ChatMessages } from "@/components/chat/ChatMessages"
 import { ChatSuggestions } from "@/components/chat/ChatSuggestions"
 import { AgentTracePanel } from "@/components/chat/AgentTracePanel"
+import { SplitHandle } from "@/components/shared/SplitHandle"
+import { useDragResize } from "@/hooks/useDragResize"
 import { useChatMessages, useChatSessions, useCreateChatSession } from "@/hooks/useChatStream"
 import { useChatStore, recentlyFinalized } from "@/store/chat.store"
 import { lastAssistantMeta } from "@/lib/chat-meta"
@@ -35,6 +37,15 @@ export function ChatPanel({
   const activeTraceRequestId = useChatStore((s) => s.activeTraceRequestId)
   // Draft terisi dari chips suggestions (recommended questions) — klik chip → isi input
   const [draft, setDraft] = useState("")
+
+  // Lebar panel Agent Trace — bisa di-resize user (drag divider), persist per user
+  const { width: traceWidth, onPointerDown: traceResize } = useDragResize({
+    initial: 420,
+    min: 240,
+    max: 640,
+    reverse: true, // pane di KANAN divider
+    storageKey: "popov:trace-width",
+  })
 
   // Sesi tiket ini = session pertama dengan ticketId yang cocok
   const ticketSession = useMemo(
@@ -155,9 +166,12 @@ export function ChatPanel({
 
         {/* Trace panel (fixed width, right side) */}
         {activeTraceMessages.length > 0 && (
-          <div className="w-[420px] shrink-0 border-l">
-            <AgentTracePanel traces={activeTraceMessages} requestId={activeTraceRequestId} />
-          </div>
+          <>
+            <SplitHandle onPointerDown={traceResize} />
+            <div className="shrink-0" style={{ width: traceWidth }}>
+              <AgentTracePanel traces={activeTraceMessages} requestId={activeTraceRequestId} />
+            </div>
+          </>
         )}
       </div>
     </div>

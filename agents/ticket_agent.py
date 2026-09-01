@@ -328,9 +328,39 @@ async def _offer_next(state: dict, agents_visited: list, ticket: Dict[str, Any],
     return f"{message}\n\n{render_offer_question(offer)}"
 
 
+async def _load_alerts(ticket_id: str) -> List[Dict[str, Any]]:
+    """Alert ter-link tiket (ticket_alerts) utk konteks jawaban — Fix #198.
+    Tanpa ini agent hanya punya description tiket, tidak 'mengetahui' alert aslinya
+    (nama/severity/source/traceIds) sehingga jawaban soal alert jadi generik."""
+    try:
+        from services.ticket_alert_store import list_alerts_for_ticket, public_alert
+        return [public_alert(a) for a in await list_alerts_for_ticket(str(ticket_id))]
+    except Exception as e:
+        logger.warning(f"TicketAgent load alerts failed: {e}")
+        return []
+
+
+def _alert_lines(alerts: List[Dict[str, Any]], locale: str = "id") -> str:
+    """Baris alert utk ringkasan deterministik — bilingual (Fix #198)."""
+    if not alerts:
+        return ""
+    lines = []
+    for a in alerts[:5]:
+        trace_n = len(a.get("traceIds") or [])
+        lines.append(
+            f"  • `{a.get('name') or 'alert'}` · severity `{a.get('severity')}`"
+            f" · source `{a.get('source')}` · traceIds `{trace_n}`"
+            + (f" · svc `{a.get('serviceName')}`" if a.get("serviceName") else "")
+        )
+    head = (f"  • *Linked Alerts:* ({len(alerts)})" if locale == "en"
+            else f"  • *Alert Ter-Link:* ({len(alerts)})")
+    return head + "\n" + "\n".join(lines) + "\n"
+
+
 async def _build_ticket_summary_deterministic(ticket: Dict[str, Any], project: Dict[str, Any],
                                               locale: str = "id") -> str:
     """Ringkasan deterministik tiket (fallback bila LLM gagal) — bilingual (Fix #145)."""
+    alerts = await _load_alerts(str(ticket.get("_id", "")))
     display = f"{project.get('key', 'TKT')}-{ticket.get('ticketNumber')}"
     title = ticket.get("title") or "-"
     status = ticket.get("status") or "open"
@@ -354,6 +384,7 @@ async def _build_ticket_summary_deterministic(ticket: Dict[str, Any], project: D
         note = (p.get("note") or "").strip()
         progress_lines.append(f"  • `[{who} {at}]` {note}")
     progress_block = "\n".join(progress_lines) if progress_lines else "  (none yet)" if locale == "en" else "  (belum ada catatan)"
+    alert_block = _alert_lines(alerts, locale)
     if locale == "en":
         return (
             f"📋 *Ticket {display}* — {title}\n"
@@ -363,6 +394,7 @@ async def _build_ticket_summary_deterministic(ticket: Dict[str, Any], project: D
             f"  • Assignees: {assignees}\n"
             f"  • Tags: {tags}\n"
             f"  • *Progress Log:*\n{progress_block}"
+            + (f"\n{alert_block}" if alert_block else "")
         )
     return (
         f"📋 *Tiket {display}* — {title}\n"
@@ -372,6 +404,7 @@ async def _build_ticket_summary_deterministic(ticket: Dict[str, Any], project: D
         f"  • Assignees: {assignees}\n"
         f"  • Tags: {tags}\n"
         f"  • *Progress Log:*\n{progress_block}"
+        + (f"\n{alert_block}" if alert_block else "")
     )
 
 
@@ -389,6 +422,9 @@ async def _build_ticket_summary(ticket: Dict[str, Any], project: Dict[str, Any],
         u = await get_user(str(uid))
         if u:
             names.append(u.get("name") or u.get("email") or str(uid))
+    # Fix #198: alert ter-link ikut dikirim ke LLM — agent 'mengetahui' alert asli
+    # (nama/severity/source/traceIds) bukan hanya description tiket yang ter-truncate.
+    alerts = await _load_alerts(str(ticket.get("_id", "")))
     data = {
         "ticket": display,
         "title": ticket.get("title"),
@@ -402,6 +438,7 @@ async def _build_ticket_summary(ticket: Dict[str, Any], project: Dict[str, Any],
         "tags": ticket.get("tags") or [],
         "description": (ticket.get("description") or "")[:2000],
         "progress_log": ticket.get("progressLog") or [],
+        "alerts": alerts,
     }
     hist_lines = "\n".join(f"[{h.get('role')}] {h.get('content','')}" for h in (history or [])[-6:]) or "-"
     try:

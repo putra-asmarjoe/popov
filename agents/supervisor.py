@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any
 from state.schema import AgentState
 from services.doc_loader import list_all_services
 from services.ticket_intent import is_ticket_intent
-from services.knowledge_listing import is_knowledge_query
+from services.knowledge_listing import is_knowledge_query, is_connection_query
 from services.offer_planner import classify_answer
 from services.offer_session import get_active_offer, accept_offer, cancel_offer, set_awaiting
 from services.prompt_loader import render as render_prompt
@@ -831,6 +831,33 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_flag": routing_flag,
             "error": None,
         }
+
+    # 1c. Connection query ("X terhubung dengan service apa saja") → baca doc connections
+    #     knowledge library. Fix #199: sebelumnya pertanyaan ini ditolak sebagai
+    #     "di luar konteks tiket" padahal jawabannya ada (connection doc / alert tiket).
+    #     Resolve service: matched_service → serviceName dari ticket_context.
+    if is_connection_query(intent) and (matched_service or state.get("ticket_context")):
+        _conn_svc = matched_service or ((state.get("ticket_context") or {}).get("serviceName") or "")
+        logger.info(f"Connection query detected for service='{_conn_svc}': '{intent}'")
+        if _conn_svc:
+            try:
+                from services.knowledge_listing import build_service_connection_inventory
+                inventory = await build_service_connection_inventory(
+                    _conn_svc, state.get("ticket_context")
+                )
+            except Exception as e:
+                logger.warning(f"Connection inventory failed: {e}")
+                inventory = f"⚠️ Gagal membaca connection service `{_conn_svc}`: {str(e)[:200]}"
+            return {
+                "service_name": matched_service or "",
+                "collection_name": service_map.get(matched_service, "") if matched_service else "",
+                "formatted_message": inventory,
+                "next_agent": "response_agent",
+                "agents_visited": agents_visited,
+                "routing_strategy": routing_strategy,
+                "routing_flag": routing_flag,
+                "error": None,
+            }
 
     # 2. Deteksi follow-up question (Phase 1) — diutamakan sebelum health check.
     #    Follow-up = (a) user me-mention/balas jawaban agent sebelumnya, ATAU

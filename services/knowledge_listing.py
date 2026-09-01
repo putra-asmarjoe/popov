@@ -23,6 +23,136 @@ def is_knowledge_query(intent: str) -> bool:
     return any(k in low for k in _QUERY_KEYWORDS) and any(k in low for k in _ASK_KEYWORDS)
 
 
+# Fix #199: pertanyaan "X terhubung dengan service apa saja" / connections service.
+# Kata kerja koneksi TIDAK termasuk "koneksi" agar "apakah ini koneksi atau error code?"
+# tidak salah-route (itu klasifikasi insiden, bukan daftar connection).
+_CONNECTION_VERBS = (
+    "terhubung", "tersambung", "connect", "connection",
+    "upstream", "downstream", "relasi service", "dependensi",
+)
+_CONNECTION_ASKS = (
+    "service", "apa saja", "apa aja", "list", "dengan apa", "ke mana",
+    "with what", "to what", "dependencies", "services",
+)
+
+
+def is_connection_query(intent: str) -> bool:
+    """Deteksi pertanyaan daftar service yang terhubung (connection doc service)."""
+    low = (intent or "").lower()
+    if not any(v in low for v in _CONNECTION_VERBS):
+        return False
+    return any(a in low for a in _CONNECTION_ASKS)
+
+
+def _render_connection_sections(content: str) -> str:
+    """Render bagian upstream/downstream/third_party dari doc connections → bullet.
+    Format doc: `key: value  key: value` per baris; token pertama = service peer."""
+    out: list[str] = []
+    current: Optional[str] = None
+    for raw in (content or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line in ("upstream:", "downstream:", "third_party:", "resilience:"):
+            current = line.rstrip(":")
+            out.append(f"*{current.title()}:*")
+            continue
+        if current in ("upstream", "downstream", "third_party") and line:
+            parts = line.split()
+            peer = parts[0] if parts else "?"
+            endpoint = impact = ""
+            for tok in parts[1:]:
+                if tok.startswith("endpoint:"):
+                    endpoint = tok[len("endpoint:"):]
+                elif tok.startswith("impact_if_down:"):
+                    impact = tok[len("impact_if_down:"):]
+            row = f"  • `{peer}`"
+            if endpoint:
+                row += f" · `{endpoint}`"
+            if impact:
+                row += f" — {impact}"
+            out.append(row)
+    return "\n".join(out) if out else (content or "")[:1500]
+
+
+def _services_involved(ticket_context: Optional[dict]) -> list[str]:
+    """Parsing "Services involved: a, b, c" dari description tiket (alert watchdog)."""
+    import re
+    desc = (ticket_context or {}).get("description") or ""
+    m = re.search(r"[Ss]ervices\s+involved:\s*(.+)", desc)
+    if not m:
+        return []
+    raw = m.group(1).splitlines()[0].strip().rstrip(".,;")
+    items = [s.strip().strip("*`.") for s in raw.split(",") if s.strip()]
+    return [i for i in items if i and not i.startswith("⚠")]
+
+
+async def _connection_doc_from_library(service_id: str) -> Optional[dict]:
+    """Doc connections di knowledge_library (folder='connections').
+    Match service_id (hyphen/underscore) → nama doc `{svc}_connections`."""
+    import re
+    from services.mongodb_client import get_db
+    try:
+        db = get_db()
+        norm = service_id.replace("-", "_")
+        cands = [f"{norm}_connections", norm, f"{service_id}_connections"]
+        doc = await db["knowledge_library"].find_one(
+            {"folder": "connections", "name": {"$in": cands}}
+        )
+        if doc:
+            return doc
+        # fallback: prefix normalize
+        return await db["knowledge_library"].find_one(
+            {"folder": "connections", "name": {"$regex": f"^{re.escape(norm)}(_connections)?$"}}
+        )
+    except Exception as e:
+        logger.warning(f"[KnowledgeListing] connection doc lookup gagal: {e}")
+        return None
+
+
+async def build_service_connection_inventory(
+    service_id: str,
+    ticket_context: Optional[dict] = None,
+) -> str:
+    """Jawab "X terhubung dengan service apa saja" — deterministik, tanpa LLM.
+
+    Sumber (prioritas):
+    1. Connection doc service di knowledge library (upstream/downstream/third_party).
+    2. Fallback: service yang terlibat dari alert tiket ("Services involved: ...").
+    Sebelum Fix #199 pertanyaan ini ditolak supervisor sbg out-of-konteks.
+    """
+    svc = (service_id or "").strip()
+    lines: list[str] = []
+    doc = await _connection_doc_from_library(svc) if svc else None
+    if doc:
+        lines.append(f"🔗 *Connection `{doc.get('name') or svc}`*")
+        lines.append(_render_connection_sections(doc.get("content") or ""))
+    else:
+        lines.append(f"ℹ️ Tidak ada dokumen *connections* untuk service `{svc}` di Knowledge Library.")
+
+    involved = _services_involved(ticket_context)
+    if involved:
+        others = [s for s in involved if s != svc]
+        if others:
+            lines.append("")
+            lines.append(f"🧩 Dari alert tiket, `{svc}` terhubung dengan: {', '.join(f'`{s}`' for s in others)}")
+            missing = []
+            for s in involved:
+                if not await _connection_doc_from_library(s):
+                    missing.append(s)
+            if missing:
+                lines.append(
+                    "   _Belum ada connection doc utk: " + ", ".join(f"`{s}`" for s in missing) + "_"
+                )
+    elif not doc:
+        lines.append("")
+        lines.append("ℹ️ Tidak ada detail koneksi untuk service ini (hubungkan service → tambah Knowledge).")
+
+    if len(lines) == 1:
+        return lines[0]
+    return "\n".join(lines)
+
+
 async def build_service_knowledge_inventory(
     service_id: str,
     workspace_id: Optional[str] = None,
