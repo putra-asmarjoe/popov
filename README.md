@@ -17,6 +17,65 @@ Today, Popov focuses on production incidents: automatically triaging signals, in
 
 ---
 
+<p align="center">
+  <strong>Popov is free, self-hosted, and always will be.</strong><br>
+  No cloud lock-in. No telemetry. No paywall around your own infrastructure.<br><br>
+  If Popov makes your on-call a little easier,<br>
+  consider buying the person behind it a coffee. ☕<br><br>
+  <a href="https://ko-fi.com/popovagent">
+    <img src="https://img.shields.io/badge/☕%20Buy%20me%20a%20coffee-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Buy me a coffee on Ko-fi">
+  </a>
+</p>
+
+---
+
+## Why Popov?
+
+Modern production systems generate plenty of signals, but signals aren't the same as understanding.
+
+When an incident happens, engineers still have to jump between alerts, logs, traces, dashboards, documentation, tickets, and chat — then connect the dots under pressure.
+
+Popov is built to do that work with you.
+
+It takes the signals you already have, gathers the relevant context, investigates across your systems, and turns it into one actionable incident report.
+
+**Less signal. More understanding.**
+
+---
+
+## What Popov Does
+
+| | |
+|---|---|
+| 🚨 **Incident Triage** | Automatically analyze incoming production alerts |
+| 🔍 **Investigation** | Correlate metrics, logs, traces, and operational context |
+| 🧠 **AI Agents** | LangGraph multi-agent pipeline investigates incidents end-to-end |
+| 📋 **Actionable Reports** | Root cause analysis, evidence, and recommended actions |
+| 📚 **Knowledge-Aware** | Grounded in your own service docs and past incident history |
+| 💬 **Team Notifications** | Delivered via Telegram, email, or the built-in web workspace |
+| 🖥️ **War Room** | Incident operations dashboard — tickets, alerts, and timelines in one view |
+| 🔒 **Self-Hosted** | Your operational data never leaves your own infrastructure |
+
+---
+
+## Screenshots
+
+<p align="center">
+  <img src="screenshots/ss1.png" alt="War Room Overview" width="800" />
+  <br><em>War Room — tickets, alerts, stack health, and incident pulse in one view.</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/ss2.png" alt="Ticket War Room — investigation report" width="800" />
+  <br><em>Investigation report — hypothesis, confidence, evidence pillars, and remediation in one view.</em>
+</p>
+
+<p align="center">
+  <img src="screenshots/ss3.png" alt="Ticket chat with the agent" width="800" />
+  <br><em>Agent chat — ask about an incident and get an answer, with full agent trace one click away.</em>
+</p>
+
+---
 
 ## The Problem
 
@@ -29,6 +88,8 @@ Most teams already have monitoring. What they usually don't have is a bridge bet
 
 Popov closes that gap: it detects, investigates, explains, tracks, and learns — in one workflow.
 
+---
+
 ## What Is Popov?
 
 Popov is a single deployable system made of three cooperating parts:
@@ -40,6 +101,8 @@ Popov is a single deployable system made of three cooperating parts:
 | **Watchdog worker** | A dedicated background process that polls your observability targets (or receives Alertmanager webhooks), deduplicates alerts, triages them, opens tickets, and broadcasts to Telegram channels. |
 
 It is not a metrics database or a dashboard replacement — it sits **on top of** the observability stack you already run.
+
+---
 
 ## What Popov Helps You Do
 
@@ -55,6 +118,7 @@ It is not a metrics database or a dashboard replacement — it sits **on top of*
 - **See inside the investigation** — click any AI reply to view the full agent trace as a graph: every step in order, how long it took, and a summary of what each produced. Slow steps are highlighted.
 - **Control costs** — data-collector agents never call an LLM (<500-token summaries); only ~7 well-defined points use the LLM, all tracked per agent/model/token via `llm_usage`.
 
+---
 ## Data Privacy & Sovereignty
 
 Popov is designed with one principle: **your incident data never leaves your infrastructure.**
@@ -309,7 +373,7 @@ kubectl apply -f deploy/            # secret, configmap, deployment, service,
 
 See [`deploy/README.md`](deploy/README.md) for the full step-by-step guide (private registry secret, resource sizing, verification). Resource footprint is modest: requests `100m` CPU / `256Mi` RAM, limits `500m` / `512Mi`.
 
-<!-- Screenshots: drop images into docs/screenshots/ and reference them here. -->
+<!-- Screenshots live in screenshots/ (ss1 Overview · ss2 ticket chat · ss3 ticket War Room); add new ones and reference them in the Screenshots section above. -->
 
 ## Tech Stack
 
