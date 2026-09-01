@@ -50,6 +50,8 @@ class AgentState(TypedDict):
     trace_id: Annotated[Optional[str], lambda a, b: b if b is not None else a]  # trace_id dari span/trace (Annotated agar fan-out 4 tidak conflict)
     preset_trace_ids: Optional[List[str]]  # trace_id dari alert watchdog (Cek Detail) — lookup spesifik
     preset_service_name: Optional[str]  # service dari tombol Cek Detail (observability alert)
+    resolved_service_name: Optional[str]  # Fix #189: service asli dari alert label bila placeholder ("unknown")
+    ticket_question_forced: Optional[bool]  # Fix #197 (Lapis 5): lane arbiter memaksa pertanyaan → summary
     correlation_result: Optional[dict] # hasil analisis root cause
     root_cause_assessment: Optional[str] # "service-fault" | "downstream" | "unknown"
 

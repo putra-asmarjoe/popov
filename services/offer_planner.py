@@ -13,8 +13,67 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 # Klasifikasi jawaban ya/tidak — paham bahasa alami (kata pertama + frasa 2-kata).
-_YES_WORDS = {"ya", "iya", "y", "ok", "oke", "okey", "boleh", "siap", "yes", "gas", "lanjut", "betul", "setuju", "bisa", "silakan", "silahkan", "ayok", "mari", "sure", "yep", "yeah", "go", "please", "pls", "tentu", "pastinya", "lanjutkan"}
-_NO_WORDS = {"tidak", "nggak", "ngga", "ga", "gak", "no", "jangan", "skip", "cancel", "batal", "engga", "nggausah", "nggakusah", "nggakperlu", "tidakperlu", "tidakusah", "nope", "nah", "gak usah"}
+# Multibahasa (Fix #194): project dipakai lintas bahasa — jangan hanya EN/ID.
+_YES_WORDS = {
+    # EN/ID
+    "ya", "iya", "y", "ok", "oke", "okey", "boleh", "siap", "yes", "gas", "lanjut",
+    "betul", "setuju", "bisa", "silakan", "silahkan", "ayok", "mari", "sure", "yep",
+    "yeah", "go", "please", "pls", "tentu", "pastinya", "lanjutkan",
+    # FR
+    "oui", "ouais", "si",
+    # ES / IT
+    "sí", "si", "claro", "va bene",
+    # PT
+    "sim",
+    # DE / NL / Nordic
+    "ja", "jawol", "okay",
+    # JP
+    "はい", "うん", "そう",
+    # ZH
+    "是", "对", "好", "要", "可以",
+    # KO
+    "네", "응", "예",
+    # RU / UK
+    "да", "так",
+    # AR / FA
+    "نعم", "أجل", "بله",
+    # TR
+    "evet",
+    # HI
+    "हाँ",
+    # TH
+    "ใช่",
+}
+_NO_WORDS = {
+    # EN/ID
+    "tidak", "nggak", "ngga", "ga", "gak", "no", "jangan", "skip", "cancel", "batal",
+    "engga", "nggausah", "nggakusah", "nggakperlu", "tidakperlu", "tidakusah", "nope",
+    "nah", "gak usah",
+    # FR
+    "non",
+    # ES / IT
+    "no", "niente",
+    # PT
+    "não",
+    # DE / NL / Nordic
+    "nein", "nee", "nej",
+    # JP
+    "いいえ", "いや", "いらない",
+    # ZH
+    "不", "不是", "不要", "不用",
+    # KO
+    "아니요", "아니",
+    # RU / UK
+    "нет", "ні",
+    # AR / FA
+    "لا", "نه",
+    # TR
+    "hayır",
+    # HI
+    "नहीं",
+    # TH
+    "ไม่",
+}
 _YES_PHRASES = {"ya lanjut", "iya lanjut", "ya silakan", "iya silakan", "ok lanjut", "oke lanjut", "ayo lanjut", "boleh lanjut", "sure go ahead", "yes please", "yeah sure", "ok sure"}
 _NO_PHRASES = {"tidak usah", "tidak perlu", "nggak usah", "nggak perlu", "ngga usah", "ga usah", "gak usah", "nggak dulu", "tidak dulu", "jangan dulu", "gak perlu", "no thanks", "nope not"}
 

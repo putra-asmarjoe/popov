@@ -132,18 +132,24 @@ def plan(state: dict) -> dict:
     service_type = state.get("service_type")
 
     base = list(MAP[hyp])
-    nodes = _apply_confidence(base, hyp, confidence)
-    nodes = _apply_service_type(nodes, service_type)
-    nodes = _apply_skip_hints(nodes, skip_hints)
+    # Fix #189: offer "investigate lebih dalam" → paksa full fan-out (semua collector),
+    # jangan narrow ulang oleh confidence/service_type. Langsung ke full set.
+    if state.get("force_full_fanout"):
+        nodes = [NODES["mongo"], NODES["metrics"], NODES["trace"]]
+        reason = f"FORCE_FULL (investigate offer) hypothesis={hyp} → {nodes}"
+    else:
+        nodes = _apply_confidence(base, hyp, confidence)
+        nodes = _apply_service_type(nodes, service_type)
+        nodes = _apply_skip_hints(nodes, skip_hints)
 
-    # Safety floor: jangan pernah kosong
-    if not nodes:
-        nodes = base[:1] if base else [NODES["mongo"]]
+        # Safety floor: jangan pernah kosong
+        if not nodes:
+            nodes = base[:1] if base else [NODES["mongo"]]
 
-    reason = (
-        f"hypothesis={hyp} confidence={confidence:.2f} service_type={service_type or 'none'} "
-        f"skip_hints={skip_hints} base={base} → {nodes}"
-    )
+        reason = (
+            f"hypothesis={hyp} confidence={confidence:.2f} service_type={service_type or 'none'} "
+            f"skip_hints={skip_hints} base={base} → {nodes}"
+        )
 
     # Fase 4A: span fan-in jika watchdog traceId dan hipotesis butuh trace
     needs_trace = hyp in ("regression_post_deploy", "downstream_timeout", "traffic_spike", "unknown")

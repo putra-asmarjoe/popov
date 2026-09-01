@@ -1,28 +1,27 @@
 # Popov
 
+![License](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)
+![Python](https://img.shields.io/badge/python-3.9+-green)
+![React](https://img.shields.io/badge/react-19-61dafb)
+![Status](https://img.shields.io/badge/status-active%20development-orange)
+[![Website](https://img.shields.io/badge/website-getpopov.com-0369a1?style=flat&logo=cloudflare)](https://getpopov.com)
+
 Open-source, self-hosted **the intelligence behind operations**. 
 
 Popov connects your existing observability stack — Prometheus, Tempo, Loki, and Alertmanager — with knowledge, ticketing, and AI agents to help teams understand, investigate, and resolve operational problems.
 
 Today, Popov focuses on production incidents: automatically triaging signals, investigating with a LangGraph multi-agent pipeline, and delivering a single actionable report with root cause and recommended actions — wherever your team works, via Telegram, email, or the built-in web workspace.
 
-> 🔒 **Your data never leaves your infrastructure.** No telemetry. No phone home. No third-party with access to your production logs.
-
-![License](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)
-![Python](https://img.shields.io/badge/python-3.9+-green)
-![React](https://img.shields.io/badge/react-19-61dafb)
-![Status](https://img.shields.io/badge/status-active%20development-orange)
-
-> 🚧 **Status:** Popov is under active development. It runs in production inside its origin team's ecosystem, but APIs and features may still change. See [Project Status](#project-status).
-
+> 🔒 **Your data never leaves your infrastructure.** No telemetry. No phone home. No third-party with access to your production logs. 
 ---
 
 <p align="center">
-  <strong>Popov is free, self-hosted, and always will be.</strong><br>
-  No cloud lock-in. No telemetry. No paywall around your own infrastructure.<br><br>
+  <strong>Popov is free, self-hosted, and always will be.</strong><br><br>
   If Popov makes your on-call a little easier,<br>
   consider buying the person behind it a coffee. ☕<br><br>
-  <a href="https://ko-fi.com/popovagent">
+  <a href="https://getpopov.com">
+  <img src="https://img.shields.io/badge/🌐%20Website-getpopov.com-0369a1?style=for-the-badge" alt="Website">
+</a>&nbsp;&nbsp;<a href="https://ko-fi.com/popovagent">
     <img src="https://img.shields.io/badge/☕%20Buy%20me%20a%20coffee-Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Buy me a coffee on Ko-fi">
   </a>
   &nbsp;&nbsp;

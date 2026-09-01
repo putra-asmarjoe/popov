@@ -6,7 +6,7 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 
-# Build (VITE_* di-build-time — override via --build-arg bila perlu)
+# Build (VITE_* are build-time; override via --build-arg when needed)
 COPY web/ ./
 ARG VITE_API_BASE_URL=/api/v1
 ARG VITE_WS_BASE_URL=
@@ -46,8 +46,12 @@ COPY prompts/ prompts/
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
 
-# Copy remaining application source code
-COPY . .
+# Copy remaining runtime folders EXPLICITLY — dev/test/tooling (tests/, command/,
+# tools/, debugss/, screenshots/, venv/, etc.) never enters the image, without
+# relying on .dockerignore.
+COPY scripts/ scripts/
+COPY learned_playbooks/ learned_playbooks/
+COPY patterns/ patterns/
 
 # Copy hasil build frontend dari stage 1 (FE-6: satu container, satu domain)
 COPY --from=webbuilder /web/dist ./web/dist

@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Optional, List, Dict, Any
 import httpx
 from config.settings import settings
@@ -12,9 +13,39 @@ ALERT_SERVICE_LABELS = (
     "daemonset", "horizontalpodautoscaler", "hpa", "pod", "scaletargetref_name",
 )
 
+# Service placeholder (tiket watchdog tanpa nama service real) → alert TIDAK difilter
+# (semua alert dianggap relevan) supaya nama service asli bisa di-resolve dari label.
+_PLACEHOLDER_SERVICES = {"", "unknown", "null", "-", "n/a", "none", "undefined"}
+
+
+def _is_placeholder_service(name: str) -> bool:
+    return (name or "").strip().lower() in _PLACEHOLDER_SERVICES
+
+
+def _extract_service_from_labels(labels: Dict[str, Any]) -> str:
+    """Ekstrak nama service terbaik dari label alert (Fix #189, Opsi C).
+    Prioritas: service > workload/app/deployment/hpa > job > pod (tanpa hash)."""
+    if not labels:
+        return ""
+    for key in ("service", "app", "workload", "deployment", "statefulset",
+                "daemonset", "horizontalpodautoscaler", "hpa", "scaletargetref_name"):
+        val = str(labels.get(key, "") or "").strip()
+        if val:
+            return val
+    job = str(labels.get("job", "") or "").strip()
+    if job:
+        return job.split("/")[-1]
+    pod = str(labels.get("pod", "") or "").strip()
+    if pod:
+        return re.sub(r"-[a-z0-9]+(-[a-z0-9]+)?$", "", pod)
+    return ""
+
 
 def _alert_matches_service(labels: Dict[str, Any], service_name: str) -> bool:
-    """True bila salah satu label alert cocok dengan varian nama service."""
+    """True bila salah satu label alert cocok dengan varian nama service.
+    Service placeholder → semua alert dianggap cocok (untuk resolve nama real)."""
+    if _is_placeholder_service(service_name):
+        return True
     for key in ALERT_SERVICE_LABELS:
         if matches_service(labels.get(key, ""), service_name):
             return True
@@ -128,6 +159,7 @@ async def get_active_alerts(
                                 "severity": labels.get("severity", "warning"),
                                 "state": state,
                                 "active_at": alert.get("startsAt"),
+                                "service": _extract_service_from_labels(labels),
                                 "description": alert.get("annotations", {}).get("description", "")
                                              or alert.get("annotations", {}).get("summary", ""),
                             })
@@ -147,6 +179,7 @@ async def get_active_alerts(
                             "severity": labels.get("severity", "warning"),
                             "state": alert.get("status", {}).get("state", "firing") if isinstance(alert.get("status"), dict) else "firing",
                             "active_at": alert.get("startsAt"),
+                            "service": _extract_service_from_labels(labels),
                             "description": alert.get("annotations", {}).get("description", "")
                                          or alert.get("annotations", {}).get("summary", ""),
                         })
@@ -173,6 +206,7 @@ async def get_active_alerts(
                             "severity": labels.get("severity", "warning"),
                             "state": alert.get("state", "firing"),
                             "active_at": alert.get("activeAt"),
+                            "service": _extract_service_from_labels(labels),
                             "description": alert.get("annotations", {}).get("description", "")
                                          or alert.get("annotations", {}).get("summary", ""),
                         })

@@ -53,6 +53,18 @@ def _analyze_hpa(current_res: Dict[str, Any], max_res: Dict[str, Any]) -> str:
         return f"HPA unknown (current={cur} / max={mx})"
 
 
+def _dominant_service(alerts: list) -> str:
+    """Fix #189 (Opsi C): resolve nama service asli dari label alert aktif (paling sering).
+    Return "" bila tidak ada alert / label service kosong."""
+    from collections import Counter
+    services = [str(a.get("service") or "").strip().lower() for a in alerts or []]
+    services = [s for s in services if s and not s in ("unknown", "null", "-")]
+    if not services:
+        return ""
+    top = Counter(services).most_common(1)[0][0]
+    return top
+
+
 def _build_metrics_summary(service_name: str, raw_metrics: Dict[str, Any], alerts: list) -> str:
     """Format metrics_summary string ringkas (<500 token)."""
     hpa_status = _analyze_hpa(raw_metrics.get("hpa_current"), raw_metrics.get("hpa_max"))
@@ -133,10 +145,18 @@ async def metrics_agent(state: AgentState) -> dict:
 
         summary = _build_metrics_summary(service_name, metric_results, alerts)
 
+        # Fix #189 (Opsi C): service placeholder ("unknown") → resolve nama asli dari
+        # alert aktif supaya laporan & offer pakai service yang benar (mis. rabbitmq-cluster).
+        resolved = ""
+        from services.prometheus_client import _is_placeholder_service
+        if _is_placeholder_service(service_name):
+            resolved = _dominant_service(alerts)
+
         return {
             "metrics_data": {"queries": metric_results, "alerts": alerts},
             "metrics_summary": summary,
             "metrics_available": True,
+            "resolved_service_name": resolved or None,
             "agents_visited": agents_visited,
         }
 

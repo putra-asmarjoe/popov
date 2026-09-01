@@ -452,6 +452,16 @@ async def ticket_agent(state: dict) -> dict:
         return await _reply(state, agents_visited, f"⚠️ {err}")
 
     # Pertanyaan tentang tiket → jawab via LLM dengan konteks tiket + riwayat.
+    # Fix #197 (Lapis 5): lane arbiter memaksa pertanyaan → summary (bypass parse aksi).
+    if state.get("ticket_question_forced"):
+        _reply_lang = "English" if locale == "en" else "Bahasa Indonesia"
+        summary = await _build_ticket_summary(ticket, project, intent,
+                                              state.get("conversation_history"), _reply_lang)
+        suggestions = await _ticket_suggestions(ticket, project, state)
+        return await _reply(state, agents_visited, summary,
+                            {"ok": True, "action": "summary", "ticket_id": str(ticket["_id"])},
+                            suggestions=suggestions)
+
     if is_ticket_question(intent):
         _reply_lang = "English" if locale == "en" else "Bahasa Indonesia"
         summary = await _build_ticket_summary(ticket, project, intent,

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom"
+import { useEffect, useMemo, useState } from "react"
+import { Link, Navigate, useNavigate, useParams } from "react-router-dom"
 import { useTranslation } from "react-i18next"
 import { Plus } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -11,7 +11,8 @@ import { FloatingPanel } from "@/components/panel/FloatingPanel"
 import { WarRoomPanel } from "@/components/warroom/WarRoomPanel"
 import { ProjectViewToggle } from "@/components/project/ProjectViewToggle"
 import { OnboardingBackStrip } from "@/components/workspace/OnboardingBackStrip"
-import { useTicket, useTickets, useOpenTicket } from "@/hooks/useTickets"
+import { useTickets } from "@/hooks/useTickets"
+import { useTicketSelection } from "@/hooks/useTicketSelection"
 import { useTicketRealtime } from "@/hooks/useWebSocket"
 import { useProjects, useWorkspaces, useWorkspaceDetail } from "@/hooks/useWorkspaces"
 import { getProjectView, setProjectView } from "@/lib/project-view"
@@ -42,9 +43,8 @@ export function ProjectPage() {
   const members = wsDetail?.members ?? []
 
   const { setActiveWorkspace, setActiveProject } = useWorkspaceStore()
-  const { filters, activeTicket, setActiveTicket } = useTicketStore()
+  const { filters } = useTicketStore()
   const [page, setPage] = useState(1)
-  const [searchParams, setSearchParams] = useSearchParams()
 
   // Reset halaman saat filter berubah
   useEffect(() => {
@@ -63,57 +63,20 @@ export function ProjectPage() {
     if (project) setActiveProject(project)
   }, [project, setActiveProject])
 
-  // URL → activeTicket (?ticket=KEY-N sebagai single source of truth)
-  const ticketParam = searchParams.get("ticket")
-  useEffect(() => {
-    if (!ticketParam) {
-      if (activeTicket) setActiveTicket(null)
-      return
-    }
-    const num = parseInt(ticketParam.split("-")[1] ?? "", 10)
-    if (Number.isNaN(num)) return
-    const found = ticketsData?.tickets.find((t) => t.ticketNumber === num)
-    if (found && found.id !== activeTicket?.id) setActiveTicket(found)
-  }, [ticketParam, ticketsData, activeTicket?.id, activeTicket, setActiveTicket])
-
-  const selectTicket = (number: number | null) => {
-    if (number === null) {
-      setSearchParams({}, { replace: true })
-    } else {
-      setSearchParams({ ticket: `${project?.key ?? ""}-${number}` }, { replace: true })
-    }
-  }
-
-  // War Room: mode full-width ?ticket=KEY-N&view=warroom (menggantikan split Detail|Chat).
-  // Back → ?ticket=KEY-N → chat + detail normal kembali.
-  const openWarroom = (number: number) => {
-    setSearchParams(
-      { ticket: `${project?.key ?? ""}-${number}`, view: "warroom" },
-      { replace: true },
-    )
-  }
-  const { data: freshTicket } = useTicket(
-    activeTicket?.id ?? null,
-    activeTicket,
-  )
-  // Detail selalu pakai data termutakhir (optimistic/invalidate langsung terlihat)
-  const detailTicket = freshTicket ?? activeTicket
-
-  // War Room: mode full-width ?ticket=KEY-N&view=warroom (menggantikan split Detail|Chat).
-  // Back → ?ticket=KEY-N → chat + detail normal kembali.
-  const isWarroom = searchParams.get("view") === "warroom" && Boolean(detailTicket)
-
-  // Status "new" → "open" saat detail tiket dibuka (auto-open-on-view, silent).
-  // Guard ref: sekali per tiket — optimistic update membuat status bukan lagi "new".
-  const openedRef = useRef<Set<string>>(new Set())
-  const openTicket = useOpenTicket()
-  useEffect(() => {
-    if (!detailTicket || detailTicket.status !== "new") return
-    if (openedRef.current.has(detailTicket.id)) return
-    openedRef.current.add(detailTicket.id)
-    openTicket.mutate(detailTicket.id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detailTicket?.id, detailTicket?.status])
+  // Seleksi tiket + detail fresh — SATU fungsi utk classic & warroom (DRY).
+  const {
+    detailTicket,
+    activeTicketId,
+    isWarroom,
+    hasTicketParam,
+    openTicket,
+    closeTicket,
+    openWarroom,
+    exitWarroom,
+  } = useTicketSelection({
+    tickets: ticketsData?.tickets ?? [],
+    projectKey: project?.key ?? "",
+  })
 
   if (!wsLoading && !workspace)
     return <NotFoundBlock message={t("page.workspace_not_found")} />
@@ -126,7 +89,7 @@ export function ProjectPage() {
   if (
     !isWarroom &&
     getProjectView() === "warroom" &&
-    !searchParams.get("ticket") &&
+    !hasTicketParam &&
     workspace &&
     project
   ) {
@@ -139,7 +102,7 @@ export function ProjectPage() {
       <div className="h-full min-h-0">
         <WarRoomPanel
           ticket={detailTicket}
-          onBack={() => selectTicket(detailTicket.ticketNumber)}
+          onBack={exitWarroom}
         />
       </div>
     )
@@ -191,8 +154,8 @@ export function ProjectPage() {
           page={page}
           onPageChange={setPage}
           isLoading={isLoading}
-          activeTicketId={activeTicket?.id ?? null}
-          onSelect={(t) => selectTicket(t.ticketNumber)}
+          activeTicketId={activeTicketId}
+          onSelect={(t) => openTicket(t)}
         />
       </div>
 
@@ -201,7 +164,7 @@ export function ProjectPage() {
       {project && (
         <FloatingPanel
           open={Boolean(detailTicket)}
-          onClose={() => selectTicket(null)}
+          onClose={closeTicket}
           headerLeft={
             detailTicket ? (
               <span className="panel-no-drag max-w-40 truncate rounded-md bg-primary/10 px-2 py-1 font-mono text-xs font-semibold text-primary">
@@ -217,8 +180,8 @@ export function ProjectPage() {
               projectKey={project.key}
               projectId={project.id}
               members={members}
-              onClose={() => selectTicket(null)}
-              onOpenWarroom={() => openWarroom(detailTicket.ticketNumber)}
+              onClose={closeTicket}
+              onOpenWarroom={() => openWarroom(detailTicket)}
             />
           )}
         </FloatingPanel>

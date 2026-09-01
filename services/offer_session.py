@@ -122,6 +122,26 @@ async def get_active_offer(
     return None
 
 
+async def has_offer_type(session_id: str, type_: str) -> bool:
+    """True bila pernah ada offer tipe tertentu utk sesi ini (status bukan cancelled).
+    Dipakai response_agent utk anti-reoffer investigasi (Fix #189) — tawarkan
+    "investigate lebih dalam" maksimal sekali per sesi agar tidak loop "ya"."""
+    try:
+        db = get_db()
+        doc = await db[COLLECTION].find_one(
+            {
+                "session_id": session_id,
+                "type": type_,
+                "status": {"$ne": "cancelled"},
+            },
+            projection={"_id": 1},
+        )
+        return doc is not None
+    except Exception as e:
+        logger.warning(f"[Offer] has_offer_type({session_id},{type_}) failed: {e}")
+        return False
+
+
 async def set_offer_status(offer_id: str, status: str) -> None:
     try:
         await get_db()[COLLECTION].update_one({"offer_id": offer_id}, {"$set": {"status": status}})

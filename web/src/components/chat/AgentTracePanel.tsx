@@ -22,16 +22,16 @@ export function AgentTracePanel({ traces, requestId }: { traces: AgentTrace[]; r
     <div className="flex h-full min-w-0 flex-col border-l bg-background">
       {/* Header */}
       <div className="flex h-11 shrink-0 items-center gap-2 border-b px-3">
-        <GitBranch className="size-4 text-primary" />
-        <span className="truncate text-xs font-semibold text-muted-foreground">
+        <GitBranch className="size-4 shrink-0 text-primary" />
+        <span className="min-w-0 truncate text-xs font-semibold text-muted-foreground">
           {t("chat.trace_panel_title")}
         </span>
         {requestId && (
-          <span className="ml-1 truncate font-mono text-[10px] text-muted-foreground/60" title={requestId}>
+          <span className="min-w-0 max-w-[5.5rem] shrink truncate font-mono text-[10px] text-muted-foreground/60" title={requestId}>
             #{requestId.slice(0, 8)}
           </span>
         )}
-        <div className="ml-auto">
+        <div className="ml-auto shrink-0">
           <Button
             type="button"
             variant="ghost"

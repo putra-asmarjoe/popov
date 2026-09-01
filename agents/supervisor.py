@@ -92,6 +92,33 @@ PROJECT_QUERY_KW = [
     "aktivitas", "alert", "knowledge", "dokumen", "playbook",
 ]
 
+# Fix #191 + Fix #195: gate tiket (is_ticket_intent) TIDAK boleh menelan permintaan
+# data/log/analisis yang kebetulan menyebut "tiket". Kata query = tanda user minta
+# data/log/history (kata BENDA, bukan kata kerja generik — "lihat/tampilkan/show"
+# sengaja TIDAK dimasukkan agar "lihat status tiket" tetap ke summary, bukan redirect).
+# Kata aksi = tanda perintah kelola tiket (yang MENANG).
+_TICKET_GATE_QUERY_WORDS = (
+    "log", "data", "record", "collection", "table", "tabel",
+    "error", "gagal", "trace", "metrics", "metric", "alert", "span",
+    # history / kerecency (Fix #195 — EN/ID + intl teknis)
+    "history", "riwayat", "historique", "recent", "terakhir", "terbaru",
+    "last", "list", "daftar", "journal", "journaux",
+)
+_TICKET_GATE_ACTION_WORDS = (
+    "tutup", "close", "reopen", "buka kembali", "buka lagi",
+    "status", "progress", "catatan", "note", "label", "tag",
+    "severity", "prioritas", "assign", "tetapkan", "asign",
+    "ubah", "ganti", "update", "batal", "cancel",
+)
+
+
+# Fix #196: "cek log database X" / "lihat log X" = permintaan LIHAT LOG mentah
+# (data_agent), BUKAN analisis insiden. TAPI "log error pada X" tetap insiden.
+_LOG_VIEW_KEYWORDS = (
+    "cek log", "lihat log", "tampilkan log", "ambil log",
+    "log database", "log db", "log terakhir", "log error",
+)
+
 
 def is_data_request(intent: str) -> bool:
     """Deteksi intent pengambilan data mentah (bukan analisis error).
@@ -105,8 +132,17 @@ def is_data_request(intent: str) -> bool:
     Fix #141: "lakukan pengecekan pada received_release_logs collection" sebelumnya
     tidak match keyword data → jatuh ke insiden (preset service) padahal user minta
     query collection langsung.
+    Fix #196: frasa "cek log database X" / "lihat log X" → data request (raw log).
+    Guard: bila frasa log + kata insiden ("error"/"gagal"/...) TANPA "database/db/raw"
+    → tetap insiden (jangan hijack "cek log error pada X").
     """
-    if any(kw in intent for kw in DATA_INTENT_KEYWORDS):
+    log_view = any(kw in intent for kw in _LOG_VIEW_KEYWORDS)
+    if any(kw in intent for kw in DATA_INTENT_KEYWORDS) or log_view:
+        if log_view:
+            _incident = any(w in intent for w in ("error", "gagal", "bermasalah", "down", "5xx", "500", "crash", "timeout"))
+            _raw_log = ("database" in intent or "db" in intent.split() or "raw" in intent)
+            if _incident and not _raw_log:
+                return False
         return True
     if DATA_COUNT_RE.search(intent):
         return True
@@ -284,6 +320,101 @@ def _ticket_redirect(state: dict, agents_visited: list) -> dict:
     }
 
 
+# ── Lapis 5 (CHATOPTIMIZE2, Fix #197): LLM lane arbiter ──────────────────────
+# Saat SEMUA gate deterministik gagal di chat ber-ticket_context (dead-end
+# "_ticket_redirect" / jatuh ke insiden buta via strategy_4 preset), LLM
+# mengklasifikasikan lane secara bahasa-agnostik. Fallback = perilaku lama.
+LANE_CHOICES = ("ticket_question", "ticket_action", "data_request", "follow_up", "incident", "other")
+LANE_CONFIDENCE_THRESHOLD = 0.55
+
+
+async def _llm_arbiter_lane(state: dict, intent: str, service_name: str, ticket_context: dict) -> Optional[str]:
+    """LLM klasifikasi lane (bahasa-agnostik). Return salah satu LANE_CHOICES atau None."""
+    if not intent or len(intent.strip()) < 2 or not _has_llm:
+        return None
+    import asyncio
+    try:
+        history = state.get("conversation_history") or []
+        hist_lines = "\n".join(
+            f"[{h.get('role')}] {str(h.get('content', ''))[:120]}" for h in history[-4:]
+        ) or "-"
+        prompt = render_prompt(
+            "supervisor_lane",
+            intent=intent,
+            service=service_name or "-",
+            ticket_number=ticket_context.get("ticketNumber") or "-",
+            ticket_status=ticket_context.get("status") or "-",
+            history=hist_lines,
+        )
+        llm = _get_llm()
+        resp = await asyncio.wait_for(
+            llm.ainvoke([SystemMessage(content="You are a routing classifier. Reply with JSON only."),
+                         HumanMessage(content=prompt)]),
+            timeout=5.0,
+        )
+        txt = resp.content.strip() if hasattr(resp, "content") else str(resp)
+        if "```" in txt:
+            txt = txt.split("```")[1]
+            if txt.strip().startswith("json"):
+                txt = txt.strip()[4:]
+        result = json.loads(txt.strip())
+        lane = (result.get("lane") or "").strip().lower()
+        try:
+            conf = float(result.get("confidence", 0) or 0)
+        except (TypeError, ValueError):
+            conf = 0.0
+        if lane in LANE_CHOICES and conf >= LANE_CONFIDENCE_THRESHOLD:
+            logger.info(f"[LaneArbiter] '{intent}' → lane={lane} conf={conf:.2f}")
+            return lane
+        logger.info(f"[LaneArbiter] '{intent}' → none (lane={lane!r} conf={conf:.2f})")
+        return None
+    except asyncio.TimeoutError:
+        logger.warning("[LaneArbiter] timeout → fallback deterministik")
+        return None
+    except Exception as e:
+        logger.warning(f"[LaneArbiter] failed → fallback deterministik: {e}")
+        return None
+
+
+def _route_arbitrated_lane(state: dict, agents_visited: list, lane: str,
+                           matched_service: Optional[str], service_map: dict) -> dict:
+    """Route hasil lane arbiter → agent. Return reply dict. Fallback = _ticket_redirect."""
+    svc = matched_service or state.get("preset_service_name") or ""
+    col = service_map.get(svc) or (f"logs_{svc}" if svc else "")
+    common = {
+        "agents_visited": agents_visited,
+        "routing_strategy": "llm_lane_arbiter",
+        "routing_flag": None,
+        "error": None,
+    }
+    if lane == "ticket_question":
+        return {**common, "service_name": svc, "collection_name": col,
+                "next_agent": "ticket_agent", "ticket_question_forced": True}
+    if lane == "ticket_action":
+        return {**common, "service_name": svc, "collection_name": col, "next_agent": "ticket_agent"}
+    if lane == "data_request":
+        return {**common, "service_name": svc, "collection_name": col, "next_agent": "data_agent"}
+    if lane == "follow_up":
+        return {**common, "service_name": svc, "collection_name": col, "is_follow_up": True,
+                "next_agent": "follow_up_agent"}
+    if lane == "incident":
+        if svc:
+            return {**common, "service_name": svc, "collection_name": col, "next_agent": "triage_agent"}
+        return _ticket_redirect(state, agents_visited)
+    return _ticket_redirect(state, agents_visited)
+
+
+async def _arbitrate_or_redirect(state: dict, agents_visited: list,
+                                 matched_service: Optional[str], service_map: dict) -> dict:
+    """Lapis 5 trigger: arbitrasi lane; bila None/LLM down → _ticket_redirect (lama)."""
+    tc = state.get("ticket_context")
+    if tc:
+        lane = await _llm_arbiter_lane(state, state.get("intent", ""), matched_service, tc)
+        if lane:
+            return _route_arbitrated_lane(state, agents_visited, lane, matched_service, service_map)
+    return _ticket_redirect(state, agents_visited)
+
+
 async def supervisor_agent(state: AgentState) -> dict:
     """
     Parse intent → resolve service_name / health check → route ke agent yang sesuai.
@@ -380,10 +511,40 @@ async def supervisor_agent(state: AgentState) -> dict:
                         "collection_name": f"logs_{_svc}" if _svc else "",
                         "intent": _it,
                         "next_agent": "triage_agent",
-                        "agents_visited": agents_visited,
+                        # Fix #189: "investigate lebih dalam" = MAKSUDNYA kedalaman nyata →
+                        # paksa full fan-out (bukan re-run adaptive yang narrow identik).
+                        "force_full_fanout": True,
                         "routing_strategy": "triage", "routing_flag": None, "error": None,
+                        "agents_visited": agents_visited,
                     }
             # else: active tapi bukan ya/tidak → lanjut routing normal (offer tetap aktif)
+
+    # Fix #189 (Opsi B): jawaban "ya"/"tidak"/"oke" LIEAR — tidak ada offer aktif.
+    # Jangan re-run pipeline insiden identik (loop "lempar bola"). Pandu user ke opsi.
+    if _session_id and not _active:
+        _ack = classify_answer(intent)
+        if _ack is not None and len(intent_raw.strip().split()) <= 3:
+            logger.info(f"[Supervisor] stray acknowledgment '{intent}' → guidance (no active offer)")
+            try:
+                from services.conversation import detect_chat_locale
+                from services.user_store import get_user_locale
+                _ulocale = await get_user_locale((state.get("sender") or {}).get("user_id"))
+                _loc = detect_chat_locale(state.get("conversation_history") or [], default=_ulocale)
+            except Exception:
+                _loc = "id"
+            _guidance = (
+                "Oke! Tidak ada tawaran aktif saat ini. Mau saya periksa apa? "
+                "Contoh: *cek metrics error rate*, *lihat trace*, *cek health DB*, atau *ringkas tiket ini*."
+                if _loc != "en" else
+                "Oke! No active offer right now. What would you like me to check? "
+                "e.g. *check error rate metrics*, *view trace*, *check DB health*, or *summarize this ticket*."
+            )
+            return {
+                "next_agent": "response_agent",
+                "formatted_message": _guidance,
+                "agents_visited": agents_visited,
+                "routing_strategy": None, "routing_flag": None, "error": None,
+            }
 
     # Fix #45: service collection map MURNI dari DB (agent_docs via list_all_services).
     # JSON legacy `service_collection_map.json` TIDAK lagi dibaca (sumber = grounding docs DB).
@@ -589,23 +750,63 @@ async def supervisor_agent(state: AgentState) -> dict:
             "error": None,
         }
 
-    # 1b. Deteksi pengelolaan tiket (Ticket Agent) — lane terpisah dari analisis.
+    # 1b. Deep investigate tiket (quick-check / kata "investigate") → pipeline
+    #     insiden PENUH (triage → planner → fan-out → correlation), bukan ringkasan.
+    #     Fix: frasa quick-button "check ticket detail" sebelumnya kena gate
+    #     is_ticket_intent → ticket_agent summary (3 node, dangkal). Gate ini
+    #     deterministik (bukan Strategy 5 LLM), hanya aktif bila ada konteks tiket
+    #     + service ter-resolve (preset). Dipasang SEBELUM is_ticket_intent agar
+    #     tidak di-hijack lane ringkasan/aksi tiket.
+    _investigate_ticket_kw = (
+        "check ticket detail", "cek detail tiket", "check ticket",
+        "investigate ticket", "investigate tiket", "investigate this ticket",
+        "investigate", "investigasi", "selidiki", "deep investigate",
+    )
+    if (
+        state.get("ticket_context")
+        and matched_service
+        and any(kw in intent for kw in _investigate_ticket_kw)
+    ):
+        logger.info(f"Deep investigate ticket intent detected: '{intent}' → triage (service='{matched_service}')")
+        return {
+            "service_name": matched_service,
+            "collection_name": service_map.get(matched_service) or f"logs_{matched_service}",
+            "next_agent": "triage_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": "ticket_investigate",
+            "routing_flag": routing_flag,
+            "error": None,
+        }
+
+    # 1c. Deteksi pengelolaan tiket (Ticket Agent) — lane terpisah dari analisis.
     #     Gate murah (rule) mensyaratkan ticket_context ada (chat di detail tiket).
     #     Diletakkan SETELAH span agar "detail trace" tetap ke span, dan SEBELUM
     #     follow-up/data/health agar aksi tiket ("tutup/assign/label/severity") tidak
     #     di-hijack lane lain. Parsing aksi detail dilakukan LLM di ticket_agent.
     if is_ticket_intent(intent, state):
-        logger.info(f"Ticket intent detected: '{intent}'")
-        return {
-            "service_name": matched_service or "",
-            "collection_name": service_map.get(matched_service, "") if matched_service else "",
-            "is_follow_up": False,
-            "next_agent": "ticket_agent",
-            "agents_visited": agents_visited,
-            "routing_strategy": routing_strategy,
-            "routing_flag": routing_flag,
-            "error": None,
-        }
+        # Fix #191: jangan biarkan gate tiket menelan permintaan data/log/analisis
+        # yang kebetulan menyebut "tiket". Contoh live: "lihat data lognya yang
+        # berdekatan dengan jam tiket terbentuk" → sebelumnya di-route ke ticket_agent,
+        # LLM parse aksi salah → add_progress → catatan sampah ditulis ke tiket.
+        # Bila ada kata query (log/data/record/.../error/trace) dan TIDAK ada kata
+        # aksi tiket eksplisit (tutup/assign/status/progress/...) → biarkan jatuh ke
+        # lane data/insiden, bukan dianggap aksi tiket.
+        _has_query_word = any(w in intent for w in _TICKET_GATE_QUERY_WORDS)
+        _has_action_verb = any(w in intent for w in _TICKET_GATE_ACTION_WORDS)
+        if _has_query_word and not _has_action_verb:
+            logger.info(f"Ticket-intent gate skipped (data/log query): '{intent}'")
+        else:
+            logger.info(f"Ticket intent detected: '{intent}'")
+            return {
+                "service_name": matched_service or "",
+                "collection_name": service_map.get(matched_service, "") if matched_service else "",
+                "is_follow_up": False,
+                "next_agent": "ticket_agent",
+                "agents_visited": agents_visited,
+                "routing_strategy": routing_strategy,
+                "routing_flag": routing_flag,
+                "error": None,
+            }
 
     # 1c. Knowledge/doc query ("dokumen/knowledge apa pada service X") → inventory deterministik.
     #     Diletakkan SEBELUM follow-up/data/health/insiden agar tidak jatuh ke analisis error.
@@ -688,7 +889,8 @@ async def supervisor_agent(state: AgentState) -> dict:
                 if not suggest:
                     logger.warning(f"No service matched for data request intent: '{intent}'")
                     if state.get("ticket_context"):
-                        return _ticket_redirect(state, agents_visited)
+                        # Lapis 5 (Fix #197): dead-end → arbitrasi lane via LLM
+                        return await _arbitrate_or_redirect(state, agents_visited, matched_service, service_map)
                     return {
                         "error": f"Tidak bisa mengenali service dari intent: '{intent}'. "
                                  f"Service yang tersedia: {list(service_map.keys())}",
@@ -812,7 +1014,8 @@ async def supervisor_agent(state: AgentState) -> dict:
             intent, list(service_map.keys()), (state.get("ticket_context") or {}).get("serviceName")
         )
         if state.get("ticket_context"):
-            return _ticket_redirect(state, agents_visited)
+            # Lapis 5 (Fix #197): dead-end "lempar bola" → arbitrasi lane via LLM
+            return await _arbitrate_or_redirect(state, agents_visited, matched_service, service_map)
         if suggest:
             logger.info(f"[Supervisor] fuzzy-suggest '{intent}' → '{suggest}' (auto-route)")
             return {
@@ -835,6 +1038,14 @@ async def supervisor_agent(state: AgentState) -> dict:
 
     collection = service_map.get(matched_service) or f"logs_{matched_service}"
     logger.info(f"Matched service='{matched_service}' → collection='{collection}' (strategy={routing_strategy} flag={routing_flag})")
+
+    # Lapis 5 (Fix #197): bila service hanya match via PRESET ticket (strategy_4) dan
+    # semua lane gagal → pesan ambigu ("blabla", "ya cek log database X") seharusnya
+    # TIDAK otomatis jadi insiden buta. Arbitrasi lane via LLM; fallback = insiden.
+    if routing_strategy == "strategy_4" and state.get("ticket_context"):
+        lane = await _llm_arbiter_lane(state, intent_raw, matched_service, state.get("ticket_context"))
+        if lane:
+            return _route_arbitrated_lane(state, agents_visited, lane, matched_service, service_map)
 
     # Fase 4B: incident via triage dulu (silent) → planner selective fan-out
     # Supervisor return triage_agent, triage_agent akan set next_agent=mongo_agent

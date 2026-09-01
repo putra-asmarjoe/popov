@@ -252,7 +252,7 @@ async def correlation_agent(state: AgentState) -> dict:
     Fase 2: READ Second Brain (Hybrid Search) sebelum LLM untuk prior knowledge.
     Exception safe — Second Brain tidak blocking.
     """
-    service_name = state.get("service_name", "unknown")
+    service_name = state.get("resolved_service_name") or state.get("service_name", "unknown")
     mongo_summary = state.get("mongo_summary") or "Log MongoDB: Tidak ada data ringkasan."
     metrics_summary = state.get("metrics_summary") or "Metrics Prometheus: Tidak tersedia."
     trace_summary = state.get("trace_summary") or "Trace Tempo: Tidak tersedia."

@@ -127,6 +127,7 @@ def _build_investigation_state(final_state: dict) -> dict:
         "suggested_next": final_state.get("suggested_next", []),
         "correlation_summary": _extract_correlation_summary(final_state),
         "service_name": final_state.get("service_name", ""),
+        "resolved_service_name": final_state.get("resolved_service_name"),
         "ticket_id": (final_state.get("ticket_context") or {}).get("ticket_id", ""),
         "loop_count": final_state.get("internal_loop_count", 0),
     }

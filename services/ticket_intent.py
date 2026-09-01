@@ -65,8 +65,14 @@ QUESTION_KEYWORDS = (
 
 
 def is_ticket_question(intent: str) -> bool:
-    """True bila intent adalah PERTANYAAN tentang tiket (→ ringkasan), bukan aksi."""
+    """True bila intent adalah PERTANYAAN tentang tiket (→ ringkasan), bukan aksi.
+
+    Fix #192 (multibahasa): pesan berakhiran tanda tanya (`?`/`؟`) DIJAMIN pertanyaan
+    → selalu summary, TIDAK pernah dieksekusi sebagai aksi mutasi. Bahasa-agnostik —
+    melindungi user bahasa non-EN/ID dari salah-parse jadi add_progress/change_status."""
     low = _clean_intent(intent).lower()
+    if low.rstrip().endswith(("?", "؟")):
+        return True
     return any(kw in low for kw in QUESTION_KEYWORDS)
 
 
@@ -115,8 +121,16 @@ async def parse_ticket_intent(
 
     Hanya aksi dalam ACTION_WHITELIST yang diterima. Enum status/severity divalidasi
     ulang di sini + di store. Dipanggil HANYA oleh ticket_agent.
+
+    Fix #193 (multibahasa): pesan berakhiran tanda tanya (`?`/`؟`) SELALU dianggap
+    pertanyaan → return None (bukan aksi), tanpa memanggil LLM. Ini pertahanan
+    terakhir: apapun bahasa/loophole routing, pertanyaan tidak pernah dieksekusi
+    sebagai mutasi tiket.
     """
     if not intent:
+        return None
+    if _clean_intent(intent).rstrip().endswith(("?", "؟")):
+        logger.info("[TicketIntent] question (?) detected → not an action")
         return None
     intent = _clean_intent(intent)
     try:

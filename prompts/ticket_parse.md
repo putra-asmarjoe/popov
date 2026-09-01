@@ -24,3 +24,13 @@ User text: "{{intent}}"
 Answer ONLY in JSON without explanation:
 {"action": "<action>", "params": {...}}
 If it is NOT a clear ticket action, answer: {"action": null, "params": {}}
+
+STRICT RULES (Fix #193 — never invent an action):
+- If the user text is a QUESTION, asks to see/view/list information (logs, data,
+  history, status, who, what, why), or is a data/log/analysis request → return
+  {"action": null, "params": {}}. Do NOT guess an action.
+- Only map to an action when the text is an explicit COMMAND to modify the ticket
+  (close, reopen, change status/severity, add label, assign, add progress note).
+- "add_progress" REQUIRES the user explicitly asking to save a note/progress.
+  A question or a request to read data is NEVER add_progress.
+- When in doubt, return null (the assistant will ask a clarifying question).

@@ -54,6 +54,43 @@ def _append_confidence_block(formatted: str, confidence: float, data_gaps: list,
     return formatted + header + gap_section + suggest_section
 
 
+# ── Offer investigate gating (Fix #189) ──────────────────────────────────────
+_PLACEHOLDER_SERVICES = {"", "unknown", "null", "-", "n/a", "none", "undefined"}
+
+
+def _is_placeholder_service(name: str) -> bool:
+    """True bila service name placeholder — investigasi "unknown" = noise, jangan tawari."""
+    return (name or "").strip().lower() in _PLACEHOLDER_SERVICES
+
+
+def _investigate_offer_has_value(state: dict) -> bool:
+    """Offer "investigate lebih dalam" HANYA berarti bila investigasi belum dalam:
+    masih ada data_gaps, ATAU confidence < threshold, ATAU planned_nodes belum
+    mencakup full set collector (ada lane yang di-skip/narrow)."""
+    from agents.investigation_planner import FULL_SET
+
+    if state.get("data_gaps"):
+        return True
+    confidence = float(state.get("investigation_confidence") or 1.0)
+    if confidence < 0.80:
+        return True
+    planned = state.get("planned_nodes") or []
+    if planned and not set(FULL_SET).issubset(set(planned)):
+        return True
+    return False
+
+
+async def _already_offered_investigate(session_id: str) -> bool:
+    """Anti-reoffer: sudah pernah dibuat offer investigate utk sesi ini (status bukan cancelled)
+    → jangan tawarkan lagi. Bunuh loop "ya" yang memproduksi laporan identik berulang."""
+    try:
+        from services.offer_session import has_offer_type
+        return await has_offer_type(session_id=session_id, type_="investigate")
+    except Exception as e:
+        logger.warning(f"[Offer] already-offered check failed: {e}")
+        return False
+
+
 async def _resolve_channels_for_state(state) -> List[dict]:
     """Channel tujuan delivery (Fix #40, broadcast):
     - origin_notif_id (mention/callback/webhook via channel tertentu) → kirim balik ke
@@ -149,7 +186,7 @@ async def response_agent(state: AgentState) -> dict:
     2. Jika ini task Log Analysis: Load konteks dokumen + LLM analisis log error.
     3. Kirim notifikasi via Telegram Bot API.
     """
-    service_name = state.get("service_name", "unknown")
+    service_name = state.get("resolved_service_name") or state.get("service_name", "unknown")
     intent = state.get("intent", "")
     documents = state.get("raw_documents", [])
     health_result = state.get("health_result")
@@ -332,21 +369,30 @@ async def response_agent(state: AgentState) -> dict:
 
     # ── Offer lanjutan (Tahap 1-3): setelah laporan insiden → tawarkan investigasi lebih dalam.
     #    HANYA web chat (suppress_telegram) — Telegram sudah punya 6A buttons + diagnostic 6C,
-    #    supaya tidak dobel follow-up. Tombol Telegram utk offer: handler offer:* sudah siap di
-    #    telegram_listener (dipakai saat tiket/offer nanti menjangkau channel Telegram).
+    #    supaya tidak dobel follow-up.
+    #    Fix #189: gate "nilai kedalaman" — offer HANYA bila investigasi belum dalam:
+    #      - service bukan placeholder (unknown/null/kosong → offer "cek unknown" = noise)
+    #      - masih ada data_gaps, ATAU confidence < threshold, ATAU planned_nodes belum
+    #        mencakup full set collector.
+    #      - BELUM pernah ditawari investigate di sesi ini (anti-reoffer → anti-loop "ya").
     try:
-        if state.get("suppress_telegram") and state.get("correlation_result") and state.get("service_name"):
-            offer = build_investigate_offer(state.get("service_name"))
-            if offer:
-                session_id = (state.get("sender") or {}).get("session_id")
-                if session_id:
+        if (
+            state.get("suppress_telegram")
+            and state.get("correlation_result")
+            and not _is_placeholder_service(service_name)
+        ):
+            session_id = (state.get("sender") or {}).get("session_id")
+            offer_svc = state.get("resolved_service_name") or service_name
+            if session_id and _investigate_offer_has_value(state) and not await _already_offered_investigate(session_id):
+                offer = build_investigate_offer(offer_svc)
+                if offer:
                     offer_id = await create_offer(
                         type_=offer["type"], params=offer["params"], question=offer["question"],
                         needs_param=offer["needs_param"], session_id=session_id,
                     )
                     if offer_id:
                         formatted += f"\n\n{render_offer_question(offer)}"
-                        logger.info(f"[Offer] investigate question appended {offer_id} (web)")
+                        logger.info(f"[Offer] investigate question appended {offer_id} svc={offer_svc} (web)")
     except Exception as e:
         logger.warning(f"[Offer] investigate build failed: {e}")
 
