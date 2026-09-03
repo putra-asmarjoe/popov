@@ -56,5 +56,5 @@
   "api_guide_view_guide": "View ScanningGuide.md",
   "api_guide_back": "Back",
   "api_guide_no_token": "No API token?",
-  "api_guide_no_token_link": "Create one → Management > API Tokens"
+  "api_guide_no_token_link": "Create one → Management > API Keys"
 }

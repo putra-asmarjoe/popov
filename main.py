@@ -18,7 +18,9 @@ from api.services_lib import router as services_lib_router  # FE-8
 from api.agent_docs import router as agent_docs_router  # grounding docs DB (admin CRUD)
 from api.ingest import router as ingest_router  # public ingest endpoints
 from api.deploy_events import router as deploy_events_router  # Gap 4: deploy signal CI/CD
+from api.public_alerts import router as public_alerts_router  # public alert ingest (ticket trigger)
 from api.api_keys import router as api_keys_router  # API key management
+from api.source_registry import router as source_registry_router  # 1C Source Registry (Fix #207)
 from api.routes_project_overview import router as project_overview_router  # War Room Part A
 from services.mongodb_client import close as close_mongo
 from services.telegram_listener import start_polling
@@ -65,6 +67,9 @@ async def lifespan(app: FastAPI):
         # Gap 4: deploy_events TTL index (auto-cleanup)
         from services.deploy_event_store import ensure_deploy_indexes
         await ensure_deploy_indexes()
+        # 1C Source Registry (Fix #207)
+        from services.source_registry_store import ensure_source_registry_indexes
+        await ensure_source_registry_indexes()
     except Exception as e:
         logging.getLogger(__name__).warning(f"User indexes not ensured: {e}")
     # FE-2: index workspaces.slug + projects workspaceId+slug/key unique
@@ -195,10 +200,12 @@ app.include_router(services_lib_router, prefix="/api/v1")
 app.include_router(agent_docs_router, prefix="/api/v1")
 app.include_router(api_keys_router, prefix="/api/v1")  # API key management (internal only)
 app.include_router(project_overview_router, prefix="/api/v1")  # War Room Part A
+app.include_router(source_registry_router, prefix="/api/v1")  # 1C Source Registry (Fix #207)
 
 # ── Public API (pub) — External API Keys (pk_pub_*) ──────────────────────────
 app.include_router(ingest_router, prefix="/api/pub/v1")  # public ingest endpoints
 app.include_router(deploy_events_router, prefix="/api/pub/v1")  # Gap 4
+app.include_router(public_alerts_router, prefix="/api/pub/v1")  # public alert ingest (ticket trigger)
 
 
 # ── FE-6: serve SPA (web/dist) — satu container, satu domain ──────────────────

@@ -7,12 +7,46 @@
     "projects": "Projects",
     "services": "Services",
     "stacks": "Stacks",
+    "sources": "Sources",
     "notifications": "Notifications",
     "users": "Users"
   },
   "stacks_section": {
     "title": "Observability Stacks",
     "description": "Prometheus/Tempo/Alertmanager stacks owned by this workspace — used by the watchdog for automatic triage."
+  },
+  "sources_section": {
+    "title": "Sources",
+    "description": "External tools that send signals to Popov (deploy events, error alerts). Disable a source without deleting its API key.",
+    "empty": "No sources yet",
+    "empty_hint": "Sources appear automatically once an external tool sends a signal — e.g. POST /api/pub/v1/deploy-event or /api/pub/v1/ingest/alert.",
+    "how_title": "How it works",
+    "how_step1": "Create an API token — external tools use it to send signals to Popov.",
+    "how_step2": "Send a signal: POST /api/pub/v1/deploy-event (deploy) or POST /api/pub/v1/ingest/alert (error).",
+    "how_step3": "Done — the source appears here automatically with signal count and last-seen. No manual registration.",
+    "no_token": "No API token?",
+    "create_token_link": "Create one → Management > API Keys",
+    "load_error": "Failed to load sources",
+    "toggle_error": "Failed to update source status",
+    "delete_error": "Failed to delete source"
+  },
+  "sources_table": {
+    "label": "Source",
+    "type": "Type",
+    "count": "Signals",
+    "last_seen": "Last seen",
+    "status": "Status",
+    "active": "Active",
+    "inactive": "Inactive",
+    "enable": "Enable",
+    "disable": "Disable",
+    "enable_label": "Toggle source {{name}}",
+    "delete_label": "Delete source {{name}}"
+  },
+  "sources_confirm_delete": {
+    "title": "Remove this source?",
+    "description": "The registry entry for \"{{name}}\" will be removed. New signals from this source will register it again.",
+    "confirm": "Remove"
   },
   "notifications_section": {
     "title": "Notifications",

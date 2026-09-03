@@ -56,5 +56,5 @@
   "api_guide_view_guide": "Lihat ScanningGuide.md",
   "api_guide_back": "Kembali",
   "api_guide_no_token": "Belum ada API token?",
-  "api_guide_no_token_link": "Buat dulu → Management > API Tokens"
+  "api_guide_no_token_link": "Buat dulu → Management > API Keys"
 }

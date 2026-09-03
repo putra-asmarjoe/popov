@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # Fix #54 (BYOK): provider/model/key/base_url MURNI dikelola via UI → DB
     # (collection llm_settings, key terenkripsi Fernet). Nilai di sini hanya
     # FALLBACK bootstrap saat DB kosong — .env tidak lagi berisi key LLM.
-    llm_provider: str = "openai"  # openai, openrouter, google, opencode
+    llm_provider: str = "openai"  # openai, openrouter, google, opencode, claude
     llm_model: str = "gpt-4o-mini"
 
     # Fix #54: master key enkripsi data sensitif di DB (LLM/embedding API keys).
@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     # Fix #52: base URL opencode configurable — model 'go' (MiMo-V2.5) dilayani dari
     # /zen/go/v1 (serverless), model utama (gemini/gpt/claude) dari /zen/v1.
     opencode_base_url: str = "https://opencode.ai/zen/v1"
+    claude_api_key: str = ""  # Anthropic (OpenAI-compatible layer, https://api.anthropic.com/v1)
+    claude_base_url: str = "https://api.anthropic.com/v1"
 
     # Embedding — Second Brain (Fase 2+)
     # provider: local (TF cosine, tanpa API) | openrouter | openai

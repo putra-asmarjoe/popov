@@ -1,18 +1,19 @@
 import { useTranslation } from "react-i18next"
 import { useSearchParams } from "react-router-dom"
-import { FileText, KeyRound, ShieldAlert, Unlock } from "lucide-react"
+import { BookOpen, FileText, ShieldAlert, Unlock } from "lucide-react"
 import { ApiKeyForm } from "@/components/management/ApiKeyForm"
 import { ApiKeyManager } from "@/components/management/ApiKeyManager"
 import { KnowledgeManager } from "@/components/management/KnowledgeManager"
 import { MemoryViewer } from "@/components/management/MemoryViewer"
+import { PublicApiDocs } from "@/components/management/PublicApiDocs"
 import { OnboardingBackStrip } from "@/components/workspace/OnboardingBackStrip"
 import { useAuth } from "@/hooks/useAuth"
 import { cn } from "@/lib/utils"
 
 const TABS = [
   { id: "knowledge", icon: FileText },
-  { id: "apikeys", icon: KeyRound },
-  { id: "apitokens", icon: Unlock },
+  { id: "llmtokens", icon: Unlock },
+  { id: "apikeys", icon: BookOpen },
   { id: "memory", icon: ShieldAlert },
 ] as const
 
@@ -21,8 +22,8 @@ type TabId = (typeof TABS)[number]["id"]
 /**
  * ManagementPage (/management) — admin global.
  * Tab "Knowledge" renders Grounding — System (AgentDocsManager) only.
- * Tab "API Keys" renders LLM provider credentials (BYOK).
- * Tab "API Tokens" renders API key management for external integrations.
+ * Tab "LLM Tokens" renders LLM provider credentials (BYOK).
+ * Tab "API Docs" renders public API key management + the public API reference.
  * Tab "Memory" renders Second Brain episodes.
  */
 export function ManagementPage() {
@@ -75,8 +76,13 @@ export function ManagementPage() {
       </div>
 
       <div className="space-y-10 pt-6">
-        {tab === "apikeys" && <ApiKeyForm />}
-        {tab === "apitokens" && <ApiKeyManager />}
+        {tab === "llmtokens" && <ApiKeyForm />}
+        {tab === "apikeys" && (
+          <>
+            <ApiKeyManager />
+            <PublicApiDocs />
+          </>
+        )}
         {tab === "knowledge" && <KnowledgeManager />}
         {tab === "memory" && <MemoryViewer />}
       </div>

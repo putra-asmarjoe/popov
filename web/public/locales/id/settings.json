@@ -7,12 +7,46 @@
     "projects": "Projects",
     "services": "Service",
     "stacks": "Stacks",
+    "sources": "Sources",
     "notifications": "Notifikasi",
     "users": "Users"
   },
   "stacks_section": {
     "title": "Observability Stacks",
     "description": "Stack Prometheus/Tempo/Alertmanager milik workspace ini — dipakai watchdog untuk triage otomatis."
+  },
+  "sources_section": {
+    "title": "Sources",
+    "description": "Tool eksternal yang mengirim signal ke Popov (deploy event, error alert). Nonaktifkan source tanpa menghapus API key-nya.",
+    "empty": "Belum ada source",
+    "empty_hint": "Source muncul otomatis setelah tool eksternal mengirim signal — mis. POST /api/pub/v1/deploy-event atau /api/pub/v1/ingest/alert.",
+    "how_title": "Cara kerja",
+    "how_step1": "Buat API token — dipakai tool eksternal utk mengirim signal ke Popov.",
+    "how_step2": "Kirim signal: POST /api/pub/v1/deploy-event (deploy) atau POST /api/pub/v1/ingest/alert (error).",
+    "how_step3": "Selesai — source muncul otomatis di sini, lengkap dgn jumlah & terakhir dikirim. Tanpa registrasi manual.",
+    "no_token": "Belum punya API token?",
+    "create_token_link": "Buat → Management > API Keys",
+    "load_error": "Gagal memuat source",
+    "toggle_error": "Gagal mengubah status source",
+    "delete_error": "Gagal menghapus source"
+  },
+  "sources_table": {
+    "label": "Source",
+    "type": "Tipe",
+    "count": "Signal",
+    "last_seen": "Terakhir",
+    "status": "Status",
+    "active": "Aktif",
+    "inactive": "Nonaktif",
+    "enable": "Aktifkan",
+    "disable": "Nonaktifkan",
+    "enable_label": "Ubah status source {{name}}",
+    "delete_label": "Hapus source {{name}}"
+  },
+  "sources_confirm_delete": {
+    "title": "Hapus source ini?",
+    "description": "Entri registry \"{{name}}\" akan dihapus. Signal baru dari source ini akan mendaftarkannya lagi.",
+    "confirm": "Hapus"
   },
   "notifications_section": {
     "title": "Notifikasi",

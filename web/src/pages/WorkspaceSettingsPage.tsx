@@ -4,7 +4,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import { ArrowLeft, Bell, Database, FolderKanban, Radio, UserPlus, Users } from "lucide-react"
+import { ArrowLeft, Bell, Database, FolderKanban, PlugZap, Radio, UserPlus, Users } from "lucide-react"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -24,6 +24,7 @@ import { WorkspaceServiceHierarchy } from "@/components/workspace/WorkspaceServi
 import { OnboardingBackStrip } from "@/components/workspace/OnboardingBackStrip"
 import { ObservabilityTargets } from "@/components/workspace/ObservabilityTargets"
 import { NotificationChannels } from "@/components/workspace/NotificationChannels"
+import { SourceRegistry } from "@/components/workspace/SourceRegistry"
 import type { WorkspaceMember } from "@/types/workspace"
 
 // Pesan validasi via factory (ikut locale)
@@ -39,6 +40,7 @@ const TABS = [
   { id: "projects", labelKey: "tabs.projects", icon: FolderKanban },
   { id: "services", labelKey: "tabs.services", icon: Database },
   { id: "stacks", labelKey: "tabs.stacks", icon: Radio },
+  { id: "sources", labelKey: "tabs.sources", icon: PlugZap },
   { id: "notifications", labelKey: "tabs.notifications", icon: Bell },
   { id: "users", labelKey: "tabs.users", icon: Users },
 ] as const
@@ -73,7 +75,7 @@ export function WorkspaceSettingsPage() {
 
   // stacks & notifications hanya utk admin — bila tidak berhak fallback ke default
   const rawTab = (searchParams.get("tab") ?? "projects") as TabId
-  const adminOnlyTabs: TabId[] = ["stacks", "notifications"]
+  const adminOnlyTabs: TabId[] = ["stacks", "sources", "notifications"]
   const tab: TabId = adminOnlyTabs.includes(rawTab) && !isAdmin ? "projects" : rawTab
   const visibleTabs = TABS.filter((t) => !adminOnlyTabs.includes(t.id) || isAdmin)
 
@@ -175,6 +177,19 @@ export function WorkspaceSettingsPage() {
             </div>
             <NotificationChannels wsId={workspace.id} />
             {/* Fix #47: link project→channel kini inline di kolom Project di atas */}
+          </section>
+        )}
+
+        {/* Source Registry — dari mana saja Popov menerima signal (admin saja) */}
+        {tab === "sources" && workspace && isAdmin && (
+          <section className="space-y-3">
+            <div>
+              <h2 className="text-sm font-semibold">{t("sources_section.title")}</h2>
+              <p className="text-xs text-muted-foreground">
+                {t("sources_section.description")}
+              </p>
+            </div>
+            <SourceRegistry wsId={workspace.id} isAdmin={isAdmin} />
           </section>
         )}
 
