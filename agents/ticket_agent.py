@@ -472,7 +472,9 @@ async def _ticket_suggestions(ticket: Dict[str, Any], project: Dict[str, Any], s
     history = state.get("conversation_history") or []
     user_locale = await get_user_locale((state.get("sender") or {}).get("user_id"))
     locale = detect_chat_locale(history, default=user_locale)
-    return build_chat_suggestions(ticket=ticket, project=project, locale=locale, max_items=3)
+    # intent (Fix #215): skip chip yang topiknya sudah ditanyakan user
+    return build_chat_suggestions(ticket=ticket, project=project, locale=locale,
+                                  max_items=3, intent=state.get("intent") or "")
 
 
 async def ticket_agent(state: dict) -> dict:

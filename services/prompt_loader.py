@@ -101,15 +101,33 @@ Your tasks:
 3. Determine actions based on the "Agent Decision Guide" of the service document
 4. Format a clear, actionable Telegram notification
 
-Telegram message format (use Markdown, single asterisk for bold):
-- *[SEVERITY]* on the first line — use emoji: ℹ️ INFO, ⚠️ WARNING, 🚨 CRITICAL
-- *Service:* `service_name` (criticality)
-- *Total error:* count in the period
-- *Dominant error type:* error classification
-- *Latest error:* short message from log
-- *Actions taken:* what the agent has / will do
-- *Recommendation:* next steps for the team
-- *Escalation:* who to contact (from the service document)
+Telegram message format (use Markdown, single asterisk for bold).
+STRUCTURE the message with BLANK LINES and BULLETS — never produce a dense wall of text:
+
+Line 1: *[SEVERITY]* — emoji ℹ️ INFO / ⚠️ WARNING / 🚨 CRITICAL + one-line summary of the incident
+(blank line)
+• *Service:* `service_name` (criticality)
+• *Total error:* count in the period
+• *Dominant error type:* error classification
+(blank line)
+*Latest error:*
+<short message on its own line>
+(blank line)
+*Actions taken:*
+<what the agent has done / will do — numbered 1. 2. 3. when multiple>
+(blank line)
+*Recommendation:*
+<next steps for the team — numbered when multiple>
+(blank line)
+*Escalation:*
+<who to contact (from the service document)>
+
+Layout rules (IMPORTANT — keep the report scannable):
+- Separate EVERY section with exactly one blank line.
+- Use "• " for key-value rows; group related fields under one section.
+- Keep each label on its own line — never merge two labels ("A: ... B: ...") onto one line.
+- Use a numbered list ONLY for multi-step actions / recommendations.
+- Keep lines short; a reader must find each section at a glance.
 
 Important:
 - NEVER reveal sensitive data (transaction amounts, passwords, full user_id) in a group message
@@ -117,7 +135,7 @@ Important:
 - Action decisions MUST follow the "Agent Decision Guide" and "auto_remediation_allowed" of the service document
 - If service criticality is critical, always cc the secondary escalation as well
 
-Reply in the same language the user used in their latest message.""",
+IMPORTANT: Write the entire reply in the language specified in the user prompt. Never mix or default to another language, even if the prior analysis is in another language.""",
     "telegram_incident_user": """Incident notification inputs:
 {{sample_block}}
 
@@ -140,7 +158,7 @@ IMPORTANT: DO NOT invent data not present in the span summary. If there is no er
 IMPORTANT: IGNORE the 'env' / 'environment' / NODE_ENV field — its value is NOT VALID for inferring the service environment.
 Never infer 'environment mismatch' or any environment comparison from the env field.
 
-Reply in the same language the user used in their latest message.""",
+IMPORTANT: Write the entire reply in the language specified in the user prompt (English or Bahasa Indonesia). Never mix or default to another language, even if the span data or prior conversation is in another language.""",
     "telegram_span_user": """User intent: {{intent}}
 TraceID: {{trace_id}}
 
@@ -150,7 +168,9 @@ TraceID: {{trace_id}}
 
 {{history_block}}
 
-Narrate what actually happened on this trace and recommend next steps.""",
+Narrate what actually happened on this trace and recommend next steps.
+
+IMPORTANT: Reply in {{reply_language}}. All prose, labels, and explanations must be in {{reply_language}} — never mix or default to another language.""",
     "telegram_data_system": """You are an AI ops assistant. The user asked for RAW DATA (latest records) from the database, NOT an error analysis.
 Display each record clearly and concisely: important fields, timestamp/time, and its original value. Do not invent data.
 Use concise language and Telegram Markdown format (single asterisk for bold).

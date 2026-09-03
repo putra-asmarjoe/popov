@@ -39,12 +39,29 @@ export interface ApiKeyScopes {
   }
 }
 
+export interface PublicEndpointSpecParam {
+  name: string
+  in: "body" | "path" | "query"
+  type: string
+  required: boolean
+  default?: string | number | null
+  description: string
+}
+
+export interface PublicEndpointSpec {
+  summary?: string
+  params?: PublicEndpointSpecParam[]
+  example_request?: Record<string, unknown>
+  example_response?: Record<string, unknown>
+}
+
 export interface PublicEndpoint {
   method: string
   path: string
   scopes: string[]
   rate_limit: number
   description: string
+  spec?: PublicEndpointSpec
 }
 
 // ── API Keys ──────────────────────────────────────────────────────────────────

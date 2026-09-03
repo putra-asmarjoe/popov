@@ -130,7 +130,6 @@ function CreateDialog({ open, onOpenChange, wsId }: CreateDialogProps) {
   const { data: scopes } = useApiKeyScopes()
 
   const [name, setName] = useState("")
-  const [keyType, setKeyType] = useState<"web" | "public">("web")
   const [selectedScopes, setSelectedScopes] = useState<string[]>([])
   const [rateLimit, setRateLimit] = useState<string>("")
   const [expiryOption, setExpiryOption] = useState<string>("none")
@@ -138,10 +137,10 @@ function CreateDialog({ open, onOpenChange, wsId }: CreateDialogProps) {
   const [showKey, setShowKey] = useState(false)
   const [copied, setCopied] = useState(false)
 
-  // Filter scopes based on key type
+  // UI hanya untuk public keys — scope yang tersedia hanya yang public
   const availableScopes = scopes
     ? Object.entries(scopes)
-        .filter(([, v]) => (keyType === "public" ? v.public : true))
+        .filter(([, v]) => v.public)
         .map(([k, v]) => ({ key: k, ...v }))
     : []
 
@@ -152,7 +151,7 @@ function CreateDialog({ open, onOpenChange, wsId }: CreateDialogProps) {
       const result = await createKey.mutateAsync({
         ws_id: wsId,
         name: name.trim(),
-        key_type: keyType,
+        key_type: "public",
         scopes: selectedScopes.length > 0 ? selectedScopes : undefined,
         rate_limit: rateLimit ? parseInt(rateLimit) : undefined,
         expires_at: getExpiryDate(expiryOption),
@@ -173,7 +172,6 @@ function CreateDialog({ open, onOpenChange, wsId }: CreateDialogProps) {
 
   const handleClose = () => {
     setName("")
-    setKeyType("web")
     setSelectedScopes([])
     setRateLimit("")
     setExpiryOption("none")
@@ -255,32 +253,6 @@ function CreateDialog({ open, onOpenChange, wsId }: CreateDialogProps) {
             />
           </div>
 
-          {/* Key Type */}
-          <div className="space-y-2">
-            <Label>{t("api_key.type")}</Label>
-            <div className="flex gap-2">
-              {(["web", "public"] as const).map((type) => (
-                <Button
-                  key={type}
-                  type="button"
-                  variant={keyType === type ? "default" : "outline"}
-                  onClick={() => {
-                    setKeyType(type)
-                    setSelectedScopes([])
-                  }}
-                  className="flex-1"
-                >
-                  {t(`api_key.type_${type}`)}
-                </Button>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {keyType === "public"
-                ? t("api_key.type_public_hint")
-                : t("api_key.type_web_hint")}
-            </p>
-          </div>
-
           {/* Scopes */}
           <div className="space-y-2">
             <Label>{t("api_key.scopes")}</Label>
@@ -311,7 +283,7 @@ function CreateDialog({ open, onOpenChange, wsId }: CreateDialogProps) {
               type="number"
               value={rateLimit}
               onChange={(e) => setRateLimit(e.target.value)}
-              placeholder={keyType === "public" ? "200" : "1000"}
+              placeholder="200"
             />
             <p className="text-xs text-muted-foreground">
               {t("api_key.rate_limit_hint")}
@@ -362,8 +334,7 @@ export function ApiKeyManager() {
   const [createOpen, setCreateOpen] = useState(false)
   const [revokeConfirm, setRevokeConfirm] = useState<string | null>(null)
 
-  const activeKeys = keys?.filter((k) => k.is_active) ?? []
-  const hasPublicKeys = activeKeys.some((k) => k.type === "public")
+  const activeKeys = keys?.filter((k) => k.is_active && k.type === "public") ?? []
 
   if (!wsId) {
     return (
@@ -396,32 +367,6 @@ export function ApiKeyManager() {
           {t("api_key.create_new")}
         </Button>
       </div>
-
-      {/* Public Endpoints Info */}
-      {hasPublicKeys && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/30">
-          <h4 className="text-sm font-medium text-amber-800 dark:text-amber-200">
-            {t("api_key.public_endpoints_title")}
-          </h4>
-          <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
-            {t("api_key.public_endpoints_hint")}
-          </p>
-          <div className="mt-2 grid grid-cols-1 gap-1 sm:grid-cols-2">
-            <code className="block rounded bg-amber-100 px-2 py-1 text-xs dark:bg-amber-900/50">
-              POST /api/pub/v1/ingest/knowledge
-            </code>
-            <code className="block rounded bg-amber-100 px-2 py-1 text-xs dark:bg-amber-900/50">
-              POST /api/pub/v1/ingest/knowledge/service
-            </code>
-            <code className="block rounded bg-amber-100 px-2 py-1 text-xs dark:bg-amber-900/50">
-              GET /api/pub/v1/ingest/knowledge/:id
-            </code>
-            <code className="block rounded bg-amber-100 px-2 py-1 text-xs dark:bg-amber-900/50">
-              PATCH /api/pub/v1/ingest/knowledge/:id
-            </code>
-          </div>
-        </div>
-      )}
 
       {/* Unified Key Table */}
       {activeKeys.length === 0 ? (

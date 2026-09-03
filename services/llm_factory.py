@@ -6,7 +6,7 @@ Sumber konfigurasi (prioritas):
      key terenkripsi. Cache in-memory; refresh saat PUT /config/llm atau startup.
   2. Fallback bootstrap: settings (.env/code default) bila DB kosong.
 
-Provider didukung: openai, openrouter, google, opencode (OpenCode Zen gateway).
+Provider didukung: openai, openrouter, google, opencode (OpenCode Zen gateway), claude (Anthropic OpenAI-compatible layer).
 Dipakai oleh response_agent, correlation_agent, supervisor (Strategy 5),
 dan pattern_miner_service — satu-satunya tempat branching provider.
 
@@ -94,6 +94,15 @@ def get_chat_llm(temperature: float = 0.2) -> ChatOpenAI:
             max_tokens=MAX_TOKENS,
         )
         return TrackingLLM(llm, "opencode", settings.llm_model)
+    if settings.llm_provider == "claude":
+        llm = ChatOpenAI(
+            model=settings.llm_model,
+            api_key=settings.claude_api_key,
+            base_url=settings.claude_base_url.rstrip("/"),
+            temperature=temperature,
+            max_tokens=MAX_TOKENS,
+        )
+        return TrackingLLM(llm, "claude", settings.llm_model)
     # default: openai
     llm = ChatOpenAI(
         model=settings.llm_model,

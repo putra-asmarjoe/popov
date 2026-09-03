@@ -12,4 +12,4 @@ IMPORTANT: DO NOT invent data not present in the span summary. If there is no er
 IMPORTANT: IGNORE the 'env' / 'environment' / NODE_ENV field — its value is NOT VALID for inferring the service environment.
 Never infer 'environment mismatch' or any environment comparison from the env field.
 
-Reply in the same language the user used in their latest message.
+IMPORTANT: Write the entire reply in the language specified in the user prompt (English or Bahasa Indonesia). Never mix or default to another language, even if the span data or prior conversation is in another language.

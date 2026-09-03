@@ -26,6 +26,7 @@ class DeployEventRequest(BaseModel):
     version: Optional[str] = Field(None, max_length=128, description="Versi/commit/tag")
     deployed_at: Optional[datetime] = Field(None, description="Timestamp deploy (default: sekarang, UTC)")
     project_id: Optional[str] = Field(None, description="Project id (optional)")
+    source: str = Field("api", min_length=1, max_length=64, description="Label source CI/CD (mis. github_actions, gitlab_ci, api)")
 
 
 _MSG = {
@@ -60,7 +61,7 @@ async def ingest_deploy_event(
 
     # API key principal boleh bawa workspace binding (jika ada) — optional
     workspace_id = getattr(principal, "workspace_id", None)
-    source = "api"
+    source = (body.source or "api").strip().lower() or "api"
     event_id = await record_deploy_event(
         service_name=svc,
         version=body.version,
@@ -71,6 +72,19 @@ async def ingest_deploy_event(
     )
     if not event_id:
         raise HTTPException(status_code=422, detail={"ok": False, "message": _MSG[locale]["invalid_service"]})
+
+    # 1C Source Registry (Fix #207): catat source deploy
+    try:
+        from services.source_registry_store import record_source_signal
+        await record_source_signal(
+            workspace_id,
+            source_type="deploy",
+            source_label=source,
+            signal_type="deploy",
+            meta={"service": svc.lower(), "version": body.version},
+        )
+    except Exception as e:
+        logger.warning(f"[SourceRegistry] record deploy source failed (non-fatal): {e}")
 
     logger.info(f"[DeployEvent] ingest ok svc={svc} via={source}")
     return {

@@ -122,7 +122,7 @@ export function ServiceKnowledgeDialog({
   }
 
   const envBlock = `POPOV_HOST=${hostInput}
-POPOV_TOKEN=# ← get token from Management → API Tokens
+POPOV_TOKEN=# ← get token from Management → API Keys
 POPOV_WORKSPACE_ID=${workspaceId ?? "<workspace-id>"}
 SERVICE_ID=${serviceLabel ?? "<service-id>"}`
 
@@ -373,7 +373,7 @@ SERVICE_ID=${serviceLabel ?? "<service-id>"}`
                 <div className="flex items-center gap-1.5 text-[11px] text-amber-600">
                   <span>{t("api_guide_no_token")}</span>
                   <a
-                    href="/management?tab=apitokens"
+                    href="/management?tab=apikeys"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="underline underline-offset-2 hover:text-amber-700"

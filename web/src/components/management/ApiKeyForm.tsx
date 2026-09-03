@@ -27,7 +27,8 @@ const PROVIDERS = [
   { id: "openai", label: "OpenAI" },
   { id: "openrouter", label: "OpenRouter" },
   { id: "google", label: "Google AI (Gemini)" },
-  { id: "opencode", label: "OpenCode Zen" },
+  { id: "opencode", label: "OpenCode" },
+  { id: "claude", label: "Claude (Anthropic)" },
 ] as const
 
 /** Default base URL per provider — single source of truth di FE untuk auto-fill.
@@ -37,6 +38,7 @@ const DEFAULT_BASE_URLS: Record<string, string> = {
   openrouter: "https://openrouter.ai/api/v1",
   google: "https://generativelanguage.googleapis.com/v1beta/openai",
   opencode: "https://opencode.ai/zen/v1",
+  claude: "https://api.anthropic.com/v1",
 }
 
 /** Chip hasil uji koneksi — solid, tema-aware (hijau sukses / merah gagal).
@@ -255,10 +257,7 @@ export function ApiKeyForm() {
     <div className="max-w-3xl space-y-7">
       {/* Header */}
       <div>
-        <p className="text-[11px] font-medium uppercase tracking-widest text-muted-foreground">
-          {t("apikeys.eyebrow")}
-        </p>
-        <h2 className="mt-1 text-lg font-semibold tracking-tight">{t("apikeys.title")}</h2>
+        <h2 className="text-lg font-semibold tracking-tight">{t("apikeys.title")}</h2>
         <p
           className="mt-1 max-w-2xl text-sm text-muted-foreground"
           dangerouslySetInnerHTML={{ __html: t("apikeys.description") }}

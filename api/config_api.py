@@ -122,7 +122,7 @@ async def delete_service(service_id: str, admin: dict = Depends(require_admin)):
 
 # ── LLM (BYOK — Fix #54: config MURNI DB, key terenkripsi) ────────────────────
 
-LLM_PROVIDERS = ("openai", "openrouter", "google", "opencode")
+LLM_PROVIDERS = ("openai", "openrouter", "google", "opencode", "claude")
 
 
 class LlmUpdateRequest(BaseModel):

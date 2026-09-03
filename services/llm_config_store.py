@@ -22,13 +22,14 @@ logger = logging.getLogger(__name__)
 COLLECTION = "llm_settings"
 DOC_ID = "llm"
 
-PROVIDERS = ("openai", "openrouter", "google", "opencode")
+PROVIDERS = ("openai", "openrouter", "google", "opencode", "claude")
 
 DEFAULT_BASE_URLS: Dict[str, str] = {
     "openai": "https://api.openai.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
     "google": "https://generativelanguage.googleapis.com/v1beta/openai",
     "opencode": "https://opencode.ai/zen/v1",
+    "claude": "https://api.anthropic.com/v1",  # OpenAI-compatible layer (Anthropic)
 }
 
 _cache: Optional[dict] = None

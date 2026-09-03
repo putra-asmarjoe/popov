@@ -90,7 +90,7 @@ class AgentState(TypedDict):
     second_brain_context: Optional[dict]  # hasil READ Fase 2 (Hybrid Search + boost) — None jika cold start / gagal
 
     # Triage — Fase 3 (silent, <30s)
-    triage_result: Optional[dict]      # {hypothesis, confidence, severity, deploy_detected, deploy_info, focus_hints, skip_hints, second_brain_context}
+    triage_result: Optional[dict]      # {hypothesis, confidence, severity, deploy_detected, deploy_info, focus_hints, skip_hints, second_brain_context, verification_note (GAP-6), minutes_since_deploy (GAP-6)}
 
     # Planner — Fase 4B + Gap 3 (selective fan-out, audit + loop)
     planned_nodes: Optional[List[str]]  # ["mongo_agent","trace_agent"] — diisi planner_node (Gap 3 Fase 1)

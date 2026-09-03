@@ -164,7 +164,7 @@ export function OnboardingChecklist({ wsSlug, workspaceId, onCreateProject }: On
                 icon: KeyRound,
                 label: t("items.llm_keys.label"),
                 hint: t("items.llm_keys.hint"),
-                to: "/management?tab=apikeys&from=onboarding",
+                to: "/management?tab=llmtokens&from=onboarding",
                 done: !!llm && Object.values(llm.keys ?? {}).some((v) => v === "set"),
               },
               {
@@ -172,7 +172,7 @@ export function OnboardingChecklist({ wsSlug, workspaceId, onCreateProject }: On
                 icon: Sparkles,
                 label: t("items.embedding.label"),
                 hint: t("items.embedding.hint"),
-                to: "/management?tab=apikeys&from=onboarding",
+                to: "/management?tab=llmtokens&from=onboarding",
                 done: !!llm && llm.embedding?.mode === "provider",
                 optional: true,
               },

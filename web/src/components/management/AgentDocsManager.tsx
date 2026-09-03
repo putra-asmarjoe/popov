@@ -126,7 +126,7 @@ export function AgentDocsManager() {
     <div className="max-w-4xl space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold">{t("agent_docs.title")}</h2>
+          <h2 className="text-lg font-semibold tracking-tight">{t("agent_docs.title")}</h2>
           <p
             className="text-xs text-muted-foreground"
             dangerouslySetInnerHTML={{ __html: t("agent_docs.description") }}

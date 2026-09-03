@@ -30,6 +30,22 @@ def _get_llm():
     return get_chat_llm(temperature=0.2)
 
 
+async def _resolve_reply_locale(state: dict) -> str:
+    """Locale utk teks user-facing deterministic (pola _resolve_investigation_locale).
+    web chat → isi percakapan (fallback preferensi user); Telegram → locale owner ws.
+    Gagal → default "en" (netral, bukan paksa bahasa tertentu)."""
+    try:
+        if state.get("suppress_telegram"):
+            from services.conversation import detect_chat_locale
+            from services.user_store import get_user_locale
+            ulocale = await get_user_locale((state.get("sender") or {}).get("user_id"))
+            return detect_chat_locale(state.get("conversation_history") or [], default=ulocale)
+        from services.locale_pref import get_workspace_locale
+        return await get_workspace_locale(state.get("workspace_id"))
+    except Exception:
+        return "en"
+
+
 async def _llm_classify_intent(intent: str, available_services: list[str]) -> Optional[dict]:
     """FASE 6B Strategy 5: LLM classifier ringan untuk intent ambigu. Return None jika gagal."""
     if not _has_llm or not intent:
@@ -812,6 +828,7 @@ async def supervisor_agent(state: AgentState) -> dict:
     #     Diletakkan SEBELUM follow-up/data/health/insiden agar tidak jatuh ke analisis error.
     if matched_service and is_knowledge_query(intent):
         logger.info(f"Knowledge query detected for service='{matched_service}': '{intent}'")
+        _k_locale = await _resolve_reply_locale(state)
         try:
             from services.knowledge_listing import build_service_knowledge_inventory
             _want_detail = any(k in intent for k in ("detail", "isi", "baca", "rinci", "lengkap"))
@@ -820,7 +837,11 @@ async def supervisor_agent(state: AgentState) -> dict:
             )
         except Exception as e:
             logger.warning(f"Knowledge inventory failed: {e}")
-            inventory = f"⚠️ Gagal mengambil knowledge service `{matched_service}`: {str(e)[:200]}"
+            inventory = (
+                {"en": f"⚠️ Failed to load knowledge for service `{matched_service}`: {str(e)[:200]}",
+                 "id": f"⚠️ Gagal mengambil knowledge service `{matched_service}`: {str(e)[:200]}"}
+                .get(_k_locale, f"⚠️ Failed to load knowledge for service `{matched_service}`: {str(e)[:200]}")
+            )
         return {
             "service_name": matched_service,
             "collection_name": service_map.get(matched_service, ""),
@@ -840,6 +861,7 @@ async def supervisor_agent(state: AgentState) -> dict:
         _conn_svc = matched_service or ((state.get("ticket_context") or {}).get("serviceName") or "")
         logger.info(f"Connection query detected for service='{_conn_svc}': '{intent}'")
         if _conn_svc:
+            _c_locale = await _resolve_reply_locale(state)
             try:
                 from services.knowledge_listing import build_service_connection_inventory
                 inventory = await build_service_connection_inventory(
@@ -847,7 +869,11 @@ async def supervisor_agent(state: AgentState) -> dict:
                 )
             except Exception as e:
                 logger.warning(f"Connection inventory failed: {e}")
-                inventory = f"⚠️ Gagal membaca connection service `{_conn_svc}`: {str(e)[:200]}"
+                inventory = (
+                    {"en": f"⚠️ Failed to load connections for service `{_conn_svc}`: {str(e)[:200]}",
+                     "id": f"⚠️ Gagal membaca connection service `{_conn_svc}`: {str(e)[:200]}"}
+                    .get(_c_locale, f"⚠️ Failed to load connections for service `{_conn_svc}`: {str(e)[:200]}")
+                )
             return {
                 "service_name": matched_service or "",
                 "collection_name": service_map.get(matched_service, "") if matched_service else "",
@@ -858,6 +884,35 @@ async def supervisor_agent(state: AgentState) -> dict:
                 "routing_flag": routing_flag,
                 "error": None,
             }
+
+    # 1d. Source query ("source/sumber apa saja yang mengirim signal", "berapa alert dari
+    #     sentry") → baca source_registry (workspace-level). Fix #208: sebelumnya jatuh ke
+    #     fuzzy_suggest → insiden service acak. GUARD: incident words + matched_service → skip.
+    from services.source_inventory import is_source_query, extract_source_label, build_source_inventory
+    if is_source_query(intent, matched_service):
+        logger.info(f"Source query detected: '{intent}' (ws={state.get('workspace_id')})")
+        _locale = await _resolve_reply_locale(state)
+        try:
+            from services.source_registry_store import list_sources
+            _known = [s.get("source_label") for s in (await list_sources(state.get("workspace_id") or ""))]
+            _label = extract_source_label(intent, _known)
+            inventory = await build_source_inventory(state.get("workspace_id"), _label, _locale)
+        except Exception as e:
+            logger.warning(f"Source inventory failed: {e}")
+            inventory = (
+                {"en": "⚠️ Failed to load the sources list.",
+                 "id": "⚠️ Gagal mengambil daftar source."}.get(_locale, "⚠️ Failed to load the sources list.")
+            )
+        return {
+            "service_name": "",
+            "collection_name": "",
+            "formatted_message": inventory,
+            "next_agent": "response_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": "source_query",
+            "routing_flag": routing_flag,
+            "error": None,
+        }
 
     # 2. Deteksi follow-up question (Phase 1) — diutamakan sebelum health check.
     #    Follow-up = (a) user me-mention/balas jawaban agent sebelumnya, ATAU

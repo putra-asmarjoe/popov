@@ -36,6 +36,12 @@ except Exception:
 # Fix G4 gap-scan: case-insensitive — user sering ketik "core-42" lowercase.
 TICKET_REF_RE = re.compile(r"\b([A-Za-z]{2,5})-(\d{1,6})\b")
 
+# Hint pengarah setelah jawaban status tiket (Fix #213/#214): bilingual, bukan hardcode ID
+_TICKET_REF_HINT = {
+    "en": "For full details and the ticket-specific conversation, open the ticket detail page.",
+    "id": "Untuk detail lengkap dan percakapan khusus tiket ini, silakan buka halaman detailnya.",
+}
+
 # Keyword klasifikasi pertanyaan (murah, deterministik)
 _TICKET_KW = ("tiket", "ticket", "total", "berapa", "jenis", "masuk")
 _ACTIVITY_KW = (
@@ -209,10 +215,11 @@ async def _gather_knowledge(project_id: Optional[str], ws_id: Optional[str]) -> 
 def _build_suggestions(
     *, want_tickets: bool, want_errors: bool, want_knowledge: bool,
     open_count: int, alert_services: List[str], error_services: List[str],
-    locale: str = "en",
+    locale: str = "en", intent: str = "",
 ) -> List[str]:
     """Predictive offers deterministik dari whitelist (bukan LLM) — bahasa ikut locale chat.
-    DRY: delegasi ke services.offer_planner.build_chat_suggestions (satu sumber teks)."""
+    DRY: delegasi ke services.offer_planner.build_chat_suggestions (satu sumber teks).
+    intent (Fix #215): skip chip yang topiknya sudah ditanyakan user."""
     from services.offer_planner import build_chat_suggestions
 
     return build_chat_suggestions(
@@ -223,6 +230,7 @@ def _build_suggestions(
         has_open_tickets=bool(want_tickets and open_count > 0),
         want_knowledge=True,  # perilaku lama: chips knowledge hampir selalu default
         locale=locale,
+        intent=intent,
         max_items=3,
     )
 
@@ -268,11 +276,32 @@ async def project_agent(state: AgentState) -> dict:
             logger.warning(f"[project_agent] lookup KEY-N gagal: {e}")
             ticket = None
         if ticket:
+            # Fix #214: locale ikut bahasa chat (detect → preferensi user), hint bilingual
+            from services.user_store import get_user_locale
+
+            _hist = state.get("conversation_history") or []
+            _ulocale = await get_user_locale((state.get("sender") or {}).get("user_id"))
+            _locale = _detect_chat_locale(_hist, default=_ulocale)
+            _hint = _TICKET_REF_HINT.get(_locale, _TICKET_REF_HINT["en"])
             msg = (
                 f"🎟️ *Tiket `{key}-{num}`* — \"{ticket.get('title', '')}\"\n"
                 f"*Status:* {ticket.get('status')} · *Severity:* {ticket.get('severity')} · "
                 f"*Service:* `{ticket.get('serviceName') or '-'}`\n\n"
-                "Untuk detail lengkap dan percakapan khusus tiket ini, silakan buka halaman detailnya."
+                f"{_hint}"
+            )
+            # Fix #214: chips relevan utk tiket (bilingual, jalur generic build_chat_suggestions)
+            from services.offer_planner import build_chat_suggestions
+
+            _sug = build_chat_suggestions(
+                ticket={"status": ticket.get("status")},
+                project={"key": key},
+                service_name=ticket.get("serviceName") or "",
+                root_cause="unknown",
+                has_open_tickets=False,
+                want_knowledge=False,
+                locale=_locale,
+                max_items=3,
+                intent=state.get("intent") or "",  # Fix #215: skip chip topik yang sudah ditanya
             )
             return {
                 "formatted_message": msg,
@@ -285,6 +314,7 @@ async def project_agent(state: AgentState) -> dict:
                         "title": ticket.get("title"),
                         "status": ticket.get("status"),
                     }],
+                    "suggestions": _sug,
                 },
                 "next_agent": "response_agent",
                 "agents_visited": agents_visited,
@@ -346,8 +376,11 @@ async def project_agent(state: AgentState) -> dict:
         for line in "\n".join(activity).splitlines():
             low = line.lower()
             if "] " in line and ("alert" in low or "watchdog" in low):
-                svc = line.split(":")[0].rsplit(" ", 1)[-1]
-                if svc and svc not in alert_services:
+                # format: "- [sent_at] service_name: message ..."
+                # JANGAN split(":")[0] — colon ada di dalam ISO timestamp → svc jadi "[2026-09-03T19"
+                after_ts = line.split("] ", 1)[-1]
+                svc = after_ts.split(":", 1)[0].strip().strip("`").strip()
+                if svc and not any(ch in svc for ch in "[],") and svc not in alert_services:
                     alert_services.append(svc)
 
     if want_errors:
@@ -376,7 +409,7 @@ async def project_agent(state: AgentState) -> dict:
     suggestions = _build_suggestions(
         want_tickets=want_tickets, want_errors=want_errors, want_knowledge=want_knowledge,
         open_count=open_count, alert_services=alert_services, error_services=error_services,
-        locale=locale,
+        locale=locale, intent=state.get("intent") or "",
     )
 
     # ── 5. Satu LLM call sintesis (fallback deterministik) ────────────────────

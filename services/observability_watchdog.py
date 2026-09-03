@@ -433,29 +433,56 @@ async def process_service_alerts(
     workspace_id: str | None = None,
     observ_id: str | None = None,
     fingerprint: str | None = None,
+    force_new: bool = False,
+    return_details: bool = False,
 ) -> int:
     """
     Proses satu grup alert (satu service): triage silent → format → simpan alert →
     auto-ticket → kirim Telegram interaktif.
     Return jumlah pesan terkirim. Dipakai WatchdogScheduler DAN api/webhook (Layer 2).
+
+    force_new=True (API publik ingest/alert): lewati triage gate & dedup broadcast,
+    dan auto-ticket dipaksa buat tiket BARU (tanpa link ke tiket aktif).
+    return_details=True: return dict {sent, alert_id, ticket_refs, tickets_created, skipped}.
     """
-    # Triage silent sebelum kirim
-    triage = await run_triage_silent(
-        service,
-        alerts,
-        workspace_id=workspace_id,
-        observ_id=observ_id,
-    )
-    tr = (triage or {}).get("triage_result")
-    if tr and not tr.get("proceed_to_stage2", True):
-        logger.info(f"[Triage] skip {service} severity low")
-        return 0
+
+    def _result(
+        sent: int = 0,
+        alert_id: str | None = None,
+        ticket_refs: dict | None = None,
+        tickets_created: int = 0,
+        skipped: str | None = None,
+    ):
+        if not return_details:
+            return sent
+        return {
+            "sent": sent,
+            "alert_id": alert_id,
+            "ticket_refs": ticket_refs or {"new": [], "linked": []},
+            "tickets_created": tickets_created,
+            "skipped": skipped,
+        }
+
+    # Triage silent sebelum kirim (dilewati saat force_new — ticket memang diminta)
+    triage = None
+    tr = None
+    if not force_new:
+        triage = await run_triage_silent(
+            service,
+            alerts,
+            workspace_id=workspace_id,
+            observ_id=observ_id,
+        )
+        tr = (triage or {}).get("triage_result")
+        if tr and not tr.get("proceed_to_stage2", True):
+            logger.info(f"[Triage] skip {service} severity low")
+            return _result(skipped="low_severity")
 
     # Fix #84: dedup broadcast LINTAS-target — alert sama dari stack lain → skip seluruhnya
     content_fp = build_content_fingerprint(service, alerts)
-    if await _recent_content_duplicate(content_fp):
+    if not force_new and await _recent_content_duplicate(content_fp):
         logger.info(f"[Dedup] {service}: konten sama sudah di-broadcast <{DEDUP_WINDOW_MINUTES}m — skip")
-        return 0
+        return _result(skipped="duplicate")
 
     # Fix #105: bahasa pesan ikut preferensi owner workspace (fallback en)
     from services.locale_pref import get_workspace_locale
@@ -490,6 +517,7 @@ async def process_service_alerts(
     # service ini (incident_router), masing-masing dengan fingerprint ber-suffix project.
     # Fix #105: label nomor tiket (baru & ter-link) dicantumkan di pesan broadcast.
     ticket_refs: dict[str, list] = {"new": [], "linked": []}
+    tickets: list = []
     try:
         from services.auto_ticket import maybe_create_watchdog_ticket
         tickets, ticket_refs = await maybe_create_watchdog_ticket(
@@ -499,6 +527,7 @@ async def process_service_alerts(
             workspace_id=workspace_id,
             observ_id=observ_id,
             alert_text=text,  # pass formatted alert detail for ticket description
+            force_new=force_new,
         )
         if len(tickets) > 1:
             logger.info(f"Auto-ticket: {len(tickets)} tiket dibuat untuk '{service}' (multi-project)")
@@ -589,7 +618,12 @@ async def process_service_alerts(
             )
     except Exception as e:
         logger.error(f"[Notification] broadcast gagal utk '{service}': {e}")
-    return sent
+    return _result(
+        sent=sent,
+        alert_id=alert_id,
+        ticket_refs=ticket_refs,
+        tickets_created=len(tickets),
+    )
 
 
 # ── Legacy entry point (backward compat — masih bisa dipanggil in-process) ──

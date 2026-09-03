@@ -130,12 +130,19 @@ def _route_span_agent(state: AgentState) -> str:
     """
     FASE 4A: Span sebagai bagian fan-out incident → knowledge_agent (FE-7, lalu correlation),
     Span mandiri (detail trace) → response_agent.
-    DRY: cek next_agent (reliable) + fallback agents_visited.
+
+    Fix bahasa ID (CPRO-19): deteksi incident jangan via `next_agent`/`agents_visited` —
+    keduanya rawan race di fan-out paralel (mongo_agent menimpa next_agent last-wins,
+    agents_visited belum tentu merge saat span selesai). Penanda incident yang ANDAL:
+    `triage_result` (di-set triage sebelum fan-out) atau `planned_nodes` (planner_node).
+    Salah route → span diformat sebagai jalur mandiri (prompt tanpa reply_language) →
+    jawaban jatuh ke bahasa default model (Indonesia).
     """
-    # Incident fan-out: supervisor next_agent == mongo_agent dengan preset_trace_ids
-    if state.get("preset_trace_ids") and state.get("next_agent") == "mongo_agent":
+    # Incident fan-out: ada triage (pipeline insiden) ATAU planned_nodes dari planner.
+    if state.get("triage_result") is not None or state.get("planned_nodes"):
         return "knowledge_agent"
-    # Fallback non-deterministik parallel: mongo sudah visited
+    # Fallback non-deterministik parallel: mongo sudah visited (masih berguna utk
+    # kondisi mongo selesai lebih dulu).
     if "mongo_agent" in state.get("agents_visited", []):
         return "knowledge_agent"
     return "response_agent"

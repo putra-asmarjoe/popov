@@ -73,6 +73,7 @@ async def maybe_create_watchdog_ticket(
     workspace_id: Optional[str] = None,
     observ_id: Optional[str] = None,
     alert_text: Optional[str] = None,  # formatted alert detail (from process_service_alerts)
+    force_new: bool = False,  # True = selalu tiket baru (skip dedup link), utk API publik ingest/alert
 ) -> List[Dict[str, Any]]:
     """Buat tiket dari alert watchdog di SEMUA project match (Fix #40).
 
@@ -130,9 +131,12 @@ async def maybe_create_watchdog_ticket(
 
             # Dedup WINDOW (bukan permanen): tiket AKTIF dgn konten sama dalam
             # TICKET_ALERT_DEDUP_HOURS → alert di-link ke tiket itu, bukan tiket baru.
-            linkable = await find_linkable_ticket_by_fingerprint(
-                pid, base_fp, settings.ticket_alert_dedup_hours
-            )
+            # force_new=True → skip link, selalu buat tiket baru (API publik).
+            linkable = None
+            if not force_new:
+                linkable = await find_linkable_ticket_by_fingerprint(
+                    pid, base_fp, settings.ticket_alert_dedup_hours
+                )
             if linkable is not None:
                 await record_ticket_alert(
                     ticket=linkable,

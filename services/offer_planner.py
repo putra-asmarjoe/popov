@@ -146,17 +146,26 @@ _OFFER_TICKET_TEXTS = {
 }
 
 
-def build_investigate_offer(service_name: str, project_key: str = "") -> Optional[dict]:
-    """Tawaran investigasi lanjutan setelah laporan insiden (web chat)."""
+def build_investigate_offer(service_name: str, project_key: str = "", locale: str = "id") -> Optional[dict]:
+    """Tawaran investigasi lanjutan setelah laporan insiden (web chat).
+    locale (pola Fix #145): pertanyaan bilingual en/id — jangan hardcode ID."""
     svc = (service_name or "").strip()
     if not svc:
         return None
+    texts = _OFFER_INVESTIGATE_TEXTS.get(locale, _OFFER_INVESTIGATE_TEXTS["id"])
     return {
         "type": "investigate",
         "params": {"service_name": svc, "intent": f"cek error pada {svc}"},
         "needs_param": None,
-        "question": f"Apakah kamu ingin saya mengecek service `{svc}` lebih dalam?",
+        "question": texts.format(svc=svc),
     }
+
+
+# Teks tawaran investigate — bilingual (Fix #201: awalnya hardcode Indonesia)
+_OFFER_INVESTIGATE_TEXTS = {
+    "id": "Apakah kamu ingin saya mengecek service `{svc}` lebih dalam?",
+    "en": "Would you like me to investigate the service `{svc}` more deeply?",
+}
 
 
 # ── Chat suggestions (chips follow-up) — bilingual, deterministik, DRY ────────
@@ -194,6 +203,28 @@ def chat_suggestion(key: str, locale: str = "en", **fmt: str) -> str:
     return tmpl.format(**fmt) if fmt else tmpl
 
 
+# Fix #215: chip yang "sudah ditanyakan" user tidak perlu ditawarkan lagi (redundant).
+# Map topik chip → keyword pemicu di intent (EN/ID). Bila intent user mengandung salah
+# satu, chip topik itu di-skip. "open" hati-hati — hanya bila frasa tiket terbuka.
+_CHIP_REDUNDANCY_KW = {
+    "status": ("status", "current status", "apa status", "status saat ini"),
+    "severity": ("summarize", "summary", "summar", "ringkas", "jelaskan tiket", "describe ticket"),
+    "knowledge": ("knowledge", "dokumen", "playbook", "grounding", "documentation", "docs"),
+    "open": ("open ticket", "tiket terbuka", "berapa tiket", "how many ticket", "how many tickets"),
+    "investigate": ("investigate", "investigasi", "selidiki", "deep dive", "full investigation", "investigasi penuh"),
+    "progress": ("add a progress", "catatan progress", "progress note"),
+    "reopen": ("reopen", "buka kembali"),
+    "alert": ("alert", "detail alert"),
+}
+
+
+def _intent_asked_topic(intent: str, key: str) -> bool:
+    low = (intent or "").lower()
+    if not low:
+        return False
+    return any(kw in low for kw in _CHIP_REDUNDANCY_KW.get(key, ()))
+
+
 def build_chat_suggestions(
     *,
     ticket: Optional[Dict[str, Any]] = None,
@@ -204,8 +235,12 @@ def build_chat_suggestions(
     want_knowledge: bool = False,
     locale: str = "en",
     max_items: int = 3,
+    intent: str = "",
 ) -> List[str]:
     """Chips follow-up untuk chat (tiket & project) — deterministik, bilingual.
+
+    Fix #215: `intent` dipakai utk men-skip chip yang topiknya sudah ditanyakan user
+    (mis. habis tanya status → tidak ditawari lagi "What is the current status?").
 
     Prioritas sesuai konteks:
     - ticket open → "What is the current status?" / "Summarize this ticket"
@@ -214,32 +249,42 @@ def build_chat_suggestions(
     - ada tiket terbuka lain → "Show open tickets"
     - default → "What knowledge is available in this project"
     """
-    out: List[str] = []
+    # bangun sebagai (key, text) agar bisa filter by topic (bukan by localized label)
+    out: List[tuple] = []
 
     if ticket and project:
         status = (ticket.get("status") or "").lower()
         if status in ("resolved", "closed"):
-            out.append(chat_suggestion("reopen", locale))
-            out.append(chat_suggestion("progress", locale))
+            out.append(("reopen", chat_suggestion("reopen", locale)))
+            out.append(("progress", chat_suggestion("progress", locale)))
         else:
-            out.append(chat_suggestion("status", locale))
-            out.append(chat_suggestion("severity", locale))
+            out.append(("status", chat_suggestion("status", locale)))
+            out.append(("severity", chat_suggestion("severity", locale)))
 
     if root_cause != "unknown" and service_name:
-        out.append(chat_suggestion("investigate", locale, svc=service_name))
+        out.append(("investigate", chat_suggestion("investigate", locale, svc=service_name)))
 
     if has_open_tickets:
-        out.append(chat_suggestion("open", locale))
+        out.append(("open", chat_suggestion("open", locale)))
 
     if want_knowledge:
-        out.append(chat_suggestion("knowledge", locale))
+        out.append(("knowledge", chat_suggestion("knowledge", locale)))
+
+    # Filter: skip chip yang topiknya sudah ada di intent user (redundancy polish #215)
+    filtered = [(k, s) for k, s in out if not _intent_asked_topic(intent, k)]
+    # Jangan sampai kosong: bila filter membuang SEMUA chip, kembalikan daftar asli
+    # (redundansi ringan lebih baik daripada tanpa panduan).
+    if not filtered and out:
+        filtered = out
 
     # dedup + batas
     seen: List[str] = []
-    for s in out:
+    result: List[str] = []
+    for _k, s in filtered:
         if s not in seen:
             seen.append(s)
-    return seen[:max_items]
+            result.append(s)
+    return result[:max_items]
 
 
 def render_offer_question(offer: dict) -> str:
@@ -285,8 +330,26 @@ _CONTEXTUAL_CHIP_TEXTS = {
 }
 
 
+def _format_deploy_time(triage: dict) -> str:
+    """Waktu deploy utk chip label — pakai `minutes_since_deploy` (GAP-6) bila ada,
+    fallback `deploy_info.deployed_at`. Return "" bila tidak tersedia."""
+    mins = triage.get("minutes_since_deploy")
+    if isinstance(mins, (int, float)):
+        m = int(round(mins))
+        return f"({m}min ago)" if m > 0 else "(just now)"
+    info = triage.get("deploy_info") or {}
+    at = info.get("deployed_at")
+    if at:
+        return f"({str(at)[:16].replace('T', ' ')})"
+    return ""
+
+
 def build_contextual_suggestions(state: Dict[str, Any], reply_language: str = "English") -> List[Any]:
     """Chips berbasis temuan investigasi (CHATFLOW V2.1 Tahap 2 + Gap 5).
+
+    Fix #212: chips kini juga diturunkan dari `root_cause_assessment` (kesimpulan
+    LLM correlation yang otoritatif) — bukan hanya keyword `trace_summary`/`knowledge_context`.
+    Sebelumnya RCA bilang "downstream" tapi chip downstream tidak muncul (trace kosong).
 
     Fallback ke build_chat_suggestions bila tidak ada temuan spesifik.
     Return list[Union[str, dict]]:
@@ -299,10 +362,10 @@ def build_contextual_suggestions(state: Dict[str, Any], reply_language: str = "E
     service = state.get("service_name", "")
     suggestions: List[str] = []
 
-    # — Chip dari deploy detection (triage_result) —
+    # — Chip dari deploy detection (triage_result) — Fix #212: waktu dari minutes_since_deploy
     triage = state.get("triage_result") or {}
     if triage.get("hypothesis") == "regression_post_deploy":
-        deploy_time = str(triage.get("deploy_time") or "").strip()
+        deploy_time = _format_deploy_time(triage)
         suggestions.append(texts["deploy"].format(time=deploy_time).strip())
         # intent spesifik disimpan ke state terpisah? Tidak — chip label jadi intent
         # (konsisten dgn chips existing yang label = pesan). Detail tetap bisa via LLM.
@@ -312,10 +375,15 @@ def build_contextual_suggestions(state: Dict[str, Any], reply_language: str = "E
     if "similar episode" in knowledge_ctx or "insiden serupa" in knowledge_ctx:
         suggestions.append(texts["similar"])
 
-    # — Chip dari trace timeout / downstream —
+    # — Chip dari root cause assessment (Fix #212: otoritatif dari correlation) ATAU
+    #    keyword trace_summary (sinyal tambahan bila correlation belum jalan) —
+    root_cause = (state.get("root_cause_assessment") or "unknown").lower()
     trace_summary = (state.get("trace_summary") or "").lower()
-    if "timeout" in trace_summary or "downstream" in trace_summary:
+    trace_downstream = "timeout" in trace_summary or "downstream" in trace_summary
+    if root_cause in ("downstream", "downstream_timeout") or trace_downstream:
         suggestions.append(texts["downstream"])
+    if root_cause == "service-fault":
+        suggestions.append(texts["metrics"])
 
     # — Chip dari data_gaps (Gap 5): structured read, semua gaps, sorted by priority, max 3 —
     data_gaps = state.get("data_gaps") or []
@@ -347,6 +415,7 @@ def build_contextual_suggestions(state: Dict[str, Any], reply_language: str = "E
             want_knowledge=True,
             locale=("id" if lang_id else "en"),
             max_items=3,
+            intent=state.get("intent") or "",  # Fix #215: skip chip topik yang sudah ditanya
         )
 
     # — Selalu tambah chip tiket di akhir —

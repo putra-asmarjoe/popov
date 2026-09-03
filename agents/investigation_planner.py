@@ -44,6 +44,27 @@ SKIP_HINT_TO_NODE = {
     "health check": NODES["health"],
 }
 
+# GAP-6 (Komponen 4b): focus_hints → ADD collector (kebalikan skip).
+# focus_hints dari triage fusi (deploy + error spike) — memastikan node yang
+# diperlukan utk verifikasi TIDAK hilang oleh base MAP / confidence-narrow.
+FOCUS_HINT_TO_ADD = {
+    "verify_error_rate": NODES["metrics"],
+    "check_metrics": NODES["metrics"],
+    "check_trace": NODES["trace"],
+}
+FOCUS_HINT_TRIGGERS = set(FOCUS_HINT_TO_ADD.keys())
+
+
+def _apply_focus_hints(nodes: List[str], focus_hints: List[str]) -> List[str]:
+    """GAP-6 (4a): ADD collector yang diminta focus_hints (bukan skip/remove).
+    Arah berlawanan dengan _apply_skip_hints — skip_hints tetap diterapkan
+    TERAKHIR di plan() (blacklist eksplisit menang)."""
+    for hint in focus_hints or []:
+        node = FOCUS_HINT_TO_ADD.get(hint)
+        if node and node not in nodes:
+            nodes.append(node)
+    return nodes
+
 CONFIDENCE_NARROW = 0.80   # confidence tinggi → narrow (kecuali unknown)
 CONFIDENCE_EXPAND = 0.45   # confidence rendah → expand ke full set
 
@@ -123,12 +144,14 @@ def plan(state: dict) -> dict:
 
     confidence = 0.5
     skip_hints: List[str] = []
+    focus_hints: List[str] = []
     if isinstance(triage, dict):
         try:
             confidence = float(triage.get("confidence") or 0.5)
         except (TypeError, ValueError):
             confidence = 0.5
         skip_hints = triage.get("skip_hints") or []
+        focus_hints = triage.get("focus_hints") or []
     service_type = state.get("service_type")
 
     base = list(MAP[hyp])
@@ -138,8 +161,18 @@ def plan(state: dict) -> dict:
         nodes = [NODES["mongo"], NODES["metrics"], NODES["trace"]]
         reason = f"FORCE_FULL (investigate offer) hypothesis={hyp} → {nodes}"
     else:
-        nodes = _apply_confidence(base, hyp, confidence)
-        nodes = _apply_service_type(nodes, service_type)
+        # GAP-6 (Desain B): focus_hints verifikasi → BYPASS confidence-narrow
+        # (`nodes[:1]`), pertahankan base + ADD collector. Guard OR: bila SATU dari
+        # {verify_error_rate, check_metrics, check_trace} ada, fan-out tidak dikurangi.
+        # Tanpa ini, fusi triage menaikkan confidence (mis. 0.92) → narrow [mongo]
+        # → metrics/trace hilang → killer workflow underpowered.
+        focus_trigger = any(h in FOCUS_HINT_TRIGGERS for h in (focus_hints or []))
+        if focus_trigger:
+            nodes = _apply_focus_hints(list(base), focus_hints)
+            nodes = _apply_service_type(nodes, service_type)
+        else:
+            nodes = _apply_confidence(base, hyp, confidence)
+            nodes = _apply_service_type(nodes, service_type)
         nodes = _apply_skip_hints(nodes, skip_hints)
 
         # Safety floor: jangan pernah kosong
@@ -148,7 +181,8 @@ def plan(state: dict) -> dict:
 
         reason = (
             f"hypothesis={hyp} confidence={confidence:.2f} service_type={service_type or 'none'} "
-            f"skip_hints={skip_hints} base={base} → {nodes}"
+            f"skip_hints={skip_hints} focus_hints={focus_hints} "
+            f"{'(FOCUS bypass narrow)' if focus_trigger else ''} base={base} → {nodes}"
         )
 
     # Fase 4A: span fan-in jika watchdog traceId dan hipotesis butuh trace

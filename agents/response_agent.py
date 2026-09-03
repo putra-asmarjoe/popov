@@ -57,6 +57,12 @@ def _append_confidence_block(formatted: str, confidence: float, data_gaps: list,
 # ── Offer investigate gating (Fix #189) ──────────────────────────────────────
 _PLACEHOLDER_SERVICES = {"", "unknown", "null", "-", "n/a", "none", "undefined"}
 
+# Catatan span OTel setelah laporan insiden — bilingual (Fix #201: awalnya hardcode ID)
+_SPAN_OTEL_NOTE = {
+    "en": "📡 _Span detail OTel was also analyzed in the root cause assessment_",
+    "id": "📡 _Span detail OTel turut dianalisis dalam root cause assessment_",
+}
+
 
 def _is_placeholder_service(name: str) -> bool:
     """True bila service name placeholder — investigasi "unknown" = noise, jangan tawari."""
@@ -197,7 +203,11 @@ async def response_agent(state: AgentState) -> dict:
     agents_visited = state.get("agents_visited", []) + ["response_agent"]
 
     # 0. Handling Span Detail (span_agent) — ringkasan "apa yang sebenarnya terjadi" dari traceId
-    if span_mode:
+    # Fix bahasa ID (CPRO-19): HANYA jalur span MANDIRI (detail traceId). Saat span adalah
+    # anggota fan-out incident (ada triage_result/planned_nodes), format incident normal
+    # (reply_language eksplisit) — kalau tidak, `span_mode` bocor dari span_agent → prompt
+    # span (tanpa reply_language) dipakai → model default ke bahasa Indonesia.
+    if span_mode and not state.get("triage_result") and not state.get("correlation_result"):
         logger.info("TelegramAgent formatting span detail (traceId lookup)")
         span_summary = state.get("span_summary") or "Tidak ada data trace."
         span_data = state.get("span_data")
@@ -215,12 +225,27 @@ async def response_agent(state: AgentState) -> dict:
                 if svc_counts:
                     span_service = svc_counts.most_common(1)[0][0].lower().replace("-", "_")
         doc_context = ""
+        # Fix bahasa: jalur span mandiri juga wajib ikut bahasa user (detect → preferensi),
+        # sama seperti format incident — bukan default model. Telegram → locale owner
+        # workspace (pola Fix #140), web chat → isi percakapan + preferensi user.
+        try:
+            from services.conversation import detect_chat_locale
+            from services.user_store import get_user_locale
+            if state.get("suppress_telegram"):
+                _ulocale = await get_user_locale((state.get("sender") or {}).get("user_id"))
+                _span_locale = detect_chat_locale(state.get("conversation_history") or [], default=_ulocale)
+            else:
+                from services.locale_pref import get_workspace_locale
+                _span_locale = await get_workspace_locale(state.get("workspace_id"))
+        except Exception:
+            _span_locale = "id"
         try:
             formatted = await _format_span_with_llm(intent, trace_id, span_summary, span_data, doc_context,
-                                                history=state.get("conversation_history"))
+                                                history=state.get("conversation_history"),
+                                                reply_language=("English" if _span_locale == "en" else "Bahasa Indonesia"))
         except Exception as e:
             logger.error(f"Span LLM formatting failed: {e}")
-            formatted = await _format_span_fallback(state) + await llm_unavailable_note_for(state)
+            formatted = _format_span_fallback(trace_id, span_summary) + await llm_unavailable_note_for(state)
 
         success, send_error = await _deliver(state, formatted)
         return {
@@ -323,11 +348,11 @@ async def response_agent(state: AgentState) -> dict:
     if incident_history:
         logger.info(f"Loaded {len(incident_history)} prior request records as incident history")
 
+    # Fix #201: resolve locale SEKALI DI LUAR try (dipakai format LLM, span note,
+    # confidence block, dan offer investigate web) — gagal → "id", pipeline lanjut.
+    # Fix #140: web chat (suppress_telegram) = deteksi isi percakapan (fallback preferensi
+    # user); Telegram = locale owner workspace (Fix #105).
     try:
-        correlation_result = state.get("correlation_result")
-        # FASE 4A: span turut dianalisis di correlation → LLM telegram otomatis lebih kaya, cukup tambah catatan
-        # Fix #140: bahasa jawaban eksplisit — web chat (suppress_telegram) = deteksi dari isi
-        # percakapan (fallback preferensi user); Telegram = locale owner workspace (Fix #105).
         if state.get("suppress_telegram"):
             from services.conversation import detect_chat_locale
             from services.user_store import get_user_locale
@@ -339,13 +364,19 @@ async def response_agent(state: AgentState) -> dict:
             from services.locale_pref import get_workspace_locale
 
             locale = await get_workspace_locale(state.get("workspace_id"))
+    except Exception:
+        locale = "id"
+
+    try:
+        correlation_result = state.get("correlation_result")
+        # FASE 4A: span turut dianalisis di correlation → LLM telegram otomatis lebih kaya, cukup tambah catatan
         formatted = await _format_with_llm(
             intent, service_name, documents, doc_context, incident_history, correlation_result,
             history=state.get("conversation_history"),
             locale=locale,
         )
         if state.get("span_available") and state.get("correlation_result"):
-            formatted += "\n\n📡 _Span detail OTel turut dianalisis dalam root cause assessment_"
+            formatted += "\n\n" + _SPAN_OTEL_NOTE.get(locale, _SPAN_OTEL_NOTE["en"])
         # CHATFLOW V2.1 (Tahap 1C): blok confidence bila confidence rendah + ada gap.
         # Bilingual via _append_confidence_block (dict en/id).
         formatted = _append_confidence_block(
@@ -384,7 +415,7 @@ async def response_agent(state: AgentState) -> dict:
             session_id = (state.get("sender") or {}).get("session_id")
             offer_svc = state.get("resolved_service_name") or service_name
             if session_id and _investigate_offer_has_value(state) and not await _already_offered_investigate(session_id):
-                offer = build_investigate_offer(offer_svc)
+                offer = build_investigate_offer(offer_svc, locale=locale)
                 if offer:
                     offer_id = await create_offer(
                         type_=offer["type"], params=offer["params"], question=offer["question"],
@@ -619,16 +650,65 @@ async def _format_with_llm(
     return response.content
 
 
+# Fallback deterministic insiden (LLM down) — bilingual via dict, struktur blank-line
+# (Fix #209/#210): seragam dgn format laporan LLM agar semua balasan human-readable.
+_FALLBACK_TEXTS = {
+    "en": {
+        "ticket_title": "{emoji} *[{sev}]* Ticket {num} — {title}",
+        "error_title": "{emoji} *[{severity}]* Error in `{svc}`",
+        "info_title": "ℹ️ *[INFO]* No errors found",
+        "service": "• *Service:* `{svc}` ({criticality})",
+        "kind_env": "• *Kind:* {kind} · *Environment:* {env}",
+        "desc": "*Description:*\n{desc}",
+        "total": "• *Total error:* {count}",
+        "latest": "• *Latest error:* `{msg}`",
+        "time": "• *Time:* {ts}",
+        "status": "• *Status:* System normal",
+        "escalation": "*Escalation:*\n{escalation}",
+        "diagnostic": "*Diagnostic steps:*\n{diag}",
+    },
+    "id": {
+        "ticket_title": "{emoji} *[{sev}]* Tiket {num} — {title}",
+        "error_title": "{emoji} *[{severity}]* Error di `{svc}`",
+        "info_title": "ℹ️ *[INFO]* Tidak ada error ditemukan",
+        "service": "• *Service:* `{svc}` ({criticality})",
+        "kind_env": "• *Kind:* {kind} · *Environment:* {env}",
+        "desc": "*Deskripsi:*\n{desc}",
+        "total": "• *Total error:* {count}",
+        "latest": "• *Error terbaru:* `{msg}`",
+        "time": "• *Waktu:* {ts}",
+        "status": "• *Status:* Sistem normal",
+        "escalation": "*Eskalasi:*\n{escalation}",
+        "diagnostic": "*Langkah diagnostik:*\n{diag}",
+    },
+}
+
+
 async def _fallback_message(
     service_name: str, documents: list, state: Optional[dict] = None
 ) -> str:
     """Fallback jika LLM tidak tersedia. Fix #50: ticket-aware — JANGAN klaim
     'Sistem normal' untuk tiket alert; beri konteks tiket + langkah diagnostik
-    actionable (KubePodNotReady/HPA/down)."""
+    actionable (KubePodNotReady/HPA/down). Fix #210: bilingual + struktur blank-line
+    seragam dgn laporan LLM (human-readable)."""
     svc_doc = await get_service_doc(service_name)
     criticality = svc_doc["meta"].get("criticality", "unknown") if svc_doc else "unknown"
     escalation = svc_doc["meta"].get("escalation", {}).get("primary", "-") if svc_doc else "-"
     tc = (state or {}).get("ticket_context") or {}
+
+    locale = "en"
+    try:
+        if (state or {}).get("suppress_telegram"):
+            from services.conversation import detect_chat_locale
+            from services.user_store import get_user_locale
+            ulocale = await get_user_locale(((state or {}).get("sender") or {}).get("user_id"))
+            locale = detect_chat_locale((state or {}).get("conversation_history") or [], default=ulocale)
+        else:
+            from services.locale_pref import get_workspace_locale
+            locale = await get_workspace_locale((state or {}).get("workspace_id"))
+    except Exception:
+        locale = "en"
+    t = _FALLBACK_TEXTS.get(locale, _FALLBACK_TEXTS["en"])
 
     if tc:
         from agents.correlation_agent import infra_diag_steps
@@ -637,24 +717,30 @@ async def _fallback_message(
         sev = (tc.get("severity") or "unknown").upper()
         num = tc.get("ticketNumber")
         emoji = "🚨" if sev in ("CRITICAL", "HIGH") else "⚠️"
-        lines = [
-            f"{emoji} *[{sev}]* Tiket {num} — {title}",
-            f"*Service:* `{svc}` ({criticality})",
-            f"*Kind:* {tc.get('kind') or '-'} · *Environment:* {tc.get('environment') or '-'}",
-        ]
+        parts = [t["ticket_title"].format(emoji=emoji, sev=sev, num=num, title=title)]
+        parts.append(t["service"].format(svc=svc, criticality=criticality))
+        parts.append(t["kind_env"].format(
+            kind=tc.get("kind") or "-", env=tc.get("environment") or "-"
+        ))
         desc = (tc.get("description") or "").strip()
         if desc:
-            lines.append(f"*Deskripsi:* {desc[:300]}")
+            parts.append("")
+            parts.append(t["desc"].format(desc=desc[:300]))
         diag = infra_diag_steps(title)
-        lines.append(diag if diag else f"*Eskalasi:* {escalation}")
-        return "\n".join(lines)
+        if diag:
+            parts.append("")
+            parts.append(t["diagnostic"].format(diag=diag))
+        else:
+            parts.append("")
+            parts.append(t["escalation"].format(escalation=escalation))
+        return "\n".join(parts)
 
     count = len(documents)
     if count == 0:
         return (
-            f"ℹ️ *[INFO]* Tidak ada error ditemukan\n"
-            f"*Service:* `{service_name}` ({criticality})\n"
-            f"*Status:* Sistem normal"
+            t["info_title"] + "\n" +
+            t["service"].format(svc=service_name, criticality=criticality) + "\n" +
+            t["status"]
         )
 
     latest = documents[0]
@@ -665,12 +751,12 @@ async def _fallback_message(
     severity = "CRITICAL" if count >= 10 else "WARNING"
 
     return (
-        f"{emoji} *[{severity}]* Error di `{service_name}`\n"
-        f"*Service:* `{service_name}` ({criticality})\n"
-        f"*Total error:* {count}\n"
-        f"*Error terbaru:* `{msg}`\n"
-        f"*Waktu:* {ts}\n"
-        f"*Eskalasi:* {escalation}"
+        t["error_title"].format(emoji=emoji, severity=severity, svc=service_name) + "\n\n" +
+        t["service"].format(svc=service_name, criticality=criticality) + "\n" +
+        t["total"].format(count=count) + "\n" +
+        t["latest"].format(msg=msg) + "\n" +
+        t["time"].format(ts=ts) + "\n\n" +
+        t["escalation"].format(escalation=escalation)
     )
 
 
@@ -776,8 +862,11 @@ async def _format_span_with_llm(
     span_data: Optional[dict],
     doc_context: str = "",
     history: Optional[list] = None,
+    reply_language: str = "English",
 ) -> str:
-    """LLM menceritakan apa yang sebenarnya terjadi pada satu traceId (dari app_logs_db)."""
+    """LLM menceritakan apa yang sebenarnya terjadi pada satu traceId (dari app_logs_db).
+    reply_language (Fix bahasa CPRO-19): "English" / "Bahasa Indonesia" — prompt span
+    wajib bahasa eksplisit, bukan "same language as user" yang lemah (model free default ID)."""
     system_content = render_prompt("telegram_span_system")
     if doc_context:
         system_content += (
@@ -814,6 +903,7 @@ async def _format_span_with_llm(
         span_summary=span_summary,
         extra_block=extra_block,
         history_block=history_block,
+        reply_language=reply_language,
     )
 
     messages = [
