@@ -1,16 +1,11 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import {
-  ChevronDown,
-  ChevronRight,
   CircleCheck,
   CircleDashed,
   Database,
-  Eye,
   FilePlus2,
   FileText,
-  Library,
-  Lock,
   Pencil,
   PlugZap,
   Plus,
@@ -21,6 +16,14 @@ import { useQueryClient } from "@tanstack/react-query"
 import { api, apiErrorMessage } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import {
   Dialog,
   DialogContent,
@@ -56,9 +59,7 @@ import {
 } from "@/hooks/useManagement"
 import { useWorkspaceServiceGroups } from "@/hooks/useServicesLib"
 import { useAuth } from "@/hooks/useAuth"
-import { useLinkKnowledge, useWorkspaceKnowledge } from "@/hooks/useKnowledge"
 import { useProjects } from "@/hooks/useWorkspaces"
-import { KnowledgeViewDialog } from "@/components/shared/KnowledgeViewDialog"
 
 const ServiceKnowledgeDialogLazy = lazy(() =>
   import("@/components/shared/ServiceKnowledgeDialog").then((m) => ({
@@ -118,10 +119,6 @@ export function WorkspaceServiceHierarchy({
     initialEditName?: string
     initialEditFolder?: string
   } | null>(null)
-  const [viewDoc, setViewDoc] = useState<{ name: string; folder?: string; content: string; meta?: Record<string, any> } | null>(null)
-  const [activeKnowledgeId, setActiveKnowledgeId] = useState<string | null>(null)
-  const [viewKnowledgeItems, setViewKnowledgeItems] = useState<{ knowledgeLibraryId: string; name: string; folder: string }[]>([])
-  const [knowledgeExpanded, setKnowledgeExpanded] = useState<Set<string>>(new Set())
 
   // Project selection for create dialog
   const { data: allProjects } = useProjects(workspaceId)
@@ -134,25 +131,6 @@ export function WorkspaceServiceHierarchy({
     prevProjectsRef.current = allProjects?.map((p) => p.id) ?? []
   }, [allProjects])
 
-  async function openView(knowledgeLibraryId: string, name: string, items?: { knowledgeLibraryId: string; name: string; folder: string }[]) {
-    try {
-      setViewDoc({ name, content: "" })
-      setActiveKnowledgeId(knowledgeLibraryId)
-      if (items) setViewKnowledgeItems(items)
-      const { data } = await api.get(`/knowledge/library/${knowledgeLibraryId}`)
-      setViewDoc({ name, folder: data.folder, content: data.content ?? "", meta: data.meta })
-    } catch (e) {
-      setViewDoc(null)
-      setActiveKnowledgeId(null)
-      toast.error(apiErrorMessage(e, t("hierarchy.owner_only_read_error")))
-    }
-  }
-
-  async function navigateKnowledge(knowledgeLibraryId: string) {
-    const item = viewKnowledgeItems.find((k) => k.knowledgeLibraryId === knowledgeLibraryId)
-    if (!item) return
-    await openView(knowledgeLibraryId, item.name)
-  }
   const [activatingFor, setActivatingFor] = useState<string | null>(null)
   // FE-8.6 fix v2: satu tombol pintar — entri library dibuat OTOMATIS bila belum ada,
   // lalu panel kelola langsung terbuka (tidak ada langkah "Aktifkan" manual lagi).
@@ -186,9 +164,6 @@ export function WorkspaceServiceHierarchy({
       setActivatingFor(null)
     }
   }
-  const { data: wsRefs } = useWorkspaceKnowledge(workspaceId)
-  const linkWs = useLinkKnowledge(workspaceId)
-  const wsLinkedIds = useMemo(() => new Set((wsRefs ?? []).map((r) => r.libraryId)), [wsRefs])
 
   // Join: knowledge per service_id dari semua project (grouped endpoint)
   const knowledgeByServiceId = useMemo(() => {
@@ -306,147 +281,124 @@ export function WorkspaceServiceHierarchy({
           {t("hierarchy.empty")}
         </p>
       ) : (
-        <div className="space-y-3">
-          {(items ?? []).map((it) => {
-            const knowledge = knowledgeByServiceId[it.service_id] ?? []
-            return (
-              <div key={it.registry_id} className="rounded-lg border">
-                {/* ── Header service ── */}
-                <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                    {it.label || it.service_id}
-                  </span>
-                  <Badge variant="secondary" className="ml-auto shrink-0">
-                    {it.enabled !== false ? t("hierarchy.active") : t("hierarchy.inactive")}
-                  </Badge>
-                  <Button
-                    variant="ghost" size="sm" className="h-7 text-xs"
-                    disabled={!it.db_config || testConnection.isPending}
-                    title={it.db_config ? t("hierarchy.test_connection_title") : t("hierarchy.fill_db_first")}
-                    onClick={() => testConnection.mutate(it.registry_id)}
-                  >
-                    <PlugZap className="mr-1 size-3" />
-                    {testConnection.isPending ? "…" : "Test"}
-                  </Button>
-                  {isAdmin && (
-                    <>
-                      <Button variant="ghost" size="icon" className="size-7" title="Edit service"
-                        onClick={() => openEdit(it)}>
-                        <Pencil className="size-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost" size="icon"
-                        className="size-7 text-destructive hover:text-destructive"
-                        title={t("hierarchy.delete_from_registry")}
-                        onClick={() => setConfirmDelete(it)}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </Button>
-                    </>
-                  )}
-                </div>
-
-                {/* ── RAG Log DB ── */}
-                <div className="flex items-center gap-1.5 px-3 py-1.5">
-                  <Database
-                    className={
-                      it.db_config
-                        ? "size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
-                        : "size-3.5 shrink-0 text-muted-foreground"
-                    }
-                  />
-                  {it.db_config ? (
-                    <>
-                      <Badge
-                        variant="outline"
-                        className="shrink-0 gap-1 border-emerald-600/40 bg-emerald-500/10 px-1.5 py-0 text-[10px] font-medium text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-400"
-                      >
-                        <CircleCheck className="size-3" /> {t("hierarchy.connected_badge")}
-                      </Badge>
-                      <span className="font-mono text-xs">
-                        {it.db_config.type} · {it.db_config.db}
-                        {it.db_config.collection ? ` · ${it.db_config.collection}` : ""}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <CircleDashed className="size-3 shrink-0" />
-                      {t("hierarchy.db_not_set")}
-                    </span>
-                  )}
-                </div>
-
-                {/* ── Knowledge terhubung (tenant, knowledge_library) ── */}
-                <div className="border-t px-3 py-2">
-                  <button
-                    type="button"
-                    className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
-                    onClick={() => setKnowledgeExpanded((prev) => {
-                      const next = new Set(prev)
-                      if (next.has(it.service_id)) next.delete(it.service_id)
-                      else next.add(it.service_id)
-                      return next
-                    })}
-                  >
-                    {knowledgeExpanded.has(it.service_id)
-                      ? <ChevronDown className="size-3" />
-                      : <ChevronRight className="size-3" />}
-                    {t("hierarchy.knowledge_section", { count: knowledge.length })}
-                  </button>
-                  {knowledgeExpanded.has(it.service_id) && (
-                    <>
-                      {knowledge.length === 0 ? (
-                        <p className="text-xs text-muted-foreground">
-                          {t("hierarchy.knowledge_empty")}
-                        </p>
-                      ) : (
-                        <div className="space-y-1">
-                          {dedupe(knowledge).map((k) => {
-                            const kbMine = k.ownerId === meId || k.ownerId?.startsWith("system:") || isAdmin
-                            return (
-                              <div key={`${k.refId}-${k.knowledgeLibraryId}`}
-                                className="flex items-center gap-1.5 rounded px-1.5 py-0.5 hover:bg-accent/40">
-                                <FileText className="size-3 shrink-0 text-muted-foreground" />
-                                <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{k.name}</span>
-                                <Badge variant="secondary" className="shrink-0 text-[9px]">{k.folder}</Badge>
-                                {!kbMine && <Lock className="size-2.5 shrink-0 text-muted-foreground" />}
-                                <Button variant="ghost" size="icon" className="size-6" title={t("hierarchy.view_doc")}
-                                  onClick={() => openView(k.knowledgeLibraryId, k.name, dedupe(knowledge).map((k) => ({ knowledgeLibraryId: k.knowledgeLibraryId, name: k.name, folder: k.folder })))}>
-                                  <Eye className="size-3" />
-                                </Button>
-                                {isAdmin && !wsLinkedIds.has(k.knowledgeLibraryId) && (
-                                  <Button variant="ghost" size="icon" className="size-6" title="Juga jadi Workspace Knowledge"
-                                    disabled={linkWs.isPending}
-                                    onClick={() => linkWs.mutate(k.knowledgeLibraryId)}>
-                                    <Library className="size-3" />
-                                  </Button>
-                                )}
-                                {wsLinkedIds.has(k.knowledgeLibraryId) && (
-                                  <Badge variant="outline" className="text-[9px] px-1">ws</Badge>
-                                )}
-                              </div>
-                            )
-                          })}
+        <div className="overflow-x-auto rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="text-[11px]">{t("hierarchy.col_service")}</TableHead>
+                <TableHead className="hidden text-[11px] sm:table-cell">{t("hierarchy.col_log_db")}</TableHead>
+                <TableHead className="text-right text-[11px]">{t("hierarchy.col_actions")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(items ?? []).map((it) => {
+                const knowledge = dedupe(knowledgeByServiceId[it.service_id] ?? [])
+                return (
+                  <TableRow key={it.registry_id} className="align-middle hover:bg-accent/40">
+                    <TableCell className="py-2">
+                      <div className="flex min-w-48 flex-col gap-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span className="truncate text-sm font-medium" title={it.label || it.service_id}>
+                            {it.label || it.service_id}
+                          </span>
+                          <Badge variant="outline" className="shrink-0 gap-1 px-1 text-[9px]" title={t("hierarchy.manage_knowledge_title")}>
+                            <FileText className="size-2.5" />
+                            {knowledge.length}
+                          </Badge>
                         </div>
+                        <span className="text-[11px] text-muted-foreground">
+                          {it.db_config ? (
+                            <span className="flex items-center gap-1.5">
+                              <Database className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                              <span className="truncate font-mono text-[10px]">
+                                {it.db_config.type} · {it.db_config.db}
+                                {it.db_config.collection ? ` · ${it.db_config.collection}` : ""}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1">
+                              <CircleDashed className="size-3 shrink-0" />
+                              {t("hierarchy.db_not_set")}
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="hidden py-2 sm:table-cell">
+                      {it.db_config ? (
+                        it.health_status === "ok" ? (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 gap-1 border-emerald-600/40 bg-emerald-500/10 px-1.5 py-0 text-[10px] font-medium text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-400"
+                          >
+                            <CircleCheck className="size-2.5" /> {t("hierarchy.connected_badge")}
+                          </Badge>
+                        ) : it.health_status && it.health_status.startsWith("error") ? (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 gap-1 border-red-600/40 bg-red-500/10 px-1.5 py-0 text-[10px] font-medium text-red-700 dark:border-red-400/30 dark:text-red-400"
+                            title={it.health_status}
+                          >
+                            <CircleDashed className="size-2.5" /> {t("hierarchy.conn_error_badge")}
+                          </Badge>
+                        ) : (
+                          <Badge
+                            variant="outline"
+                            className="shrink-0 gap-1 px-1.5 py-0 text-[10px] font-medium text-muted-foreground"
+                            title={t("hierarchy.conn_untested_title")}
+                          >
+                            <CircleDashed className="size-2.5" /> {t("hierarchy.conn_untested_badge")}
+                          </Badge>
+                        )
+                      ) : (
+                        <span className="text-xs text-muted-foreground">{t("hierarchy.db_not_set")}</span>
                       )}
-                    </>
-                  )}
-                  <Button size="sm" variant="outline"
-                    className="mt-2 h-6 gap-1 px-2 text-[11px]"
-                    disabled={activatingFor === it.service_id}
-                    title={t("hierarchy.manage_knowledge_title")}
-                    onClick={() => openKnowledgeManager(it.service_id)}>
-                    <FilePlus2 className="size-3" />
-                    {activatingFor === it.service_id
-                      ? t("hierarchy.preparing")
-                      : knowledge.length > 0
-                        ? t("hierarchy.manage_knowledge")
-                        : t("hierarchy.add_knowledge")}
-                  </Button>
-                </div>
-              </div>
-            )
-          })}
+                    </TableCell>
+                    <TableCell className="py-2">
+                      <div className="flex flex-wrap items-center justify-end gap-1">
+                        <Button size="sm" variant="outline" className="h-6 gap-1 px-2 text-[11px]"
+                          disabled={activatingFor === it.service_id}
+                          title={t("hierarchy.manage_knowledge_title")}
+                          onClick={() => openKnowledgeManager(it.service_id)}>
+                          <FilePlus2 className="size-3" />
+                          {activatingFor === it.service_id
+                            ? t("hierarchy.preparing")
+                            : knowledge.length > 0
+                              ? t("hierarchy.manage_knowledge")
+                              : t("hierarchy.add_knowledge")}
+                        </Button>
+                        <Button
+                          variant="ghost" size="sm" className="h-6 px-1.5 text-[11px]"
+                          disabled={!it.db_config || testConnection.isPending}
+                          title={it.db_config ? t("hierarchy.test_connection_title") : t("hierarchy.fill_db_first")}
+                          onClick={() => testConnection.mutate(it.registry_id)}
+                        >
+                          <PlugZap className="mr-1 size-3" />
+                          {testConnection.isPending ? "…" : "Test"}
+                        </Button>
+                        {isAdmin && (
+                          <>
+                            <Button variant="ghost" size="icon" className="size-6" title="Edit service"
+                              onClick={() => openEdit(it)}>
+                              <Pencil className="size-3" />
+                            </Button>
+                            <Button
+                              variant="ghost" size="icon"
+                              className="size-6 text-destructive hover:text-destructive"
+                              title={t("hierarchy.delete_from_registry")}
+                              onClick={() => setConfirmDelete(it)}
+                            >
+                              <Trash2 className="size-3" />
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
         </div>
       )}
 
@@ -619,15 +571,6 @@ export function WorkspaceServiceHierarchy({
           />
         </Suspense>
       )}
-
-      {/* View markdown */}
-      <KnowledgeViewDialog
-        doc={viewDoc}
-        onClose={() => { setViewDoc(null); setActiveKnowledgeId(null) }}
-        items={viewKnowledgeItems}
-        activeKnowledgeId={activeKnowledgeId ?? undefined}
-        onNavigate={navigateKnowledge}
-      />
     </div>
   )
 }

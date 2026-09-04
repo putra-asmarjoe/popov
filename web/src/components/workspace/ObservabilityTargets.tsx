@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
-import { Copy, KeyRound, Pencil, PlugZap, Plus, Trash2, X } from "lucide-react"
+import { CircleCheck, Copy, KeyRound, Pencil, PlugZap, Plus, Trash2, X } from "lucide-react"
 import { api, apiErrorMessage } from "@/lib/api"
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
@@ -163,12 +163,12 @@ export function ObservabilityTargets({ workspaceId }: { workspaceId?: string }) 
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Stack</TableHead>
-              {!workspaceId && <TableHead className="hidden sm:table-cell">Workspace</TableHead>}
-              <TableHead>Kind</TableHead>
-              <TableHead>Projects</TableHead>
-              <TableHead>Mode</TableHead>
-              <TableHead className="hidden md:table-cell">Health</TableHead>
+              <TableHead>{t("observability.col_stack")}</TableHead>
+              {!workspaceId && <TableHead className="hidden sm:table-cell">{t("observability.col_workspace")}</TableHead>}
+              <TableHead>{t("observability.col_kind")}</TableHead>
+              <TableHead>{t("observability.col_projects")}</TableHead>
+              <TableHead>{t("observability.col_mode")}</TableHead>
+              <TableHead className="hidden md:table-cell">{t("observability.col_health")}</TableHead>
               <TableHead className="w-28" />
             </TableRow>
           </TableHeader>
@@ -191,11 +191,14 @@ export function ObservabilityTargets({ workspaceId }: { workspaceId?: string }) 
                   <TableCell>
                     <div className="font-medium">{tg.name}</div>
                     {tg.kind === "otel" && tg.log_db_uri_masked ? (
-                      <div className="font-mono text-xs text-muted-foreground">
-                        {tg.log_db_uri_masked} · {tg.log_db_name}
-                      </div>
+                      <>
+                        <div className="max-w-56 truncate font-mono text-xs text-muted-foreground" title={tg.log_db_uri_masked}>
+                          {tg.log_db_uri_masked}
+                        </div>
+                        <div className="font-mono text-xs text-muted-foreground">{tg.log_db_name}</div>
+                      </>
                     ) : (
-                      <div className="font-mono text-xs text-muted-foreground">{tg.observ_id}</div>
+                      <div className="max-w-56 truncate font-mono text-xs text-muted-foreground" title={tg.observ_id}>{tg.observ_id}</div>
                     )}
                   </TableCell>
                   {!workspaceId && (
@@ -222,7 +225,12 @@ export function ObservabilityTargets({ workspaceId }: { workspaceId?: string }) 
                   <TableCell className="hidden md:table-cell">
                     {tg.health_status ? (
                       tg.health_status === "ok" || tg.health_status === "webhook_ok" ? (
-                        <Badge variant="secondary">ok</Badge>
+                        <Badge
+                          variant="outline"
+                          className="shrink-0 gap-1 border-emerald-600/40 bg-emerald-500/10 px-1.5 py-0 text-[10px] font-medium text-emerald-700 dark:border-emerald-400/30 dark:text-emerald-400"
+                        >
+                          <CircleCheck className="size-2.5" /> {t("observability.health_ok")}
+                        </Badge>
                       ) : (
                         <Badge variant="destructive">{tg.health_status}</Badge>
                       )

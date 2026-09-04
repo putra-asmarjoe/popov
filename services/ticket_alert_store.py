@@ -53,6 +53,8 @@ async def ensure_ticket_alert_indexes() -> None:
     await coll.create_index([("ticketId", 1), ("occurredAt", -1)])
     # dedup window per project + konten
     await coll.create_index([("projectId", 1), ("contentFp", 1), ("occurredAt", -1)])
+    # alert feed per project (overview card) — query sort occurredAt desc
+    await coll.create_index([("projectId", 1), ("occurredAt", -1)])
     logger.info("Ticket alert indexes ensured")
 
 
@@ -126,6 +128,27 @@ async def list_alerts_for_ticket(ticket_id: str, limit: int = 200) -> List[Dict[
         .find({"ticketId": str(oid)})
         .sort("occurredAt", -1)
         .limit(max(1, min(limit, 500)))
+    )
+    return [doc async for doc in cursor]
+
+
+async def list_alerts_for_project(project_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Daftar alert ter-link ke tiket milik project (overview alert feed).
+
+    Sumber kebenaran card alert = ticket_alerts (alert yang TERTIKET-kan), BUKAN
+    watchdog_alerts (broadcast log tanpa project_id). ticket_alerts membawa
+    projectId+ticketId eksplisit → scoping per project tanpa join observ_id dan
+    tanpa fallback workspace-wide (yang bocor lintas project saat project tanpa stack).
+    """
+    try:
+        oid = ObjectId(str(project_id))
+    except Exception:
+        return []
+    cursor = (
+        get_db()[TICKET_ALERTS_COLLECTION]
+        .find({"projectId": str(oid)})
+        .sort("occurredAt", -1)
+        .limit(max(1, min(limit, 100)))
     )
     return [doc async for doc in cursor]
 

@@ -313,6 +313,8 @@ export interface WsRegistryItem {
   label: string
   db_config: { type: string; uri?: string; db?: string; collection?: string } | null
   enabled: boolean
+  health_status?: string | null
+  last_health_check_at?: string | null
 }
 
 export function useWsServiceRegistry(wsId?: string) {
@@ -370,6 +372,8 @@ export function useWsRegistryMutations(wsId?: string) {
         overall: string
       },
     onSuccess: (d) => {
+      // badge Log DB baca health_status persist — refetch supaya tampil status baru
+      qc.invalidateQueries({ queryKey: ["config", "ws-registry", wsId] })
       if (d.overall === "ok") toast.success(t("toasts.db_log_ok"))
       else if (d.overall === "not_configured") toast.info(t("toasts.db_log_not_set"))
       else toast.warning(t("toasts.conn_status", { status: d.overall }))

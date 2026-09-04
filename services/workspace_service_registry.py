@@ -110,6 +110,9 @@ def _public(doc: dict) -> dict:
     raw = d.pop("db_config", None) or None
     if raw:
         d["db_config"] = {**raw, "uri": mask_uri(raw.get("uri"))}
+    # health status hasil test-connection terakhir (pola observability_targets)
+    d["health_status"] = d.get("health_status") or None
+    d["last_health_check_at"] = d.get("last_health_check_at") or None
     return d
 
 
@@ -189,6 +192,9 @@ async def update_item(registry_id: str, patch: Dict[str, Any]) -> bool:
     if "db_config" in patch:
         validated = _validate_db_config(patch.get("db_config"))
         set_fields["db_config"] = validated  # None = hapus koneksi
+        # config berubah → status test lama basi, reset sampai Test ditekan lagi
+        set_fields["health_status"] = None
+        set_fields["last_health_check_at"] = None
     if "service_type" in patch:
         set_fields["service_type"] = _validate_service_type(patch.get("service_type"))
     if len(set_fields) <= 1:
@@ -241,35 +247,58 @@ async def resolve_registry_for_state(
         return []
 
 
+async def record_health_status(registry_id: str, status: str) -> None:
+    """Simpan hasil test-connection terakhir (pola observability_store.record_health_status)."""
+    try:
+        await _collection().update_one(
+            {"registry_id": registry_id},
+            {"$set": {"health_status": status or None, "last_health_check_at": _now()}},
+        )
+    except Exception as e:
+        logger.warning(f"[WsRegistry] record_health_status({registry_id}) failed: {e}")
+
+
 async def test_connection(item: dict, timeout_s: float = 4.0) -> Dict[str, Any]:
-    """Probe DB koneksi milik item registry (mongodb/mysql)."""
+    """Probe DB koneksi milik item registry (mongodb/mysql).
+
+    Hasil di-persist ke registry (health_status/last_health_check_at) supaya badge
+    "Connected" di UI mencerminkan hasil probe nyata, bukan sekadar config ADA.
+    """
     import httpx
 
     cfg = item.get("db_config") or {}
     uri = cfg.get("uri")
     db_type = (cfg.get("type") or "mongodb").lower()
     if not uri:
-        return {"overall": "not_configured", "sources": {}}
-    try:
-        if db_type == "mongodb":
-            from motor.motor_asyncio import AsyncIOMotorClient
-            client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=int(timeout_s * 1000))
-            try:
-                await client.admin.command("ping")
+        status = "not_configured"
+    else:
+        try:
+            if db_type == "mongodb":
+                from motor.motor_asyncio import AsyncIOMotorClient
+                client = AsyncIOMotorClient(uri, serverSelectionTimeoutMS=int(timeout_s * 1000))
+                try:
+                    await client.admin.command("ping")
+                    status = "ok"
+                except Exception as e:
+                    status = f"error:{type(e).__name__}"
+                finally:
+                    client.close()
+            else:
+                # MySQL: probe TCP host/port dari URI mysql://host:port
+                from urllib.parse import urlparse
+                parsed = urlparse(uri if "//" in uri else f"//{uri}")
+                host, port = parsed.hostname or "localhost", parsed.port or 3306
+                import socket
+                with socket.create_connection((host, port), timeout=timeout_s):
+                    pass
                 status = "ok"
-            except Exception as e:
-                status = f"error:{type(e).__name__}"
-            finally:
-                client.close()
-        else:
-            # MySQL: probe TCP host/port dari URI mysql://host:port
-            from urllib.parse import urlparse
-            parsed = urlparse(uri if "//" in uri else f"//{uri}")
-            host, port = parsed.hostname or "localhost", parsed.port or 3306
-            import socket
-            with socket.create_connection((host, port), timeout=timeout_s):
-                pass
-            status = "ok"
-        return {"overall": status, "db_type": db_type}
-    except Exception as e:
-        return {"overall": f"error:{type(e).__name__}", "db_type": db_type}
+        except Exception as e:
+            status = f"error:{type(e).__name__}"
+    # persist hasil — non-fatal, badge UI baca dari sini
+    rid = item.get("registry_id")
+    if rid:
+        try:
+            await record_health_status(rid, status)
+        except Exception:
+            pass
+    return {"overall": status, "db_type": db_type}

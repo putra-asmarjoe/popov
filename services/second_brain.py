@@ -33,14 +33,15 @@ def generate_episode_id(service_name: str = "") -> str:
 # ── Regex Extractors ─────────────────────────────────────────────────────────
 
 def _extract_error_rate(metrics_summary: str) -> Optional[float]:  # noqa
-    """Extract error rate percentage dari metrics_summary. Contoh: 'Error rate: 43.5%'"""
+    """Extract error rate percentage dari metrics_summary. Contoh: 'Error rate (5m): 43.5%'"""
     if not metrics_summary:
         return None
-    # Coba beberapa pola
+    # Coba beberapa pola. Produksi menulis "Error rate (5m): X%" (suffix parenthetical);
+    # pola pertama toleran suffix itu + tetap match format lama "Error rate: X%".
     patterns = [
-        r"error\s*rate[:\s]*([\d]+\.?[\d]*)\s*%",
-        r"error_rate[:\s]*([\d]+\.?[\d]*)\s*%",
-        r"rate\s*error[:\s]*([\d]+\.?[\d]*)\s*%",
+        r"error\s*rate(?:\s*\([^)]*\))?\s*[:\s]*([\d]+\.?[\d]*)\s*%",
+        r"error_rate(?:\s*\([^)]*\))?\s*[:\s]*([\d]+\.?[\d]*)\s*%",
+        r"rate\s*error(?:\s*\([^)]*\))?\s*[:\s]*([\d]+\.?[\d]*)\s*%",
     ]
     for pat in patterns:
         m = re.search(pat, metrics_summary, re.IGNORECASE)

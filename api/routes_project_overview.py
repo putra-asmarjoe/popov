@@ -1,13 +1,16 @@
 """
 Project Overview router — War Room Part A (plan WARROOM_IMPLEMENTATION2.md §5.2).
 
-Aggregates project health dari 4 collections (tickets, watchdog_alerts,
+Aggregates project health dari 4 collections (tickets, ticket_alerts,
 incident_episodes, observability_targets). Semua query paralel via asyncio.gather,
 target latency <500ms. Field mapping SUDAH diverifikasi (bukan versi v1 yang salah):
 
   - tickets:      createdAt / ticketNumber / severity (BUKAN created_at / key)
-  - watchdog_alerts: TIDAK punya project_id → scope via observ_id join
-                    (observability_targets.project_ids) ATAU workspace-wide fallback
+  - ticket_alerts: alert feed = alert yang TER-TIKET (relasi alert→ticket→project).
+                  Dipakai langsung via projectId — TANPA join observ_id & TANPA
+                  fallback workspace-wide (fix bocor lintas project saat project
+                  tanpa stack). Bukan lagi watchdog_alerts (broadcast log tanpa
+                  project_id, hanya observ_id indirek).
   - incident_episodes: TIDAK punya severity; pakai root_cause + confidence
   - observability_targets: health_status (bukan last_status) + last_health_check_at
 
@@ -23,7 +26,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from api.deps import get_current_user
 from api.tickets import _project_and_ws_or_403
 from services.mongodb_client import get_db
-from services.request_log import REQUEST_LOG_COLLECTION, WATCHDOG_ALERT_COLLECTION
+from services.request_log import REQUEST_LOG_COLLECTION
 from services.second_brain import INCIDENT_EPISODES_COLLECTION
 
 logger = logging.getLogger(__name__)
@@ -73,21 +76,66 @@ async def _query_open_tickets(db, project_id: str, workspace_id: str) -> List[Di
     return await cursor.to_list(20)
 
 
-async def _query_alerts(db, project_id: str, workspace_id: str, observ_ids: List[str], limit: int = 10) -> List[Dict[str, Any]]:
-    q: Dict[str, Any] = {"workspace_id": workspace_id}
-    if observ_ids:
-        q["observ_id"] = {"$in": observ_ids}
-    cursor = db[WATCHDOG_ALERT_COLLECTION].find(
-        q, {"_id": 1, "message": 1, "fingerprint": 1, "service_name": 1,
-            "observ_id": 1, "sent_at": 1, "status": 1},
-    ).sort("sent_at", -1).limit(limit)
-    return await cursor.to_list(limit)
+async def _query_alerts(db, project_id: str, workspace_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+    """Alert feed project = alert yang TER-TIKET (ticket_alerts), bukan broadcast log.
+
+    Relasi yang benar: alert → ticket → project. ticket_alerts membawa projectId +
+    ticketId eksplisit (ditulis auto_ticket saat alert memicu/menempel tiket). Query
+    per-project langsung — TANPA join observ_id dan TANPA fallback workspace-wide
+    (fallback itu bocor lintas project saat project tanpa observability target).
+
+    Map ke shape OverviewAlert (FE lama: message/fingerprint/service_name/sent_at)
+    supaya perubahan sumber data tidak mengubah kontrak FE.
+    """
+    try:
+        from services.ticket_alert_store import list_alerts_for_project
+
+        docs = await list_alerts_for_project(project_id, limit=limit)
+    except Exception as e:
+        logger.warning(f"Overview alerts query gagal (non-fatal): {e}")
+        return []
+    out = []
+    for d in docs:
+        out.append({
+            "_id": d.get("_id"),
+            "message": d.get("name") or "",
+            "fingerprint": d.get("contentFp") or None,
+            "service_name": d.get("serviceName") or None,
+            "observ_id": d.get("observId") or None,
+            "sent_at": d.get("occurredAt"),
+            "status": None,
+            "project_id": d.get("projectId") or None,
+            "ticket_id": d.get("ticketId") or None,
+            "severity": d.get("severity") or "warning",
+        })
+    return out[:limit]
 
 
-async def _query_episodes(db, workspace_id: str, observ_ids: List[str], limit: int = 20) -> List[Dict[str, Any]]:
-    q: Dict[str, Any] = {"workspace_id": workspace_id}
+async def _query_episodes(db, project_id: str, workspace_id: str, observ_ids: List[str], limit: int = 20) -> List[Dict[str, Any]]:
+    """Episode timeline project = investigasi yang terikat project.
+
+    Relasi: episode → ticket_id → ticket(projectId). Episode tanpa ticket_id (dari
+    channel non-tiket) di-scope via observ_id. Project tanpa keduanya → kosong
+    (TANPA fallback workspace-wide — fallback itu bocor lintas project).
+    """
+    ticket_ids = []
+    try:
+        cur = db["tickets"].find(
+            {"projectId": project_id, "workspaceId": workspace_id}, {"_id": 1}
+        )
+        ticket_ids = [str(t["_id"]) async for t in cur]
+    except Exception as e:
+        logger.warning(f"Overview episode tickets lookup gagal (non-fatal): {e}")
+
+    conds: List[Dict[str, Any]] = []
+    if ticket_ids:
+        conds.append({"ticket_id": {"$in": ticket_ids}})
     if observ_ids:
-        q["observ_id"] = {"$in": observ_ids}
+        conds.append({"observ_id": {"$in": observ_ids}})
+    if not conds:
+        return []
+
+    q: Dict[str, Any] = {"workspace_id": workspace_id, "$or": conds}
     cursor = db[INCIDENT_EPISODES_COLLECTION].find(
         q, {"_id": 1, "episode_id": 1, "service_name": 1, "root_cause": 1,
             "confidence": 1, "created_at": 1, "ticket_id": 1,
@@ -130,8 +178,8 @@ async def get_project_overview(
 
     tickets_t, alerts_t, episodes_t, stacks_t = await asyncio.gather(
         _query_open_tickets(db, project_id, workspace_id),
-        _query_alerts(db, project_id, workspace_id, observ_ids),
-        _query_episodes(db, workspace_id, observ_ids),
+        _query_alerts(db, project_id, workspace_id),
+        _query_episodes(db, project_id, workspace_id, observ_ids),
         _get_stack_health(db, project_id, workspace_id),
     )
 
