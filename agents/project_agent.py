@@ -254,11 +254,27 @@ async def project_agent(state: AgentState) -> dict:
     agents_visited = state.get("agents_visited", []) + ["project_agent"]
 
     if not project_id:
-        return {
-            "formatted_message": (
+        try:
+            from services.conversation import detect_chat_locale
+            from services.user_store import get_user_locale
+            _ploc = detect_chat_locale(
+                state.get("conversation_history") or [],
+                default=await get_user_locale((state.get("sender") or {}).get("user_id")),
+            )
+        except Exception:
+            _ploc = "id"
+        if _ploc == "en":
+            msg = (
+                "⚠️ This session has no project context. "
+                "Open a chat from a project page to ask project-level questions."
+            )
+        else:
+            msg = (
                 "⚠️ Sesi ini tidak punya konteks project. "
                 "Buka chat dari halaman project untuk pertanyaan level project."
-            ),
+            )
+        return {
+            "formatted_message": msg,
             "next_agent": "response_agent",
             "agents_visited": agents_visited,
             "error": None,

@@ -90,11 +90,15 @@ async def fetch_logs_for_service(
     collection_override: Optional[str] = None,
     sort_field: Optional[str] = None,
     workspace_id: Optional[str] = None,
+    time_window_hours: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     """
     Unified log fetcher: Mengambil log dari MongoDB atau MySQL berdasarkan konfigurasi per-service.
     raw=True → tanpa filter level error (data mentah, semua record terbaru).
     collection_override → nama collection/table eksplisit dari intent (diutamakan).
+    time_window_hours → override window log (None = settings.log_time_window_hours;
+        0 = tanpa window — dipakai data_agent utk query mentah "cari error" agar
+        error lama yang diminta user tidak terpotong window insiden 6 jam).
 
     Fix #41: resolusi db_config bertingkat:
       1. global JSON eksplisit (service_db_configs.json)
@@ -152,7 +156,8 @@ async def fetch_logs_for_service(
 
         # Time-window: hanya ambil data maksimal LOG_TIME_WINDOW_HOURS jam terakhir,
         # supaya error lama (berhari-hari lalu) tidak dilaporkan sebagai insiden baru.
-        time_window_hours = settings.log_time_window_hours
+        # data_agent (query mentah/cari error) bisa override → 0 = tanpa window.
+        time_window_hours = settings.log_time_window_hours if time_window_hours is None else time_window_hours
         ts_type = "unknown"
         if time_window_hours > 0:
             try:

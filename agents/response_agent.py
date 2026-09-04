@@ -148,30 +148,56 @@ async def _deliver(state, text: str, reply_markup: Optional[dict] = None):
 # (editable, hot-reload via POST /prompts/reload).
 
 
-def _build_dynamic_buttons(state: dict) -> Optional[dict]:
+_BTN_TEXTS = {
+    "en": {
+        "health": "🏥 Check Health Dependency",
+        "trace_latest": "🔍 View Latest Trace",
+        "trace_detail": "🔍 View Trace Detail",
+        "metrics": "📊 View Metrics",
+        "trace": "🔍 Check Trace",
+        "rawlog": "📋 Raw Log",
+        "correct": "✅ Analysis Accurate",
+        "wrong": "❌ Analysis Missed",
+    },
+    "id": {
+        "health": "🏥 Cek Health Dependency",
+        "trace_latest": "🔍 Lihat Trace Terbaru",
+        "trace_detail": "🔍 Lihat Trace Detail",
+        "metrics": "📊 Lihat Metrics",
+        "trace": "🔍 Cek Trace",
+        "rawlog": "📋 Log Mentah",
+        "correct": "✅ Analisis Tepat",
+        "wrong": "❌ Analisis Meleset",
+    },
+}
+
+
+def _build_dynamic_buttons(state: dict, locale: str = "en") -> Optional[dict]:
     """
     FASE 6A: Build tombol dinamis berdasarkan root_cause_assessment.
     Baris aksi (row 0) berubah per root cause, baris feedback selalu di bawah jika episode_id ada.
+    locale (Fix bahasa): label tombol bilingual (en/id) — bukan hardcode Indonesia.
     """
     service = state.get("service_name") or ""
     root_cause = state.get("root_cause_assessment") or "unknown"
     episode_id = state.get("episode_id")
+    bt = _BTN_TEXTS.get(locale, _BTN_TEXTS["en"])
 
     # Baris aksi — dinamis
     if root_cause == "downstream":
         action_row = [
-            {"text": "🏥 Cek Health Dependency", "callback_data": f"health_check:{service}:all"},
-            {"text": "🔍 Lihat Trace Terbaru", "callback_data": f"detail:{service}:latest"},
+            {"text": bt["health"], "callback_data": f"health_check:{service}:all"},
+            {"text": bt["trace_latest"], "callback_data": f"detail:{service}:latest"},
         ]
     elif root_cause == "service-fault":
         action_row = [
-            {"text": "🔍 Lihat Trace Detail", "callback_data": f"detail:{service}:latest"},
-            {"text": "📊 Lihat Metrics", "callback_data": f"metrics:{service}"},
+            {"text": bt["trace_detail"], "callback_data": f"detail:{service}:latest"},
+            {"text": bt["metrics"], "callback_data": f"metrics:{service}"},
         ]
     else:  # unknown
         action_row = [
-            {"text": "🔍 Cek Trace", "callback_data": f"detail:{service}:latest"},
-            {"text": "📋 Log Mentah", "callback_data": f"rawlog:{service}"},
+            {"text": bt["trace"], "callback_data": f"detail:{service}:latest"},
+            {"text": bt["rawlog"], "callback_data": f"rawlog:{service}"},
         ]
 
     buttons: list[list[dict]] = [action_row]
@@ -179,8 +205,8 @@ def _build_dynamic_buttons(state: dict) -> Optional[dict]:
     # Baris feedback — hanya jika episode berhasil disimpan
     if episode_id:
         buttons.append([
-            {"text": "✅ Analisis Tepat", "callback_data": f"feedback:correct:{episode_id}"},
-            {"text": "❌ Analisis Meleset", "callback_data": f"feedback:wrong:{episode_id}"},
+            {"text": bt["correct"], "callback_data": f"feedback:correct:{episode_id}"},
+            {"text": bt["wrong"], "callback_data": f"feedback:wrong:{episode_id}"},
         ])
 
     return {"inline_keyboard": buttons}
@@ -272,11 +298,25 @@ async def response_agent(state: AgentState) -> dict:
     # 0. Handling Data Retrieval (data_agent) — tampilkan data mentah terbaru
     if data_mode:
         logger.info(f"TelegramAgent formatting data retrieval, docs={len(documents)}")
+        # Fix bahasa: jalur data wajib reply_language eksplisit (pola Fix #201/#217).
         try:
-            formatted = await _format_data_with_llm(intent, service_name, documents)
+            from services.conversation import detect_chat_locale
+            from services.user_store import get_user_locale
+            _dloc = detect_chat_locale(
+                state.get("conversation_history") or [],
+                default=await get_user_locale((state.get("sender") or {}).get("user_id")),
+            )
+        except Exception:
+            _dloc = "id"
+        try:
+            formatted = await _format_data_with_llm(
+                intent, service_name, documents,
+                reply_language=("English" if _dloc == "en" else "Bahasa Indonesia"),
+            )
         except Exception as e:
             logger.error(f"Data LLM formatting failed: {e}")
-            formatted = await _format_data_fallback(state) + await llm_unavailable_note_for(state)
+            formatted = _format_data_fallback(service_name, documents, "id" if _dloc == "id" else "en") \
+                + await llm_unavailable_note_for(state)
 
         success, send_error = await _deliver(state, formatted)
         return {
@@ -290,11 +330,25 @@ async def response_agent(state: AgentState) -> dict:
     # 0. Handling Follow-up Question (Phase 1)
     if is_follow_up:
         logger.info("TelegramAgent handling follow-up question")
+        # Fix bahasa: jalur follow-up wajib reply_language eksplisit (pola #201/#222).
         try:
-            formatted = await _format_follow_up(intent, follow_up_context)
+            from services.conversation import detect_chat_locale
+            from services.user_store import get_user_locale
+            _floc = detect_chat_locale(
+                state.get("conversation_history") or [],
+                default=await get_user_locale((state.get("sender") or {}).get("user_id")),
+            )
+        except Exception:
+            _floc = "id"
+        try:
+            formatted = await _format_follow_up(
+                intent, follow_up_context,
+                reply_language=("English" if _floc == "en" else "Bahasa Indonesia"),
+            )
         except Exception as e:
             logger.error(f"Follow-up LLM formatting failed: {e}")
-            formatted = await _format_follow_up_fallback(state) + await llm_unavailable_note_for(state)
+            formatted = _format_follow_up_fallback(follow_up_context, "id" if _floc == "id" else "en") \
+                + await llm_unavailable_note_for(state)
 
         success, send_error = await _deliver(state, formatted)
         return {
@@ -313,7 +367,7 @@ async def response_agent(state: AgentState) -> dict:
             formatted = await _format_health_with_llm(intent, health_result)
         except Exception as e:
             logger.error(f"Health LLM formatting failed: {e}")
-            formatted = await _format_health_fallback(state) + await llm_unavailable_note_for(state)
+            formatted = _format_health_fallback(health_result) + await llm_unavailable_note_for(state)
 
         success, send_error = await _deliver(state, formatted)
         return {
@@ -391,7 +445,7 @@ async def response_agent(state: AgentState) -> dict:
         formatted = await _fallback_message(service_name, documents, state) + await llm_unavailable_note_for(state)
 
     # FASE 6A: tombol dinamis per root_cause + feedback (feedback tetap di baris bawah)
-    reply_markup = _build_dynamic_buttons(state)
+    reply_markup = _build_dynamic_buttons(state, locale=locale)
     episode_id = state.get("episode_id")
     if episode_id:
         logger.info(f"TelegramAgent attaching dynamic buttons root_cause={state.get('root_cause_assessment')} episode_id={episode_id}")
@@ -760,8 +814,10 @@ async def _fallback_message(
     )
 
 
-async def _format_follow_up(intent: str, follow_up_context: dict) -> str:
-    """Format jawaban pertanyaan lanjutan menggunakan konteks riwayat sebelumnya."""
+async def _format_follow_up(intent: str, follow_up_context: dict,
+                            reply_language: str = "English") -> str:
+    """Format jawaban pertanyaan lanjutan menggunakan konteks riwayat sebelumnya.
+    reply_language (Fix bahasa): jalur follow-up wajib bahasa eksplisit (pola #201/#222)."""
     if not follow_up_context or follow_up_context.get("not_found"):
         followup_block = (
             f"No previous check history available. Politely tell the user there is no history, "
@@ -780,7 +836,10 @@ async def _format_follow_up(intent: str, follow_up_context: dict) -> str:
             f"**Stored raw data (snapshot):**\n```json\n{raw_json}\n```"
         )
 
-    user_content = render_prompt("telegram_followup_user", intent=intent, followup_block=followup_block)
+    user_content = render_prompt(
+        "telegram_followup_user", intent=intent, followup_block=followup_block,
+        reply_language=reply_language,
+    )
 
     messages = [
         SystemMessage(content=render_prompt("telegram_followup_system")),
@@ -790,12 +849,25 @@ async def _format_follow_up(intent: str, follow_up_context: dict) -> str:
     return response.content
 
 
-def _format_follow_up_fallback(follow_up_context: dict) -> str:
-    """Fallback manual jika LLM tidak tersedia untuk pertanyaan lanjutan."""
+def _format_follow_up_fallback(follow_up_context: dict, locale: str = "id") -> str:
+    """Fallback manual jika LLM tidak tersedia untuk pertanyaan lanjutan.
+    locale (Fix bahasa): "id"/"en" — bukan hardcode Indonesia."""
     if not follow_up_context or follow_up_context.get("not_found"):
+        if locale == "en":
+            return (
+                "ℹ️ *[INFO]* No previous check history.\n"
+                'Please send a new check command (e.g. "check error <service-name>").'
+            )
         return (
             "ℹ️ *[INFO]* Tidak ada riwayat pengecekan sebelumnya.\n"
             "Silakan kirim perintah pengecekan baru (mis. \"cek error <nama-service>\")."
+        )
+    if locale == "en":
+        return (
+            "ℹ️ *[INFO]* Previous check result:\n"
+            f"*Date:* {follow_up_context.get('prev_date') or '-'}\n"
+            f"*Service:* `{follow_up_context.get('prev_service') or '-'}`\n"
+            f"*Reply:* {follow_up_context.get('prev_reply') or '-'}"
         )
     return (
         "ℹ️ *[INFO]* Hasil pengecekan sebelumnya:\n"
@@ -805,8 +877,11 @@ def _format_follow_up_fallback(follow_up_context: dict) -> str:
     )
 
 
-async def _format_data_with_llm(intent: str, service_name: str, documents: list) -> str:
-    """Format data mentah yang diminta user (bukan analisis error)."""
+async def _format_data_with_llm(intent: str, service_name: str, documents: list,
+                                reply_language: str = "English") -> str:
+    """Format data mentah yang diminta user (bukan analisis error).
+    reply_language (Fix bahasa): jalur data wajib bahasa eksplisit — sama pola
+    Fix #201/#217, bukan "same language as user" yang lemah."""
     if not documents:
         records_block = (
             f"No records found in the database for this request. "
@@ -819,7 +894,10 @@ async def _format_data_with_llm(intent: str, service_name: str, documents: list)
             f"Records:\n```json\n{docs_json}\n```"
         )
 
-    user_content = render_prompt("telegram_data_user", intent=intent, service_name=service_name, records_block=records_block)
+    user_content = render_prompt(
+        "telegram_data_user", intent=intent, service_name=service_name,
+        records_block=records_block, reply_language=reply_language,
+    )
 
     messages = [
         SystemMessage(content=render_prompt("telegram_data_system")),
@@ -829,19 +907,25 @@ async def _format_data_with_llm(intent: str, service_name: str, documents: list)
     return response.content
 
 
-def _format_data_fallback(service_name: str, documents: list) -> str:
-    """Fallback manual jika LLM tidak tersedia untuk tampilan data mentah."""
+def _format_data_fallback(service_name: str, documents: list, locale: str = "id") -> str:
+    """Fallback manual jika LLM tidak tersedia untuk tampilan data mentah.
+    locale (Fix bahasa): "id"/"en" — bukan hardcode Indonesia."""
     if not documents:
+        head = "ℹ️ *[INFO]* No records found" if locale == "en" else "ℹ️ *[INFO]* Tidak ada record ditemukan"
+        empty = "*Data:* Empty" if locale == "en" else "*Data:* Kosong"
         return (
-            f"ℹ️ *[INFO]* Tidak ada record ditemukan\n"
+            f"{head}\n"
             f"*Service:* `{service_name}`\n"
-            f"*Data:* Kosong"
+            f"{empty}"
         )
 
-    lines = [f"📄 *Data Terbaru* — `{service_name}`", f"*Total record:* {len(documents)}"]
+    title = "📄 *Latest Data*" if locale == "en" else "📄 *Data Terbaru*"
+    total = f"*Total records:* {len(documents)}" if locale == "en" else f"*Total record:* {len(documents)}"
+    rec_label = "Record" if locale == "en" else "Record"
+    lines = [f"{title} — `{service_name}`", total]
     for i, doc in enumerate(documents, 1):
         fields = "\n".join(f"    • `{k}`: {v}" for k, v in doc.items())
-        lines.append(f"\n**Record {i}:**\n{fields}")
+        lines.append(f"\n**{rec_label} {i}:**\n{fields}")
     return "\n".join(lines)
 
 

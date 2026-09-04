@@ -455,18 +455,34 @@ explain from the ticket description what might be happening; stay honest about d
         logger.error(f"CorrelationAgent failed for service='{service_name}': {e}", exc_info=True)
         tc = state.get("ticket_context") or {}
         if tc:
-            # Fix #50: LLM gagal tapi ada konteks tiket → grounded fallback, bukan "Gagal" telanjang
+            # Fix #50: LLM gagal tapi ada konteks tiket → grounded fallback, bukan "Gagal" telanjang.
+            # Fix bahasa: fallback deterministik bilingual (locale sudah di-resolve di awal fungsi).
             diag = infra_diag_steps(tc.get("title") or "")
-            analysis = (
-                f"LLM analisis tidak tersedia ({str(e)[:120]}). Ringkasan dari konteks tiket:\n"
-                f"Tiket {tc.get('ticketNumber')}: {tc.get('title')} "
-                f"(severity {tc.get('severity')}, kind {tc.get('kind')}, env {tc.get('environment') or '-'}).\n"
-                f"Service terkait: {tc.get('serviceName') or service_name}.\n"
-                f"Deskripsi: {tc.get('description') or 'tidak ada'}\n"
-                f"{diag}"
-            ) + await llm_unavailable_note_for(state)
+            if locale == "en":
+                analysis = (
+                    f"LLM analysis unavailable ({str(e)[:120]}). Summary from ticket context:\n"
+                    f"Ticket {tc.get('ticketNumber')}: {tc.get('title')} "
+                    f"(severity {tc.get('severity')}, kind {tc.get('kind')}, env {tc.get('environment') or '-'}).\n"
+                    f"Related service: {tc.get('serviceName') or service_name}.\n"
+                    f"Description: {tc.get('description') or 'none'}\n"
+                    f"{diag}"
+                )
+            else:
+                analysis = (
+                    f"LLM analisis tidak tersedia ({str(e)[:120]}). Ringkasan dari konteks tiket:\n"
+                    f"Tiket {tc.get('ticketNumber')}: {tc.get('title')} "
+                    f"(severity {tc.get('severity')}, kind {tc.get('kind')}, env {tc.get('environment') or '-'}).\n"
+                    f"Service terkait: {tc.get('serviceName') or service_name}.\n"
+                    f"Deskripsi: {tc.get('description') or 'tidak ada'}\n"
+                    f"{diag}"
+                )
+            analysis += await llm_unavailable_note_for(state)
         else:
-            analysis = f"Correlation Analysis Gagal: {str(e)}" + await llm_unavailable_note_for(state)
+            if locale == "en":
+                analysis = f"Correlation Analysis Failed: {str(e)}"
+            else:
+                analysis = f"Correlation Analysis Gagal: {str(e)}"
+            analysis += await llm_unavailable_note_for(state)
         fallback_result = {
             "analysis": analysis,
             "root_cause_assessment": "unknown",

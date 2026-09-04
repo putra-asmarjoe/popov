@@ -46,10 +46,26 @@ async def _resolve_collection(db_config: dict, explicit, fallback: str) -> str:
     return db_config.get("collection") or fallback
 
 
+_ERROR_LOOKUP_WORDS = (
+    "error", "gagal", "bermasalah", "down", "timeout", "crash", "5xx", "500",
+    "exception", "failed", "failure", "panic",
+)
+
+
+def _wants_errors(intent: str) -> bool:
+    """True bila user minta data log yang ERROR saja (bukan semua records).
+    "kapan terakhir error", "cek error di table", "tampilkan yang error"."""
+    low = intent.lower()
+    return any(w in low for w in _ERROR_LOOKUP_WORDS)
+
+
 async def data_agent(state: AgentState) -> dict:
     """
-    Ambil data mentah (tanpa filter level error) untuk permintaan
-    seperti "berikan 1 data terakhir dari service X collection Y".
+    Ambil data mentah untuk permintaan seperti "berikan 1 data terakhir dari
+    service X collection Y".
+    Fix (CPRO-29): user minta "cek error / kapan terakhir error" → filter ERROR
+    (schema-aware, resolve_error_query) bukan 5 records terakhir apapun. Query
+    mentah tanpa window 6 jam (error lama yang diminta user tidak terpotong).
     """
     service_name = state.get("service_name", "")
     collection_name = state.get("collection_name", "")
@@ -72,20 +88,38 @@ async def data_agent(state: AgentState) -> dict:
         db_config or {}, explicit_collection, collection_name
     )
 
+    # Filter error bila user minta data ERROR (schema-aware, tanpa window insiden).
+    wants_error = _wants_errors(intent)
+    query: dict = {}
+    time_window_hours: float = 0.0  # query mentah = tanpa window 6 jam
+    if wants_error:
+        try:
+            from services.log_query import resolve_error_query
+            query = await resolve_error_query(
+                service_name, db_config or {}, resolved_collection
+            )
+            logger.info(
+                f"DataAgent filter error utk '{intent[:60]}' → query={query}"
+            )
+        except Exception as e:
+            logger.warning(f"DataAgent resolve_error_query gagal (query tetap kosong): {e}")
+            query = {}
+
     logger.info(
         f"DataAgent fetching last {limit} records from '{resolved_collection}' "
-        f"(service='{service_name}')"
+        f"(service='{service_name}', filter_error={wants_error})"
     )
 
     try:
         docs = await fetch_logs_for_service(
             service_name=service_name,
             target_name=collection_name,
-            query={},
+            query=query,
             limit=limit,
             raw=True,
             collection_override=resolved_collection,
             workspace_id=state.get("workspace_id"),
+            time_window_hours=time_window_hours,
         )
     except DBConnectionError as e:
         logger.error(f"DataAgent connection failed: {e}")

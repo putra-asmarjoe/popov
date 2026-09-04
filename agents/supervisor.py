@@ -646,10 +646,23 @@ async def supervisor_agent(state: AgentState) -> dict:
             r"(?:service|pada|di|cek|error)\s+([\w-]+)",
             r"([\w-]+)\s+(?:error|bermasalah|down)",
         ]
+        # Fix (CPRO-29): kata yang TERTANGKAP regex tapi cuma kata fungsi/umum — jangan
+        # dianggap nama service. Regex "di table" → "di", "cek log" → "log" bisa
+        # substring dari nama service lain (lovvit-redeem-LOGs) → salah resolve padahal
+        # chat tiket punya preset service. Biarkan preset tiket / fuzzy yang menang.
+        _STRATEGY3_STOP = {
+            "service", "pada", "di", "cek", "error", "log", "logs", "table", "tabel",
+            "db", "database", "data", "status", "check", "lihat", "bantu", "mongo",
+            "mysql", "ping", "koneksi", "berapa", "terakhir", "hari", "jam", "ada",
+            "apa", "ini", "itu", "the", "a", "an",
+        }
         for pattern in patterns:
             m = re.search(pattern, intent)
             if m:
                 candidate = _normalize(m.group(1))
+                if candidate in _STRATEGY3_STOP:
+                    logger.info(f"[Supervisor] strategy_3 skip stop-word candidate '{candidate}'")
+                    continue
                 for key in service_map:
                     norm_key = _normalize(key)
                     if candidate in norm_key or norm_key in candidate:

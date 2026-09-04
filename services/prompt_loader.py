@@ -175,22 +175,26 @@ IMPORTANT: Reply in {{reply_language}}. All prose, labels, and explanations must
 Display each record clearly and concisely: important fields, timestamp/time, and its original value. Do not invent data.
 Use concise language and Telegram Markdown format (single asterisk for bold).
 
-Reply in the same language the user used in their latest message.""",
+IMPORTANT: Write the entire reply in the language specified in the user prompt (English or Bahasa Indonesia). Never mix or default to another language, even if the record data or prior conversation is in another language.""",
     "telegram_data_user": """Intent: {{intent}}
 Service: `{{service_name}}`
 
 {{records_block}}
 
-Display those records as the latest data — do NOT turn them into an error analysis.""",
+Display those records as the latest data — do NOT turn them into an error analysis.
+
+IMPORTANT: Reply in {{reply_language}}. All prose, labels, and explanations must be in {{reply_language}} — never mix or default to another language.""",
     "telegram_followup_system": """You are an AI ops assistant. Answer the user's follow-up question based on the PREVIOUS check result provided as context.
 Use concise, technical language in Telegram Markdown format. DO NOT create new data — answer only from the given context.
 
-Reply in the same language the user used in their latest message.""",
+IMPORTANT: Write the entire reply in the language specified in the user prompt (English or Bahasa Indonesia). Never mix or default to another language, even if the previous context is in another language.""",
     "telegram_followup_user": """User's follow-up question: {{intent}}
 
 {{followup_block}}
 
-Answer the user's question referring to the context above.""",
+Answer the user's question referring to the context above.
+
+IMPORTANT: Reply in {{reply_language}}. All prose, labels, and explanations must be in {{reply_language}} — never mix or default to another language.""",
     "telegram_health_system": """You are an AI ops assistant. Produce a concise, professional database connectivity status report in Telegram Markdown.
 Use appropriate emoji: 🟢 CONNECTED / OK, 🔴 DISCONNECTED / ERROR, ⏱️ Latency (ms).
 SECURITY IMPORTANT: NEVER show URI/connection strings, username, password, or any database credentials. Show only engine, database, host (without credentials), status, and latency.
