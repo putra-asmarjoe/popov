@@ -132,7 +132,7 @@ async def list_alerts_for_ticket(ticket_id: str, limit: int = 200) -> List[Dict[
     return [doc async for doc in cursor]
 
 
-async def list_alerts_for_project(project_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+async def list_alerts_for_project(project_id: str, limit: int = 10, days: int = 30) -> List[Dict[str, Any]]:
     """Daftar alert ter-link ke tiket milik project (overview alert feed).
 
     Sumber kebenaran card alert = ticket_alerts (alert yang TERTIKET-kan), BUKAN
@@ -140,13 +140,17 @@ async def list_alerts_for_project(project_id: str, limit: int = 10) -> List[Dict
     projectId+ticketId eksplisit → scoping per project tanpa join observ_id dan
     tanpa fallback workspace-wide (yang bocor lintas project saat project tanpa stack).
     """
+    from datetime import datetime, timedelta, timezone
+
     try:
         oid = ObjectId(str(project_id))
     except Exception:
         return []
+
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     cursor = (
         get_db()[TICKET_ALERTS_COLLECTION]
-        .find({"projectId": str(oid)})
+        .find({"projectId": str(oid), "occurredAt": {"$gte": since}})
         .sort("occurredAt", -1)
         .limit(max(1, min(limit, 100)))
     )

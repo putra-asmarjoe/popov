@@ -11,11 +11,18 @@ import { FloatingPanel } from "@/components/panel/FloatingPanel"
 import { WarRoomPanel } from "@/components/warroom/WarRoomPanel"
 import { ProjectViewToggle } from "@/components/project/ProjectViewToggle"
 import { OnboardingBackStrip } from "@/components/workspace/OnboardingBackStrip"
+import { WidgetDataProvider } from "@/components/overview/WidgetDataContext"
+import { WidgetShell } from "@/components/overview/WidgetShell"
+import { WidgetCustomize } from "@/components/overview/WidgetCustomize"
+import { DashboardDaysFilter } from "@/components/overview/DashboardDaysFilter"
+import { OVERVIEW_WIDGETS } from "@/lib/overview-widgets"
 import { useTickets } from "@/hooks/useTickets"
+import { useProjectOverview } from "@/hooks/useProjectOverview"
 import { useTicketSelection } from "@/hooks/useTicketSelection"
 import { useTicketRealtime } from "@/hooks/useWebSocket"
 import { useProjects, useWorkspaces, useWorkspaceDetail } from "@/hooks/useWorkspaces"
 import { getProjectView, setProjectView } from "@/lib/project-view"
+import { useWidgetPrefs, widgetsNeedOverview, DASHBOARD_WIDGET_IDS } from "@/lib/overview-widgets"
 import { useTicketStore } from "@/store/ticket.store"
 import { useWorkspaceStore } from "@/store/workspace.store"
 
@@ -45,6 +52,30 @@ export function ProjectPage() {
   const { setActiveWorkspace, setActiveProject } = useWorkspaceStore()
   const { filters } = useTicketStore()
   const [page, setPage] = useState(1)
+
+  // Dashboard widgets — gated by widget prefs (classic view)
+  const { enabled, update, reset } = useWidgetPrefs(project?.id ?? null, "classic")
+  const hasDashboardWidget = enabled.some((id) => DASHBOARD_WIDGET_IDS.includes(id))
+
+  // Days filter — persist in localStorage
+  const [days, setDays] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("popov:dashboard-days")
+      return saved ? parseInt(saved, 10) || 1 : 1
+    }
+    return 1
+  })
+
+  const handleDaysChange = (value: number) => {
+    setDays(value)
+    localStorage.setItem("popov:dashboard-days", String(value))
+  }
+
+  const needOverview = widgetsNeedOverview(enabled)
+  const { data: overview } = useProjectOverview(
+    needOverview ? project?.id ?? null : null,
+    days,
+  )
 
   // Reset halaman saat filter berubah
   useEffect(() => {
@@ -110,15 +141,12 @@ export function ProjectPage() {
 
   return (
     <div className="grid h-full min-h-0 grid-cols-1 grid-rows-1">
-      {/* ── Ticket list — selalu full-width, tidak terdorong panel ── */}
       <div className="flex min-w-0 min-h-0 flex-col">
         {/* Breadcrumb */}
         <div className="flex items-center gap-1.5 border-b px-4 py-3 text-sm">
           {workspace && project ? (
             <>
-              {/* Jalur pulang ke checklist bila masuk halaman ini dari onboarding */}
               <OnboardingBackStrip backTo={`/w/${wsSlug}`} />
-              {/* Fase D8 + Fix #37: pilih Observability Stack & channel Notifikasi (admin) */}
               <div className="ml-auto flex items-center gap-2">
                 <ProjectViewToggle
                   value="classic"
@@ -129,6 +157,27 @@ export function ProjectPage() {
                     }
                   }}
                 />
+                <WidgetCustomize
+                  enabled={enabled}
+                  onToggle={(id) =>
+                    update(
+                      enabled.includes(id) ? enabled.filter((x) => x !== id) : [...enabled, id],
+                    )
+                  }
+                  onMove={(id, dir) => {
+                    const from = enabled.indexOf(id)
+                    const to = from + dir
+                    if (from < 0 || to < 0 || to >= enabled.length) return
+                    const next = [...enabled]
+                    ;[next[from], next[to]] = [next[to], next[from]]
+                    update(next)
+                  }}
+                  onReset={reset}
+                  widgets={OVERVIEW_WIDGETS.filter((w) => DASHBOARD_WIDGET_IDS.includes(w.id))}
+                />
+                {hasDashboardWidget && overview && (
+                   <DashboardDaysFilter value={days} onChange={handleDaysChange} />
+                )}
                 <Button asChild size="sm" className="h-8 gap-1">
                   <Link to={`/w/${wsSlug}/${projSlug}/new`}>
                     <Plus className="size-4" /> {t("page.new_ticket_title")}
@@ -141,26 +190,153 @@ export function ProjectPage() {
           )}
         </div>
 
-        {/* Filter bar */}
-        <div className="border-b px-4 py-2.5">
-          {wsLoading || projLoading ? <Skeleton className="h-8 w-full" /> : <TicketFilters members={members} />}
-        </div>
+        {/* 70/30 Split: Main (left) + Sidebar (right) */}
+        {hasDashboardWidget && overview ? (
+          <div className="flex min-h-0 flex-1 overflow-hidden p-4 gap-4">
+            {/* ── LEFT 70% — Stat Cards + Trend + Ticket Table ── */}
+            <div className="flex min-h-0 w-[70%] min-w-0 flex-col gap-4">
+              <WidgetDataProvider
+                value={{
+                  projectId: project?.id ?? null,
+                  overview,
+                  tickets: ticketsData?.tickets ?? [],
+                  ticketsLoading: isLoading,
+                  members,
+                  activeTicketId,
+                  filters,
+                  searchInput: "",
+                  onSearchInput: () => {},
+                  onFiltersChange: () => {},
+                  onSelectTicket: openTicket,
+                }}
+              >
+                {/* Stat Cards — full width */}
+                {enabled.includes("dashboard_stat_cards") && (
+                  <WidgetShell
+                    def={OVERVIEW_WIDGETS.find((w) => w.id === "dashboard_stat_cards")!}
+                    onRemove={(id) => update(enabled.filter((x) => x !== id))}
+                  >
+                    {(() => {
+                      const def = OVERVIEW_WIDGETS.find((w) => w.id === "dashboard_stat_cards")
+                      if (!def) return null
+                      const Comp = def.component
+                      return <Comp />
+                    })()}
+                  </WidgetShell>
+                )}
+                {/* Ticket Trend — full width */}
+                {enabled.includes("ticket_trend") && (
+                  <WidgetShell
+                    def={OVERVIEW_WIDGETS.find((w) => w.id === "ticket_trend")!}
+                    onRemove={(id) => update(enabled.filter((x) => x !== id))}
+                  >
+                    {(() => {
+                      const def = OVERVIEW_WIDGETS.find((w) => w.id === "ticket_trend")
+                      if (!def) return null
+                      const Comp = def.component
+                      return <Comp />
+                    })()}
+                  </WidgetShell>
+                )}
+              </WidgetDataProvider>
+              {/* Ticket Table — sisa ruang dengan filter di dalam */}
+              <div className="min-h-0 flex-1 overflow-auto rounded-xl border bg-card">
+                <div className="border-b px-4 py-2.5">
+                  <TicketFilters members={members} />
+                </div>
+                <TicketTable
+                  projectKey={project?.key ?? ""}
+                  tickets={ticketsData?.tickets ?? []}
+                  meta={ticketsData?.meta}
+                  page={page}
+                  onPageChange={setPage}
+                  isLoading={isLoading}
+                  activeTicketId={activeTicketId}
+                  onSelect={(t) => openTicket(t)}
+                />
+              </div>
+            </div>
 
-        {/* Table */}
-        <TicketTable
-          projectKey={project?.key ?? ""}
-          tickets={ticketsData?.tickets ?? []}
-          meta={ticketsData?.meta}
-          page={page}
-          onPageChange={setPage}
-          isLoading={isLoading}
-          activeTicketId={activeTicketId}
-          onSelect={(t) => openTicket(t)}
-        />
+            {/* ── RIGHT 30% — Severity Donut + Top Alert Types + Top Services ── */}
+            <div className="flex w-[30%] min-w-0 flex-col gap-4 overflow-auto">
+              <WidgetDataProvider
+                value={{
+                  projectId: project?.id ?? null,
+                  overview,
+                  tickets: ticketsData?.tickets ?? [],
+                  ticketsLoading: isLoading,
+                  members,
+                  activeTicketId,
+                  filters,
+                  searchInput: "",
+                  onSearchInput: () => {},
+                  onFiltersChange: () => {},
+                  onSelectTicket: openTicket,
+                }}
+              >
+                {enabled.includes("severity_donut") && (
+                  <WidgetShell
+                    def={OVERVIEW_WIDGETS.find((w) => w.id === "severity_donut")!}
+                    onRemove={(id) => update(enabled.filter((x) => x !== id))}
+                  >
+                    {(() => {
+                      const def = OVERVIEW_WIDGETS.find((w) => w.id === "severity_donut")
+                      if (!def) return null
+                      const Comp = def.component
+                      return <Comp />
+                    })()}
+                  </WidgetShell>
+                )}
+                {enabled.includes("top_services") && (
+                  <WidgetShell
+                    def={OVERVIEW_WIDGETS.find((w) => w.id === "top_services")!}
+                    onRemove={(id) => update(enabled.filter((x) => x !== id))}
+                  >
+                    {(() => {
+                      const def = OVERVIEW_WIDGETS.find((w) => w.id === "top_services")
+                      if (!def) return null
+                      const Comp = def.component
+                      return <Comp />
+                    })()}
+                  </WidgetShell>
+                )}
+                {enabled.includes("top_alert_types") && (
+                  <WidgetShell
+                    def={OVERVIEW_WIDGETS.find((w) => w.id === "top_alert_types")!}
+                    onRemove={(id) => update(enabled.filter((x) => x !== id))}
+                  >
+                    {(() => {
+                      const def = OVERVIEW_WIDGETS.find((w) => w.id === "top_alert_types")
+                      if (!def) return null
+                      const Comp = def.component
+                      return <Comp />
+                    })()}
+                  </WidgetShell>
+                )}
+              </WidgetDataProvider>
+            </div>
+          </div>
+        ) : (
+          /* Tanpa dashboard — ticket table full width dengan filter di dalam */
+          <div className="min-h-0 flex-1 overflow-auto rounded-xl border bg-card">
+            <div className="border-b px-4 py-2.5">
+              <TicketFilters members={members} />
+            </div>
+            <TicketTable
+              projectKey={project?.key ?? ""}
+              tickets={ticketsData?.tickets ?? []}
+              meta={ticketsData?.meta}
+              page={page}
+              onPageChange={setPage}
+              isLoading={isLoading}
+              activeTicketId={activeTicketId}
+              onSelect={(t) => openTicket(t)}
+            />
+          </div>
+        )}
       </div>
 
-      {/* Floating panel: Detail (kiri 30%) + Chat terikat tiket (kanan 70%) — tampil bersamaan.
-          Drag/resize di desktop, drawer di mobile. */}
+      {/* Floating panel */}
       {project && (
         <FloatingPanel
           open={Boolean(detailTicket)}

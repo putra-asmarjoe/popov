@@ -66,6 +66,8 @@ export interface Ticket {
   source: TicketSource
   /** Fix #40: service asal insiden (auto-ticket watchdog) — filter list ?service= */
   serviceName: string | null
+  /** Multi-service linking: daftar service_id terkait tiket ini (dari project service refs) */
+  serviceIds: string[]
   /** Fix #86: counter alert ter-link (1 tiket : N alert) */
   alertsCount: number
   lastAlertAt: string | null

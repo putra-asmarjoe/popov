@@ -154,8 +154,8 @@ export function TicketTable({
         </Table>
       </div>
 
-      {/* Pagination */}
-      {meta && meta.pages > 1 && (
+      {/* Pagination — always show when meta exists (helps user see total count) */}
+      {meta && (
         <div className="flex items-center justify-between border-t px-4 py-2 text-xs text-muted-foreground">
           <span>
             {t("table.pagination", { total: meta.total, page: meta.page, pages: meta.pages })}

@@ -29,5 +29,6 @@
   "saving": "Saving…",
   "cancel": "Cancel",
   "save": "Save",
-  "update_session_failed": "Failed to update session"
+  "update_session_failed": "Failed to update session",
+  "load_more": "Load more"
 }

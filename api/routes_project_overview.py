@@ -21,7 +21,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.deps import get_current_user
 from api.tickets import _project_and_ws_or_403
@@ -76,7 +76,7 @@ async def _query_open_tickets(db, project_id: str, workspace_id: str) -> List[Di
     return await cursor.to_list(20)
 
 
-async def _query_alerts(db, project_id: str, workspace_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+async def _query_alerts(db, project_id: str, workspace_id: str, limit: int = 10, days: int = 30) -> List[Dict[str, Any]]:
     """Alert feed project = alert yang TER-TIKET (ticket_alerts), bukan broadcast log.
 
     Relasi yang benar: alert → ticket → project. ticket_alerts membawa projectId +
@@ -90,7 +90,7 @@ async def _query_alerts(db, project_id: str, workspace_id: str, limit: int = 10)
     try:
         from services.ticket_alert_store import list_alerts_for_project
 
-        docs = await list_alerts_for_project(project_id, limit=limit)
+        docs = await list_alerts_for_project(project_id, limit=limit, days=days)
     except Exception as e:
         logger.warning(f"Overview alerts query gagal (non-fatal): {e}")
         return []
@@ -165,9 +165,240 @@ async def _get_stack_health(db, project_id: str, workspace_id: str) -> List[Dict
     ]
 
 
+async def _query_dashboard_stats(db, project_id: str, days: int, open_only: bool = False) -> dict:
+    """Aggregation stats untuk dashboard analytics.
+
+    Semua query paralel via asyncio.gather internal.
+    Scope: project_id + rentang waktu `days` hari terakhir.
+    open_only=True → filter severity/kind/trend/top_services hanya tiket open (warroom context).
+    MTTR: Python-side (datetime.fromisoformat stdlib) — field ISO string, bukan BSON Date.
+    """
+    from datetime import timedelta
+
+    TICKETS = "tickets"
+    TICKET_ALERTS = "ticket_alerts"
+    ACTIVE_STATUSES = ["new", "open", "in_progress", "needs_review"]
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(days=days)
+    since_iso = since.isoformat()
+
+    # Match filter untuk open tickets saja (warroom context)
+    open_match = {"status": {"$in": ACTIVE_STATUSES}} if open_only else {}
+
+    # ── 1. Count by status (filter by days + open_only) ──────────────────
+    async def _by_status():
+        pipeline = [
+            {"$match": {"projectId": project_id, "createdAt": {"$gte": since_iso}, **open_match}},
+            {"$group": {"_id": "$status", "count": {"$sum": 1}}},
+        ]
+        result = await db[TICKETS].aggregate(pipeline).to_list(None)
+        return {r["_id"]: r["count"] for r in result}
+
+    # ── 2. Count by severity (filter by days + open_only) ────────────────
+    async def _by_severity():
+        pipeline = [
+            {"$match": {"projectId": project_id, "createdAt": {"$gte": since_iso}, **open_match}},
+            {"$group": {"_id": "$severity", "count": {"$sum": 1}}},
+        ]
+        result = await db[TICKETS].aggregate(pipeline).to_list(None)
+        return {r["_id"]: r["count"] for r in result}
+
+    # ── 3. Count by kind (filter by days + open_only) ────────────────────
+    async def _by_kind():
+        pipeline = [
+            {"$match": {"projectId": project_id, "createdAt": {"$gte": since_iso}, **open_match}},
+            {"$group": {"_id": "$kind", "count": {"$sum": 1}}},
+        ]
+        result = await db[TICKETS].aggregate(pipeline).to_list(None)
+        return {r["_id"]: r["count"] for r in result}
+
+    # ── 4. Ticket created trend (N hari, group by date) ───────────────────
+    async def _created_trend():
+        pipeline = [
+            {"$match": {
+                "projectId": project_id,
+                "createdAt": {"$gte": since_iso},
+                **open_match,
+            }},
+            {"$group": {
+                "_id": {"$substr": ["$createdAt", 0, 10]},
+                "count": {"$sum": 1},
+            }},
+            {"$sort": {"_id": 1}},
+        ]
+        result = await db[TICKETS].aggregate(pipeline).to_list(None)
+        return [{"date": r["_id"], "count": r["count"]} for r in result]
+
+    # ── 5. Ticket resolved trend (N hari, group by date) ──────────────────
+    async def _resolved_trend():
+        pipeline = [
+            {"$match": {
+                "projectId": project_id,
+                "resolvedAt": {"$gte": since_iso, "$ne": None},
+            }},
+            {"$group": {
+                "_id": {"$substr": ["$resolvedAt", 0, 10]},
+                "count": {"$sum": 1},
+            }},
+            {"$sort": {"_id": 1}},
+        ]
+        result = await db[TICKETS].aggregate(pipeline).to_list(None)
+        return [{"date": r["_id"], "count": r["count"]} for r in result]
+
+    # ── 6. Top services by ticket count (N hari) ─────────────────────────
+    # Fix #223: tiket multi-service — serviceName (utama) + serviceIds (0..N).
+    async def _top_services():
+        SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        pipeline = [
+            {"$match": {
+                "projectId": project_id,
+                "createdAt": {"$gte": since_iso},
+                **open_match,
+                "$or": [
+                    {"serviceIds": {"$exists": True, "$ne": []}},
+                    {"serviceName": {"$ne": None, "$ne": ""}},
+                ],
+            }},
+            {"$project": {
+                "severity": 1,
+                "serviceNames": {"$cond": [
+                    {"$and": [{"$isArray": "$serviceIds"}, {"$gt": [{"$size": "$serviceIds"}, 0]}]},
+                    "$serviceIds",
+                    {"$cond": [{"$ne": ["$serviceName", None]}, ["$serviceName"], []]},
+                ]},
+            }},
+            {"$unwind": "$serviceNames"},
+            {"$group": {
+                "_id": "$serviceNames",
+                "count": {"$sum": 1},
+                "severities": {"$push": "$severity"},
+            }},
+            {"$sort": {"count": -1}},
+            {"$limit": 5},
+        ]
+        result = await db[TICKETS].aggregate(pipeline).to_list(None)
+        out = []
+        for r in result:
+            worst = min(r["severities"], key=lambda s: SEVERITY_RANK.get(s, 99))
+            out.append({
+                "service": r["_id"],
+                "count": r["count"],
+                "worst_severity": worst,
+            })
+        return out
+
+    # ── 7. Top 5 alert types by frequency (N hari, dari ticket_alerts) ────
+    async def _top_alert_types():
+        pipeline = [
+            {"$match": {
+                "projectId": project_id,
+                "occurredAt": {"$gte": since_iso},
+            }},
+            {"$group": {"_id": "$name", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 5},
+        ]
+        result = await db[TICKET_ALERTS].aggregate(pipeline).to_list(None)
+        return [{"name": r["_id"], "count": r["count"]} for r in result]
+
+    # ── 8. MTTR rata-rata (N hari, tiket yang resolved) ───────────────────
+    async def _mttr():
+        cursor = db[TICKETS].find(
+            {
+                "projectId": project_id,
+                "resolvedAt": {"$gte": since_iso, "$ne": None},
+            },
+            {"createdAt": 1, "resolvedAt": 1},
+        )
+        docs = await cursor.to_list(500)
+        if not docs:
+            return None
+        deltas = []
+        for d in docs:
+            try:
+                created = datetime.fromisoformat(d["createdAt"].replace("Z", "+00:00"))
+                resolved = datetime.fromisoformat(d["resolvedAt"].replace("Z", "+00:00"))
+                diff = (resolved - created).total_seconds()
+                if diff > 0:
+                    deltas.append(diff)
+            except Exception:
+                pass
+        return round(sum(deltas) / len(deltas)) if deltas else None
+
+    # ── 9. Unassigned open count ──────────────────────────────────────────
+    async def _unassigned():
+        return await db[TICKETS].count_documents({
+            "projectId": project_id,
+            "createdAt": {"$gte": since_iso},
+            "status": {"$in": ACTIVE_STATUSES},
+            "assignees": [],
+        })
+
+    # ── 10. AI investigated count ─────────────────────────────────────────
+    async def _ai_investigated():
+        return await db[TICKETS].count_documents({
+            "projectId": project_id,
+            "createdAt": {"$gte": since_iso},
+            "episode_id": {"$ne": None, "$exists": True},
+        })
+
+    # ── 11. Recurring alerts count (alertsCount > 1) ─────────────────────
+    async def _recurring():
+        return await db[TICKETS].count_documents({
+            "projectId": project_id,
+            "createdAt": {"$gte": since_iso},
+            "alertsCount": {"$gt": 1},
+        })
+
+    # ── Jalankan semua paralel ────────────────────────────────────────────
+    (
+        by_status,
+        by_severity,
+        by_kind,
+        created_trend,
+        resolved_trend,
+        top_services,
+        top_alert_types,
+        mttr,
+        unassigned,
+        ai_investigated,
+        recurring,
+    ) = await asyncio.gather(
+        _by_status(),
+        _by_severity(),
+        _by_kind(),
+        _created_trend(),
+        _resolved_trend(),
+        _top_services(),
+        _top_alert_types(),
+        _mttr(),
+        _unassigned(),
+        _ai_investigated(),
+        _recurring(),
+    )
+
+    return {
+        "days": days,
+        "ticket_counts_by_status": by_status,
+        "ticket_counts_by_severity": by_severity,
+        "ticket_counts_by_kind": by_kind,
+        "tickets_created_trend": created_trend,
+        "tickets_resolved_trend": resolved_trend,
+        "top_services": top_services,
+        "top_alert_types": top_alert_types,
+        "mttr_seconds": mttr,
+        "unassigned_open_count": unassigned,
+        "ai_investigated_count": ai_investigated,
+        "recurring_alerts_count": recurring,
+    }
+
+
 @router.get("/projects/{project_id}/overview")
 async def get_project_overview(
     project_id: str,
+    days: int = Query(default=7, ge=1, le=30),
+    open_only: bool = Query(default=False),
     current_user: Dict[str, Any] = Depends(get_current_user),
 ):
     project, ws = await _project_and_ws_or_403(project_id, current_user)
@@ -176,11 +407,12 @@ async def get_project_overview(
     db = get_db()
     observ_ids = await _project_observ_ids(db, project_id, workspace_id)
 
-    tickets_t, alerts_t, episodes_t, stacks_t = await asyncio.gather(
+    tickets_t, alerts_t, episodes_t, stacks_t, stats_t = await asyncio.gather(
         _query_open_tickets(db, project_id, workspace_id),
-        _query_alerts(db, project_id, workspace_id),
+        _query_alerts(db, project_id, workspace_id, days=days),
         _query_episodes(db, project_id, workspace_id, observ_ids),
         _get_stack_health(db, project_id, workspace_id),
+        _query_dashboard_stats(db, project_id, days, open_only),
     )
 
     open_tickets = [t for t in tickets_t if t.get("status") in _OPEN_STATUSES]
@@ -202,5 +434,6 @@ async def get_project_overview(
         "alert_feed": _publicize(alerts_t),
         "episode_timeline": _publicize(episodes_t),
         "stack_health": _publicize(stacks_t),
+        "dashboard_stats": stats_t,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }

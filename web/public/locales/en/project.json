@@ -54,6 +54,8 @@
     "members_empty": "No workspace members yet — add members in Workspace settings.",
     "reopen": "Reopen",
     "edit": "Edit",
+    "edit_services": "Edit linked services",
+    "no_service": "No service",
     "edit_dialog_title": "Edit {{number}}",
     "edit_dialog_description": "Changes apply immediately to this ticket.",
     "save_changes": "Save changes",
@@ -187,12 +189,40 @@
       "empty": "No widgets enabled — add them via customize.",
       "error_rate": "Error rate",
       "error_rate_trend": "Error rate trend: {{trend}}",
-      "alert_count": "{{count}} alerts in window"
+      "alert_count": "{{count}} alerts in window",
+      "dashboard_stats": "Dashboard Stats",
+      "ticket_trend": "Ticket Trend",
+      "severity_donut": "Severity Distribution",
+      "top_services": "Top Services",
+      "top_alert_types": "Top Alert Types"
     }
+  },
+  "dashboard": {
+    "stat_open": "Open",
+    "stat_new": "new",
+    "stat_critical_high": "Critical + High",
+    "stat_mttr": "MTTR",
+    "stat_ai_investigated": "AI Investigated",
+    "stat_unassigned": "Unassigned",
+    "stat_recurring": "Recurring",
+    "series_created": "Created",
+    "series_resolved": "Resolved",
+    "days_1": "Today",
+    "days_3": "3D",
+    "days_7": "7D",
+    "days_30": "30D",
+    "days_filter": "Time range"
   },
   "view": {
     "label": "Project view mode",
     "classic": "Classic",
     "warroom": "War Room"
+  },
+  "service_picker": {
+    "title": "Linked Services",
+    "desc": "Select services linked to this ticket from the project's service registry.",
+    "empty": "No services connected to this project yet.",
+    "cancel": "Cancel",
+    "save": "Save"
   }
 }

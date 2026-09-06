@@ -54,6 +54,8 @@
     "members_empty": "Belum ada member workspace — tambahkan member di Pengaturan workspace.",
     "reopen": "Reopen",
     "edit": "Edit",
+    "edit_services": "Ubah service terkait",
+    "no_service": "Tidak ada service",
     "edit_dialog_title": "Edit {{number}}",
     "edit_dialog_description": "Perubahan langsung berlaku pada tiket ini.",
     "save_changes": "Simpan perubahan",
@@ -187,12 +189,40 @@
       "empty": "Tidak ada widget aktif — tambahkan via atur widget.",
       "error_rate": "Error rate",
       "error_rate_trend": "Tren error rate: {{trend}}",
-      "alert_count": "{{count}} alert dalam window"
+      "alert_count": "{{count}} alert dalam window",
+      "dashboard_stats": "Statistik Dashboard",
+      "ticket_trend": "Tren Tiket",
+      "severity_donut": "Distribusi Severitas",
+      "top_services": "Service Teratas",
+      "top_alert_types": "Jenis Alert Teratas"
     }
+  },
+  "dashboard": {
+    "stat_open": "Terbuka",
+    "stat_new": "baru",
+    "stat_critical_high": "Critical + High",
+    "stat_mttr": "MTTR",
+    "stat_ai_investigated": "Investigasi AI",
+    "stat_unassigned": "Belum Ditugaskan",
+    "stat_recurring": "Berulang",
+    "series_created": "Dibuat",
+    "series_resolved": "Diselesaikan",
+    "days_1": "Hari Ini",
+    "days_3": "3H",
+    "days_7": "7H",
+    "days_30": "30H",
+    "days_filter": "Rentang waktu"
   },
   "view": {
     "label": "Mode tampilan project",
     "classic": "Classic",
     "warroom": "War Room"
+  },
+  "service_picker": {
+    "title": "Service Terkait",
+    "desc": "Pilih service yang terkait dengan tiket ini dari registry service project.",
+    "empty": "Belum ada service terhubung ke project ini.",
+    "cancel": "Batal",
+    "save": "Simpan"
   }
 }

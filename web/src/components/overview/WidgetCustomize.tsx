@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 import { OVERVIEW_WIDGETS } from "@/lib/overview-widgets"
+import type { OverviewWidgetDef } from "@/lib/overview-widgets"
 
 /**
- * WidgetCustomize — popover (pola MultiSelectPopover): daftar SEMUA widget registry,
+ * WidgetCustomize — popover (pola MultiSelectPopover): daftar widget registry,
  * checkbox enable/disable (widget default OFF tampil sebagai "add"), up/down reorder,
  * "Reset default". Reorder v1 = up/down (drag interactjs = enhancement).
  */
@@ -15,13 +16,17 @@ export function WidgetCustomize({
   onToggle,
   onMove,
   onReset,
+  widgets,
 }: {
   enabled: string[]
   onToggle: (id: string) => void
   onMove: (id: string, dir: -1 | 1) => void
   onReset: () => void
+  /** Filter widget yang ditampilkan. Default = semua. */
+  widgets?: OverviewWidgetDef[]
 }) {
   const { t } = useTranslation("project")
+  const list = widgets ?? OVERVIEW_WIDGETS
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -40,7 +45,7 @@ export function WidgetCustomize({
           </Button>
         </div>
         <ul className="space-y-0.5">
-          {OVERVIEW_WIDGETS.map((def) => {
+          {list.map((def) => {
             const on = enabled.includes(def.id)
             const pos = enabled.indexOf(def.id)
             const Icon = def.icon

@@ -90,5 +90,20 @@
     "minimize": "Minimize panel",
     "maximize": "Maximize panel",
     "close": "Tutup panel"
+  },
+  "theme": {
+    "label": "Tema",
+    "light": "Terang",
+    "dark": "Gelap",
+    "fancy": "Nova",
+    "calm": "Calm",
+    "system": "Sistem",
+    "desc_light": "Cerah, bersih",
+    "desc_dark": "Standar gelap",
+    "desc_fancy": "Premium, ramah mata",
+    "desc_calm": "On-call panjang",
+    "desc_system": "Ikuti OS",
+    "trigger_aria": "Tema saat ini: {{theme}}. Ganti tema",
+    "contrast_note": "Kontras target ~10:1 · calming untuk mata"
   }
 }

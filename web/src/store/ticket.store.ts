@@ -18,7 +18,7 @@ interface TicketStore {
 }
 
 const DEFAULT_FILTERS: TicketFilters = {
-  status: [],
+  status: ["new", "open", "in_progress", "needs_review"],
   severity: [],
   assignee: null,
   search: "",

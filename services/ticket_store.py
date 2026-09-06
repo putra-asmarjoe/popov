@@ -69,14 +69,13 @@ def public_ticket(doc: Dict[str, Any]) -> Dict[str, Any]:
         "ticketNumber": doc.get("ticketNumber", 0),
         "title": doc.get("title", ""),
         "description": doc.get("description", ""),
-        "workspaceId": str(doc.get("workspaceId", "")),
-        "projectId": str(doc.get("projectId", "")),
+        "workspaceId": doc.get("workspaceId"),
+        "projectId": doc.get("projectId"),
         "kind": doc.get("kind", "business_logic"),
-        "severity": doc.get("severity", "medium"),
+        "severity": doc.get("severity", "low"),
         "traceId": doc.get("traceId"),
-        "serviceName": doc.get("serviceName"),
         "environment": doc.get("environment", "production"),
-        "createdBy": str(doc.get("createdBy", "")),
+        "createdBy": doc.get("createdBy"),
         "createdByName": doc.get("createdByName", ""),
         "assignees": doc.get("assignees", []),
         "status": doc.get("status", "new"),
@@ -86,7 +85,9 @@ def public_ticket(doc: Dict[str, Any]) -> Dict[str, Any]:
         "tags": doc.get("tags", []),
         "progressLog": doc.get("progressLog", []),
         "source": doc.get("source", "manual"),
-        "alertsCount": int(doc.get("alertsCount") or 0),
+        "serviceName": doc.get("serviceName"),
+        "serviceIds": doc.get("serviceIds") or [],
+        "alertsCount": doc.get("alertsCount", 0),
         "lastAlertAt": doc.get("lastAlertAt"),
         "createdAt": doc.get("createdAt"),
         "updatedAt": doc.get("updatedAt"),
@@ -167,6 +168,7 @@ async def create_ticket(
     content_fp: Optional[str] = None,
     initial_note: Optional[str] = None,
     service_name: Optional[str] = None,
+    service_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     if kind not in VALID_KINDS:
         raise ValueError("Kind harus business_logic atau infrastructure")
@@ -200,6 +202,7 @@ async def create_ticket(
         "severityRank": SEVERITY_ORDER[severity],
         "traceId": trace_id or None,
         "serviceName": (service_name or "").strip() or None,
+        "serviceIds": service_ids or ([service_name.strip()] if service_name and service_name.strip() else []),
         "environment": environment,
         "createdBy": str(user["_id"]),
         "createdByName": user.get("name", ""),
@@ -271,10 +274,13 @@ async def list_tickets(
     assignee: Optional[str] = None,
     search: Optional[str] = None,
     service: Optional[str] = None,
+    days: Optional[int] = None,
     page: int = 1,
     limit: int = 20,
     sort: str = "createdAt:desc",
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    from datetime import datetime, timedelta, timezone
+
     query: Dict[str, Any] = {"projectId": project_id}
     if status:
         query["status"] = {"$in": status}
@@ -284,11 +290,29 @@ async def list_tickets(
         query["environment"] = environment
     if assignee:
         query["assignees"] = assignee
+    if days:
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        query["createdAt"] = {"$gte": since}
     if service:
-        query["serviceName"] = service.strip()
+        svc = service.strip()
+        # Filter: tiket yang serviceName SAMA ATAU serviceIds mengandung svc
+        service_clause = {"$or": [{"serviceName": svc}, {"serviceIds": svc}]}
+    else:
+        service_clause = None
+
     if search:
         regex = {"$regex": re.escape(search.strip()), "$options": "i"}
-        query["$or"] = [{"title": regex}, {"description": regex}]
+        search_clause = {"$or": [{"title": regex}, {"description": regex}]}
+    else:
+        search_clause = None
+
+    # Kombinasikan filter bila ada lebih dari satu
+    if service_clause and search_clause:
+        query["$and"] = [service_clause, search_clause]
+    elif service_clause:
+        query.update(service_clause)
+    elif search_clause:
+        query.update(search_clause)
 
     # Sort whitelist
     field_raw, _, dir_raw = sort.partition(":")
@@ -327,6 +351,7 @@ async def update_ticket(
     kind: Optional[str] = None,
     environment: Optional[str] = None,
     trace_id: Optional[str] = None,
+    service_ids: Optional[List[str]] = None,
     actor: Optional[Dict[str, Any]] = None,
     via: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -357,6 +382,8 @@ async def update_ticket(
         if trace_id and not TRACE_ID_RE.match(trace_id):
             raise ValueError("TraceId harus hex 16-64 karakter")
         set_doc["traceId"] = trace_id or None
+    if service_ids is not None:
+        set_doc["serviceIds"] = service_ids
 
     # Progress entry utk perubahan severity — butuh nilai lama dari dokumen saat ini
     severity_entry = None

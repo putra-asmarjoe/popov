@@ -72,6 +72,7 @@ class TicketUpdateRequest(BaseModel):
     kind: Optional[str] = None
     environment: Optional[str] = None
     traceId: Optional[str] = None
+    serviceIds: Optional[List[str]] = None
 
 
 class AssignRequest(BaseModel):
@@ -164,6 +165,7 @@ async def list_project_tickets(
     assignee: Optional[str] = None,
     search: Optional[str] = None,
     service: Optional[str] = Query(None, description="Filter serviceName (Fix #40)"),
+    days: Optional[int] = Query(None, ge=1, le=365),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     sort: str = Query("createdAt:desc"),
@@ -185,6 +187,7 @@ async def list_project_tickets(
         assignee=assignee or None,
         search=search or None,
         service=service or None,
+        days=days,
         page=page,
         limit=limit,
         sort=sort,
@@ -264,6 +267,7 @@ async def edit_ticket(
             kind=body.kind,
             environment=body.environment,
             trace_id=body.traceId,
+            service_ids=body.serviceIds,
             actor=current_user,
         )
     except ValueError as e:

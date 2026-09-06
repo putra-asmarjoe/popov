@@ -17,10 +17,11 @@ import { useProjects, useWorkspaceDetail, useWorkspaces } from "@/hooks/useWorks
 import { useTicketRealtime } from "@/hooks/useWebSocket"
 import { WarRoomPanel } from "@/components/warroom/WarRoomPanel"
 import { setProjectView } from "@/lib/project-view"
-import { useWidgetPrefs, widgetsNeedOverview, widgetsNeedTickets } from "@/lib/overview-widgets"
+import { useWidgetPrefs, widgetsNeedOverview, widgetsNeedTickets, DASHBOARD_WIDGET_IDS } from "@/lib/overview-widgets"
+import { DashboardDaysFilter } from "@/components/overview/DashboardDaysFilter"
 import type { TicketFilters } from "@/store/ticket.store"
 
-const DEFAULT_FILTERS: TicketFilters = { status: ["open", "new"], severity: [], assignee: null, search: "" }
+const DEFAULT_FILTERS: TicketFilters = { status: ["new", "open", "in_progress", "needs_review"], severity: [], assignee: null, search: "" }
 
 /** Project Overview — health project sekilas (War Room mode).
  *  Klik tiket → overlay Detail|Chat TETAP di warroom (URL ?ticket=KEY-N, mode tidak pindah).
@@ -46,15 +47,35 @@ export function ProjectOverview() {
   // Realtime: ticket baru / berubah → invalidate list + overview (sama seperti classic)
   useTicketRealtime(project?.id ?? null)
 
-  // Widget prefs — localStorage per project (default = widget defaultEnabled)
-  const { enabled, update, reset } = useWidgetPrefs(project?.id ?? null)
+  // Widget prefs — localStorage per project per view (warroom)
+  const { enabled, update, reset } = useWidgetPrefs(project?.id ?? null, "warroom")
+
+  // Dashboard filter — gate: filter hanya bermakna bila widget dashboard ada
+  const hasDashboardWidget = enabled.some((id) => DASHBOARD_WIDGET_IDS.includes(id))
+
+  // Days filter — persist in localStorage
+  const [days, setDays] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("popov:dashboard-days")
+      return saved ? parseInt(saved, 10) || 1 : 1
+    }
+    return 1
+  })
+
+  const handleDaysChange = (value: number) => {
+    setDays(value)
+    localStorage.setItem("popov:dashboard-days", String(value))
+  }
 
   // Data fetch GATED by widget enabled — widget di-disable tidak fetch.
   // Overview (4 collection) hanya bila ada widget dataKey; tickets hanya bila ada needsTickets.
+  // open_only=true → dashboard stats filter by open tickets (warroom context).
   const needOverview = widgetsNeedOverview(enabled)
   const needTickets = widgetsNeedTickets(enabled)
   const { data: overview, isLoading: ovLoading } = useProjectOverview(
     needOverview ? project?.id ?? null : null,
+    days,
+    true, // open_only — warroom context
   )
 
   // Filter tiket — state lokal di halaman ini (default open)
@@ -67,7 +88,7 @@ export function ProjectOverview() {
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchInput])
-  const ticketsQuery = useTickets(needTickets ? project?.id ?? null : null, filters, 1)
+  const ticketsQuery = useTickets(needTickets ? project?.id ?? null : null, filters, 1, days)
   const tickets = ticketsQuery.data?.tickets ?? []
 
   // Seleksi tiket + detail fresh — SATU fungsi utk classic & warroom (DRY).
@@ -134,6 +155,7 @@ export function ProjectOverview() {
             }}
             onReset={reset}
           />
+          {hasDashboardWidget && <DashboardDaysFilter value={days} onChange={handleDaysChange} />}
           <Button asChild size="sm" className="h-8 gap-1">
             <Link to={`/w/${wsSlug}/${projSlug}/new`}>
               <Plus className="size-4" /> {t("page.new_ticket_title")}

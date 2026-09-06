@@ -194,6 +194,7 @@ async def maybe_create_watchdog_ticket(
                     content_fp=base_fp,
                     initial_note=f"Ticket auto-created by watchdog (alert {alert_id or '-'})",
                     service_name=service,
+                    service_ids=[service],
                 )
                 # Alert pertama → dokumen alert ter-link ke tiket baru
                 await record_ticket_alert(

@@ -7,9 +7,9 @@ import type { Ticket, TicketListMeta, TicketStatus } from "@/types/ticket"
 
 // ── Queries ───────────────────────────────────────────────────────────────────
 
-export function useTickets(projectId: string | null, filters: TicketFilters, page = 1) {
+export function useTickets(projectId: string | null, filters: TicketFilters, page = 1, days?: number) {
   return useQuery({
-    queryKey: ["tickets", projectId, filters, page],
+    queryKey: ["tickets", projectId, filters, page, days],
     queryFn: async () => {
       const { data } = await api.get(`/projects/${projectId}/tickets`, {
         params: {
@@ -17,6 +17,7 @@ export function useTickets(projectId: string | null, filters: TicketFilters, pag
           severity: filters.severity.length ? filters.severity.join(",") : undefined,
           assignee: filters.assignee ?? undefined,
           search: filters.search || undefined,
+          days: days || undefined,
           page,
           limit: 20,
           sort: "updatedAt:desc",
@@ -101,6 +102,7 @@ export function useUpdateTicket() {
       tags?: string[]
       kind?: string
       traceId?: string
+      serviceIds?: string[]
     }) => {
       const { data } = await api.patch(`/tickets/${id}`, input)
       return data as Ticket

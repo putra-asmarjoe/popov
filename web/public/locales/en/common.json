@@ -90,5 +90,20 @@
     "minimize": "Minimize panel",
     "maximize": "Maximize panel",
     "close": "Close panel"
+  },
+  "theme": {
+    "label": "Theme",
+    "light": "Light",
+    "dark": "Dark",
+    "fancy": "Nova",
+    "calm": "Calm",
+    "system": "System",
+    "desc_light": "Clean, bright",
+    "desc_dark": "Standard dark",
+    "desc_fancy": "Premium, eye-friendly",
+    "desc_calm": "Long on-call shifts",
+    "desc_system": "Follow OS",
+    "trigger_aria": "Current theme: {{theme}}. Change theme",
+    "contrast_note": "Target contrast ~10:1 · easy on eyes"
   }
 }

@@ -77,6 +77,7 @@ export function Sidebar({ className }: { className?: string }) {
   const deleteSession = useDeleteChatSession()
   const [chatPickerOpen, setChatPickerOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null)
+  const [chatLimit, setChatLimit] = useState(10)
 
   const projectById = useMemo(() => {
     const map = new Map<string, { key: string; name: string; slug: string }>()
@@ -89,8 +90,16 @@ export function Sidebar({ className }: { className?: string }) {
     return (allSessions ?? [])
       .filter((s: ChatSession) => s.projectId && wsProjectIds.has(s.projectId) && !s.ticketId)
       .sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
-      .slice(0, 5)
-  }, [allSessions, projects])
+      .slice(0, chatLimit)
+  }, [allSessions, projects, chatLimit])
+
+  const hasMoreChats = useMemo(() => {
+    const wsProjectIds = new Set(projects?.map((p) => p.id) ?? [])
+    const total = (allSessions ?? [])
+      .filter((s: ChatSession) => s.projectId && wsProjectIds.has(s.projectId) && !s.ticketId)
+      .length
+    return total > chatLimit
+  }, [allSessions, projects, chatLimit])
 
 
   return (
@@ -189,7 +198,7 @@ export function Sidebar({ className }: { className?: string }) {
         )}
 
         {/* ── Chat by Project: daftar sesi + tombol baru ── */}
-        <div className="mt-3 border-t border-sidebar-border pt-2">
+        <div className="mt-3 flex flex-1 flex-col border-t border-sidebar-border pt-2">
           <div className="flex items-center justify-between px-2 pb-1 pt-1">
             <span className="text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
               {tChat("sidebar_title")}
@@ -232,66 +241,76 @@ export function Sidebar({ className }: { className?: string }) {
           </div>
 
           {projectChats.length > 0 ? (
-            <nav className="space-y-0.5">
-              {projectChats.map((s) => {
-                const proj = s.projectId ? projectById.get(s.projectId) : undefined
-                const href = `/w/${current?.slug}/chats/${s.id}`
-                const active = location.pathname === href
-                return (
-                  <div
-                    key={s.id}
-                    className={cn(
-                      "group/chat relative flex items-center gap-1 rounded-md",
-                      active
-                        ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-                        : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
-                    )}
-                  >
-                    <Link
-                      to={href}
-                      title={s.title}
-                      className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-sm"
-                    >
-                      <MessageSquare className="size-3.5 shrink-0 text-sidebar-foreground/50" />
-                      <span className="min-w-0 flex-1 truncate">{s.title}</span>
-                      {proj && (
-                        <span className="shrink-0 rounded bg-sidebar-primary/20 px-1 py-0.5 text-center font-mono text-[10px] font-semibold text-sidebar-primary-foreground/90">
-                          {proj.key}
-                        </span>
+            <div className="flex-1 overflow-y-auto">
+              <nav className="space-y-0.5">
+                {projectChats.map((s) => {
+                  const proj = s.projectId ? projectById.get(s.projectId) : undefined
+                  const href = `/w/${current?.slug}/chats/${s.id}`
+                  const active = location.pathname === href
+                  return (
+                    <div
+                      key={s.id}
+                      className={cn(
+                        "group/chat relative flex items-center gap-1 rounded-md",
+                        active
+                          ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                          : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground",
                       )}
-                    </Link>
-                    {/* Fix #118: three-dots per sesi project (bukan tiket) → soft-delete */}
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-6 opacity-0 transition-opacity group-hover/chat:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
-                          aria-label={tChat("delete_session_aria")}
-                          onClick={(e) => {
-                            e.preventDefault()
-                            e.stopPropagation()
-                          }}
-                        >
-                          <MoreVertical className="size-3.5" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="z-[70] w-44">
-                        <DropdownMenuItem
-                          className="whitespace-nowrap text-destructive focus:text-destructive"
-                          onSelect={(e) => {
-                            e.preventDefault()
-                            setConfirmDelete({ id: s.id, title: s.title })
-                          }}
-                        >
-                          <Trash2 className="size-4" /> {tChat("delete_session")}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                )
-              })}
-            </nav>
+                    >
+                      <Link
+                        to={href}
+                        title={s.title}
+                        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-sm"
+                      >
+                        <MessageSquare className="size-3.5 shrink-0 text-sidebar-foreground/50" />
+                        <span className="min-w-0 flex-1 truncate">{s.title}</span>
+                        {proj && (
+                          <span className="shrink-0 rounded bg-sidebar-primary/20 px-1 py-0.5 text-center font-mono text-[10px] font-semibold text-sidebar-primary-foreground/90">
+                            {proj.key}
+                          </span>
+                        )}
+                      </Link>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-6 opacity-0 transition-opacity group-hover/chat:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                            aria-label={tChat("delete_session_aria")}
+                            onClick={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                            }}
+                          >
+                            <MoreVertical className="size-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="z-[70] w-44">
+                          <DropdownMenuItem
+                            className="whitespace-nowrap text-destructive focus:text-destructive"
+                            onSelect={(e) => {
+                              e.preventDefault()
+                              setConfirmDelete({ id: s.id, title: s.title })
+                            }}
+                          >
+                            <Trash2 className="size-4" /> {tChat("delete_session")}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  )
+                })}
+              </nav>
+              {hasMoreChats && (
+                <button
+                  type="button"
+                  onClick={() => setChatLimit((prev) => prev + 10)}
+                  className="mt-1 w-full rounded-md px-2 py-1.5 text-center text-[11px] text-sidebar-foreground/50 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground"
+                >
+                  {tChat("load_more")}
+                </button>
+              )}
+            </div>
           ) : (
             <p className="px-2 py-2 text-xs text-sidebar-foreground/50">{tChat("sidebar_empty")}</p>
           )}

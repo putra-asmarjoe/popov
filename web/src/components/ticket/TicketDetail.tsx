@@ -16,6 +16,7 @@ import { Separator } from "@/components/ui/separator"
 import { SeverityBadge, StatusBadge } from "@/components/ticket/Badges"
 import { LinkedAlerts } from "@/components/ticket/LinkedAlerts"
 import { ProgressLog } from "@/components/ticket/ProgressLog"
+import { ServicePickerDialog } from "@/components/ticket/ServicePickerDialog"
 import { TicketForm, type TicketFormValues } from "@/components/ticket/TicketForm"
 import {
   useAddProgress,
@@ -45,6 +46,7 @@ export function TicketDetail({
 }) {
   const { t } = useTranslation("project")
   const [editOpen, setEditOpen] = useState(false)
+  const [servicePickerOpen, setServicePickerOpen] = useState(false)
   const changeStatus = useChangeStatus()
   const reopen = useReopenTicket()
   const assign = useAssignTicket()
@@ -78,9 +80,29 @@ export function TicketDetail({
             {ticket.source === "watchdog" && (
               <Badge variant="secondary" className="gap-1">🤖 Auto</Badge>
             )}
-            {ticket.serviceName && (
-              <Badge variant="outline" className="font-mono text-[10px]">{ticket.serviceName}</Badge>
-            )}
+            {/* Multi-service badges (backward compat: serviceName lama → fallback) */}
+            {(() => {
+              const svcIds = ticket.serviceIds?.length ? ticket.serviceIds : (ticket.serviceName ? [ticket.serviceName] : [])
+              return (
+                <div className="flex items-center gap-1">
+                  {svcIds.map((svc) => (
+                    <Badge key={svc} variant="outline" className="font-mono text-[10px]">{svc}</Badge>
+                  ))}
+                  {svcIds.length === 0 && (
+                    <Badge variant="outline" className="font-mono text-[10px] text-muted-foreground">
+                      {t("detail.no_service")}
+                    </Badge>
+                  )}
+                  <Button
+                    variant="ghost" size="icon" className="size-5"
+                    title={t("detail.edit_services")}
+                    onClick={() => setServicePickerOpen(true)}
+                  >
+                    <Pencil className="size-2.5" />
+                  </Button>
+                </div>
+              )
+            })()}
           </div>
           <h2 className="mt-1.5 truncate text-sm font-semibold leading-snug">{ticket.title}</h2>
           <p className="mt-0.5 text-[11px] text-muted-foreground">
@@ -308,6 +330,17 @@ export function TicketDetail({
           />
         </DialogContent>
       </Dialog>
+
+      {/* Service picker */}
+      <ServicePickerDialog
+        open={servicePickerOpen}
+        onOpenChange={setServicePickerOpen}
+        selected={ticket.serviceIds ?? (ticket.serviceName ? [ticket.serviceName] : [])}
+        pending={update.isPending}
+        onConfirm={(serviceIds) => {
+          update.mutate({ id: ticket.id, serviceIds })
+        }}
+      />
     </div>
   )
 }

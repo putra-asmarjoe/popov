@@ -29,5 +29,6 @@
   "saving": "Menyimpan…",
   "cancel": "Batal",
   "save": "Simpan",
-  "update_session_failed": "Gagal memperbarui sesi"
+  "update_session_failed": "Gagal memperbarui sesi",
+  "load_more": "Muat lebih banyak"
 }
