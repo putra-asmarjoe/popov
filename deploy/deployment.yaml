@@ -6,8 +6,8 @@ metadata:
   labels:
     app: popov-agent
 spec:
-  # Note: Tetapkan replicas: 1 karena Telegram long-polling (getUpdates) mensyaratkan 1 instance.
-  #       Watchdog sudah pindah ke proses terpisah (deploy/watchdog-deployment.yaml, replicas: 1 WAJIB).
+  # Note: keep replicas: 1 — Telegram long-polling (getUpdates) requires a single instance.
+  #       The watchdog already runs as a separate process (deploy/watchdog-deployment.yaml, replicas: 1 REQUIRED).
   replicas: 1
   selector:
     matchLabels:
@@ -17,12 +17,12 @@ spec:
       labels:
         app: popov-agent
     spec:
-      # Kubernetes secret untuk autentikasi Private Docker Hub Registry
+      # Kubernetes secret for Private Docker Hub registry auth
       imagePullSecrets:
         - name: dockerhub-secret
       containers:
         - name: popov-agent
-          # Ganti <YOUR_DOCKERHUB_USERNAME> dengan username Docker Hub Anda
+          # Replace <YOUR_DOCKERHUB_USERNAME> with your Docker Hub username
           image: <YOUR_DOCKERHUB_USERNAME>/popov-agent:latest
           imagePullPolicy: Always
           ports:
@@ -56,3 +56,22 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+          volumeMounts:
+            # Pattern Miner outputs (learned_playbooks/ + patterns/) — survive
+            # container/pod restarts. Data is derived (from incident_episodes,
+            # regenerable by the miner) → emptyDir is enough; for cross-node
+            # persistence switch to a PVC (see the note in the volumes section).
+            - name: pattern-miner-data
+              mountPath: /app/learned_playbooks
+              subPath: learned_playbooks
+            - name: pattern-miner-data
+              mountPath: /app/patterns
+              subPath: patterns
+      volumes:
+        # emptyDir: lives as long as the POD lives (container restart = safe,
+        # node reschedule = wiped — the miner regenerates automatically).
+        # Need full persistence? Switch to a PVC:
+        #   persistentVolumeClaim:
+        #     claimName: popov-pattern-data
+        - name: pattern-miner-data
+          emptyDir: {}

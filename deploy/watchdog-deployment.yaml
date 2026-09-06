@@ -7,13 +7,13 @@ metadata:
     app: popov-watchdog
     component: watchdog-worker
 spec:
-  # ⚠️ WAJIB replicas: 1 — JANGAN dinaikkan.
-  # WatchdogScheduler melakukan polling observability + anti-spam fingerprint.
-  # Lebih dari 1 instance = duplikasi polling N×, alert dobel, tiket dobel.
-  # Scale hanya pod popov-agent (web/API), bukan ini. (SCALE_ESCALATION_PLAN.md L1)
+  # ⚠️ replicas MUST stay 1 — do NOT increase.
+  # WatchdogScheduler polls observability targets + anti-spam fingerprinting.
+  # More than 1 instance = N× duplicated polling, duplicate alerts, duplicate tickets.
+  # Scale the popov-agent pod (web/API) instead, never this one. (SCALE_ESCALATION_PLAN.md L1)
   replicas: 1
   strategy:
-    type: Recreate   # hindari 2 instance overlap saat rolling update
+    type: Recreate   # avoid two overlapping instances during rolling updates
   selector:
     matchLabels:
       app: popov-watchdog

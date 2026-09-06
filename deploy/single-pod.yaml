@@ -23,7 +23,7 @@ metadata:
   labels:
     app: popov-agent-single
 spec:
-  # ⚠️ WAJIB replicas: 1 — Telegram getUpdates + watchdog polling are singletons.
+  # ⚠️ replicas MUST stay 1 — Telegram getUpdates + watchdog polling are singletons.
   strategy:
     type: Recreate   # avoid two overlapping instances during rolling updates
   selector:

@@ -49,15 +49,18 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy remaining runtime folders EXPLICITLY — dev/test/tooling (tests/, command/,
 # tools/, debugss/, screenshots/, venv/, etc.) never enters the image, without
 # relying on .dockerignore.
+# learned_playbooks/ + patterns/ are NOT copied — both are Pattern Miner runtime
+# outputs (written while the agent runs; patterns/ is only read by the preview
+# endpoint in api/routes.py). Also excluded by sync.sh ("Runtime data"). They are
+# created empty via mkdir below — the build does not require them in the build
+# context. For persistence across restarts, mount a volume in the deployment.
 COPY scripts/ scripts/
-COPY learned_playbooks/ learned_playbooks/
-COPY patterns/ patterns/
 
-# Copy hasil build frontend dari stage 1 (FE-6: satu container, satu domain)
+# Copy the frontend build from stage 1 (FE-6: one container, one domain)
 COPY --from=webbuilder /web/dist ./web/dist
 
-# Create logs directory and assign permissions to a non-root user
-RUN mkdir -p logs && \
+# Create runtime-writable directories and assign permissions to a non-root user
+RUN mkdir -p logs learned_playbooks patterns && \
     useradd -u 1000 -m appuser && \
     chown -R appuser:appuser /app
 
