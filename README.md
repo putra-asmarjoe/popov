@@ -392,7 +392,7 @@ See [`deploy/README.md`](deploy/README.md) for the full step-by-step guide (priv
 
 > 🚧 **Active development.** Popov powers incident response for its origin team's production services today, but it should be treated as an early-stage open-source project: 
 
-**v0.2.0-rc230** — current release: Dashboard Analytics (5 widgets + split layout 70/30 + days filter + open_only + view-based prefs), plus all previous features (War Room, Knowledge Agent, episode enrichment, adaptive fan-out, non-K8s deploy detection, closed-loop post-fix verification, follow-up chips, agent trace). Full release notes: [v0.2-rc230](https://github.com/putra-asmarjoe/popov/releases/tag/v0.2-rc230).
+**v0.2.0-rc231** — current release: Dashboard Analytics (5 widgets + split layout 70/30 + days filter + open_only + view-based prefs), plus all previous features (War Room, Knowledge Agent, episode enrichment, adaptive fan-out, non-K8s deploy detection, closed-loop post-fix verification, follow-up chips, agent trace). Full release notes: [v0.2-rc231](https://github.com/putra-asmarjoe/popov/releases/tag/v0.2-rc231).
 
 Good fit today: small-to-medium engineering teams that already run Prometheus/Tempo/Loki, want automated triage and investigation, and are comfortable self-hosting and tolerating some churn. An observability stack is optional — Popov degrades gracefully without it. Not yet pitched for large enterprise fleets.
 
