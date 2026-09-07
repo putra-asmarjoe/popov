@@ -396,14 +396,6 @@ See [`deploy/README.md`](deploy/README.md) for the full step-by-step guide (priv
 
 Good fit today: small-to-medium engineering teams that already run Prometheus/Tempo/Loki, want automated triage and investigation, and are comfortable self-hosting and tolerating some churn. An observability stack is optional — Popov degrades gracefully without it. Not yet pitched for large enterprise fleets.
 
-## Roadmap
-
-Implemented plans live in `devdocs/`; near-term directions visible in the codebase include:
-
-- Moving the Telegram listener out of the API process so the API can scale beyond one replica
-- Slack, Discord, and WhatsApp notification channels (schema-ready; Telegram + email shipped in rc186)
-- Restore flow for soft-deleted projects (currently archive-only)
-
 ## 💡 Motivation
 
 As a programmer and DevOps engineer, I deal with production incidents regularly —
