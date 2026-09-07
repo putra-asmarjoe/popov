@@ -1,0 +1,99 @@
+{
+  "title": "Account Preferences",
+  "subtitle": "How Popov Agent communicates with you — per workspace.",
+  "workspace_scope": "Workspace",
+  "workspace_pick": "Select workspace…",
+  "workspace_hint": "Preferences are per workspace — switching workspace shows that workspace's settings. Your preferences don't carry over automatically.",
+  "manual_title": "Communication preferences",
+  "manual_hint": "Set explicitly — batch learning never overrides manual choices.",
+  "default": "Default (agent decides)",
+  "field": {
+    "verbosity": "Detail level",
+    "tone": "Tone",
+    "format_preference": "Format",
+    "default_chat_depth": "Chat analysis depth"
+  },
+  "verbosity": {
+    "concise": "Concise",
+    "standard": "Standard",
+    "detailed": "Detailed"
+  },
+  "tone": {
+    "casual": "Casual",
+    "formal": "Formal"
+  },
+  "format": {
+    "list": "Bullet lists",
+    "paragraph": "Paragraphs",
+    "mixed": "Mixed"
+  },
+  "depth": {
+    "1": "Shallow — quick answers only",
+    "2": "Light — brief checks",
+    "3": "Standard",
+    "4": "Deep — thorough analysis",
+    "5": "Full — complete investigation"
+  },
+  "noticed_title": "Popov noticed",
+  "noticed_hint": "Learned from your activity (after enough interactions).",
+  "noticed_empty": "Not enough activity yet — keep chatting and patterns will appear here.",
+  "noticed": {
+    "service": "Often asks about {{service}} ({{count}}×)",
+    "chip": "Frequently uses \"{{chip}}\" ({{count}}×)"
+  },
+  "stat": {
+    "interactions": "Interactions",
+    "investigations": "Investigations",
+    "services": "Services",
+    "chips": "Chip types"
+  },
+  "reset_counters": "Reset activity counters",
+  "reset_confirm_title": "Reset activity counters?",
+  "reset_confirm_desc": "Clears learned activity (services, chips, counts) for this workspace. Manual preferences are kept.",
+  "reset_confirm_action": "Reset",
+  "cancel": "Cancel",
+  "saved": "Preferences saved",
+  "save_failed": "Failed to save preferences",
+  "counters_reset": "Activity counters reset",
+  "reset_failed": "Failed to reset counters",
+  "suggestion_title": "Popov suggests",
+  "suggestion_hint": "Learned from your activity — applies automatically in 24h unless you reject.",
+  "suggestion_approve": "Apply",
+  "suggestion_reject": "Not for me",
+  "suggestion_applied": "Suggestion applied",
+  "suggestion_rejected": "Suggestion dismissed",
+  "apply_failed": "Failed to apply suggestion",
+  "reject_failed": "Failed to dismiss suggestion",
+  "footer": "Signed in as {{email}}",
+  "tab_preferences": "Preferences",
+  "tab_account": "Account",
+  "account": {
+    "profile_title": "Profile",
+    "profile_hint": "Update your name and email address.",
+    "name": "Name",
+    "name_placeholder": "Your name",
+    "email": "Email",
+    "email_placeholder": "your@email.com",
+    "save_profile": "Save profile",
+    "saving": "Saving…",
+    "profile_updated": "Profile updated successfully",
+    "profile_update_failed": "Failed to update profile",
+    "name_too_short": "Name must be at least 2 characters",
+    "invalid_email": "Invalid email format",
+    "password_title": "Change password",
+    "password_hint": "Enter your current password and choose a new one.",
+    "current_password": "Current password",
+    "current_password_placeholder": "Enter current password",
+    "new_password": "New password",
+    "new_password_placeholder": "Enter new password (min 8 characters)",
+    "confirm_password": "Confirm new password",
+    "confirm_password_placeholder": "Confirm new password",
+    "change_password": "Change password",
+    "changing": "Changing…",
+    "password_changed": "Password changed successfully",
+    "password_change_failed": "Failed to change password",
+    "current_password_required": "Current password is required",
+    "password_too_short": "New password must be at least 8 characters",
+    "passwords_dont_match": "Passwords do not match"
+  }
+}

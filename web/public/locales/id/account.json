@@ -1,0 +1,99 @@
+{
+  "title": "Preferensi Akun",
+  "subtitle": "Cara Popov Agent berkomunikasi denganmu — per workspace.",
+  "workspace_scope": "Workspace",
+  "workspace_pick": "Pilih workspace…",
+  "workspace_hint": "Preferensi bersifat per workspace — pindah workspace menampilkan pengaturan workspace itu. Preferensimu tidak terbawa otomatis.",
+  "manual_title": "Preferensi komunikasi",
+  "manual_hint": "Di-set eksplisit — pembelajaran otomatis tidak pernah menimpa pilihan manual.",
+  "default": "Default (keputusan agent)",
+  "field": {
+    "verbosity": "Tingkat detail",
+    "tone": "Nada",
+    "format_preference": "Format",
+    "default_chat_depth": "Kedalaman analisis chat"
+  },
+  "verbosity": {
+    "concise": "Ringkas",
+    "standard": "Standar",
+    "detailed": "Detail"
+  },
+  "tone": {
+    "casual": "Santai",
+    "formal": "Formal"
+  },
+  "format": {
+    "list": "Daftar poin",
+    "paragraph": "Paragraf",
+    "mixed": "Campuran"
+  },
+  "depth": {
+    "1": "Dangkal — jawaban cepat saja",
+    "2": "Ringan — pengecekan singkat",
+    "3": "Standar",
+    "4": "Dalam — analisis menyeluruh",
+    "5": "Penuh — investigasi lengkap"
+  },
+  "noticed_title": "Popov memperhatikan",
+  "noticed_hint": "Dipelajari dari aktivitasmu (setelah cukup banyak interaksi).",
+  "noticed_empty": "Aktivitas belum cukup — terus mengobrol dan pola akan muncul di sini.",
+  "noticed": {
+    "service": "Sering menanyakan {{service}} ({{count}}×)",
+    "chip": "Sering memakai \"{{chip}}\" ({{count}}×)"
+  },
+  "stat": {
+    "interactions": "Interaksi",
+    "investigations": "Investigasi",
+    "services": "Service",
+    "chips": "Tipe chip"
+  },
+  "reset_counters": "Reset counter aktivitas",
+  "reset_confirm_title": "Reset counter aktivitas?",
+  "reset_confirm_desc": "Menghapus aktivitas yang dipelajari (service, chip, jumlah) untuk workspace ini. Preferensi manual tetap dipertahankan.",
+  "reset_confirm_action": "Reset",
+  "cancel": "Batal",
+  "saved": "Preferensi disimpan",
+  "save_failed": "Gagal menyimpan preferensi",
+  "counters_reset": "Counter aktivitas di-reset",
+  "reset_failed": "Gagal reset counter",
+  "suggestion_title": "Saran Popov",
+  "suggestion_hint": "Dipelajari dari aktivitasmu — diterapkan otomatis dalam 24 jam jika tidak kamu tolak.",
+  "suggestion_approve": "Terapkan",
+  "suggestion_reject": "Bukan untuk saya",
+  "suggestion_applied": "Saran diterapkan",
+  "suggestion_rejected": "Saran diabaikan",
+  "apply_failed": "Gagal menerapkan saran",
+  "reject_failed": "Gagal mengabaikan saran",
+  "footer": "Masuk sebagai {{email}}",
+  "tab_preferences": "Preferensi",
+  "tab_account": "Akun",
+  "account": {
+    "profile_title": "Profil",
+    "profile_hint": "Perbarui nama dan alamat email Anda.",
+    "name": "Nama",
+    "name_placeholder": "Nama Anda",
+    "email": "Email",
+    "email_placeholder": "email@anda.com",
+    "save_profile": "Simpan profil",
+    "saving": "Menyimpan…",
+    "profile_updated": "Profil berhasil diperbarui",
+    "profile_update_failed": "Gagal memperbarui profil",
+    "name_too_short": "Nama minimal 2 karakter",
+    "invalid_email": "Format email tidak valid",
+    "password_title": "Ubah kata sandi",
+    "password_hint": "Masukkan kata sandi saat ini dan pilih yang baru.",
+    "current_password": "Kata sandi saat ini",
+    "current_password_placeholder": "Masukkan kata sandi saat ini",
+    "new_password": "Kata sandi baru",
+    "new_password_placeholder": "Masukkan kata sandi baru (minimal 8 karakter)",
+    "confirm_password": "Konfirmasi kata sandi baru",
+    "confirm_password_placeholder": "Konfirmasi kata sandi baru",
+    "change_password": "Ubah kata sandi",
+    "changing": "Mengubah…",
+    "password_changed": "Kata sandi berhasil diubah",
+    "password_change_failed": "Gagal mengubah kata sandi",
+    "current_password_required": "Kata sandi saat ini wajib diisi",
+    "password_too_short": "Kata sandi baru minimal 8 karakter",
+    "passwords_dont_match": "Kata sandi tidak cocok"
+  }
+}
