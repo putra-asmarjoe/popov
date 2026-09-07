@@ -17,7 +17,7 @@ import { useProjects, useWorkspaceDetail, useWorkspaces } from "@/hooks/useWorks
 import { useTicketRealtime } from "@/hooks/useWebSocket"
 import { WarRoomPanel } from "@/components/warroom/WarRoomPanel"
 import { setProjectView } from "@/lib/project-view"
-import { useWidgetPrefs, widgetsNeedOverview, widgetsNeedTickets, DASHBOARD_WIDGET_IDS } from "@/lib/overview-widgets"
+import { useWidgetPrefs, widgetsNeedOverview, widgetsNeedTickets } from "@/lib/overview-widgets"
 import { DashboardDaysFilter } from "@/components/overview/DashboardDaysFilter"
 import type { TicketFilters } from "@/store/ticket.store"
 
@@ -49,9 +49,6 @@ export function ProjectOverview() {
 
   // Widget prefs — localStorage per project per view (warroom)
   const { enabled, update, reset } = useWidgetPrefs(project?.id ?? null, "warroom")
-
-  // Dashboard filter — gate: filter hanya bermakna bila widget dashboard ada
-  const hasDashboardWidget = enabled.some((id) => DASHBOARD_WIDGET_IDS.includes(id))
 
   // Days filter — persist in localStorage
   const [days, setDays] = useState(() => {
@@ -155,7 +152,7 @@ export function ProjectOverview() {
             }}
             onReset={reset}
           />
-          {hasDashboardWidget && <DashboardDaysFilter value={days} onChange={handleDaysChange} />}
+          <DashboardDaysFilter value={days} onChange={handleDaysChange} />
           <Button asChild size="sm" className="h-8 gap-1">
             <Link to={`/w/${wsSlug}/${projSlug}/new`}>
               <Plus className="size-4" /> {t("page.new_ticket_title")}
