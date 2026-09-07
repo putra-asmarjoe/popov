@@ -47,6 +47,7 @@ _TICKET_KW = ("tiket", "ticket", "total", "berapa", "jenis", "masuk")
 _ACTIVITY_KW = (
     "terjadi", "jam terakhir", "aktivitas", "alert", "kejadian",
     "baru-baru", "recent", "hari ini", "tadi",
+    "similar", "serupa", "incident", "insiden", "episode",
 )
 _ERROR_KW = ("error", "gagal", "masalah", "down", "5xx", "500", "bermasalah")
 _KNOWLEDGE_KW = ("knowledge", "dokumen", "playbook", "grounding")

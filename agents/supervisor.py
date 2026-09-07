@@ -112,6 +112,14 @@ PROJECT_QUERY_KW = [
 # "ticket" ikut di situ dan akan menyandera pertanyaan tiket yang sah).
 # Gate ini hanya aktif di chat ber-ticket_context (lihat _arbitrate_or_redirect).
 _PROJECT_KNOWLEDGE_KW = ("knowledge", "dokumen", "document", "playbook")
+# Fix (audit chip): knowledge yang dimaksud PROJECT-WIDE wajib menyebut project —
+# "knowledge apa di service X" (service-specific) TIDAK kena gate ini (biarkan ke
+# service knowledge inventory). Chip "What knowledge is available in this project"
+# / "Knowledge apa saja pada project ini" menyebut project → project_agent.
+_PROJECT_KNOWLEDGE_PROJECT_MENTION = (
+    "this project", "project ini", "pada project", "di project", "project kami",
+    "dalam project", "the project", "our project",
+)
 
 def _ticket_chat_project_route(state: dict, agents_visited: list) -> Optional[dict]:
     """Fix #235b: gate knowledge/chips level project untuk chat tiket — SATU helper
@@ -127,20 +135,22 @@ def _ticket_chat_project_route(state: dict, agents_visited: list) -> Optional[di
     _proj_id = state.get("project_id") or (tc or {}).get("projectId")
     if not _proj_id:
         return None
-    hit = any(kw in low for kw in _PROJECT_KNOWLEDGE_KW) or any(
-        kw in low for kw in _PROJECT_TICKETS_KW
+    # Open tickets project-wide (Fix #233) ATAU knowledge yg menyebut project
+    hit_tickets = any(kw in low for kw in _PROJECT_TICKETS_KW)
+    hit_knowledge = any(kw in low for kw in _PROJECT_KNOWLEDGE_KW) and any(
+        kw in low for kw in _PROJECT_KNOWLEDGE_PROJECT_MENTION
     )
-    if not hit:
+    if not (hit_tickets or hit_knowledge):
         return None
     logger.info("[Supervisor] ticket-chat project gate → project_agent "
-                f"(kw knowledge={any(k in low for k in _PROJECT_KNOWLEDGE_KW)})")
+                f"(kw tickets={hit_tickets}, knowledge={hit_knowledge})")
     return {
         "service_name": "",
         "collection_name": "",
         "next_agent": "project_agent",
         "agents_visited": agents_visited,
         "routing_strategy": "project_query",
-        "routing_flag": "ticket_chat_knowledge",
+        "routing_flag": "ticket_chat_project",
         "error": None,
     }
 
@@ -152,6 +162,22 @@ _PROJECT_TICKETS_KW = (
     "show open tickets", "open tickets", "tiket terbuka",
     "tampilkan tiket", "berapa tiket", "total tiket",
 )
+
+# Fix (audit chip multi-lang): chip "Compare similar incidents"/"Bandingkan insiden
+# serupa" dari laporan insiden — tidak ada penjawab 'similar' khusus di chat; rute
+# deterministik ke project_agent (aktivitas + episode project) supaya TIDAK jatuh ke
+# triage buta / LLM lane-arbiter (gagal saat model down). Bahasa EN+ID.
+_SIMILAR_INCIDENTS_KW = (
+    "compare similar incidents", "similar incidents", "insiden serupa",
+    "bandingkan insiden", "similar episode", "episode serupa",
+)
+
+# Fix (audit chip multi-lang): chip "Check error rate metrics" EN vs "Cek metrics
+# error rate" ID rute BEDA (EN→triage via arbiter, ID→data_agent via technical).
+# Metrics = Prometheus analysis → dua-duanya triage_agent (bukan raw data_agent).
+# Hanya saat intent menyebut METRICS (bukan "error rate di log" = data).
+_METRICS_CHECK_KW = ("error rate metrics", "metrics error rate", "metrics error",
+                     "cek metrics", "check metrics", "lihat metrics", "error metrics")
 
 # Fix #191 + Fix #195: gate tiket (is_ticket_intent) TIDAK boleh menelan permintaan
 # data/log/analisis yang kebetulan menyebut "tiket". Kata query = tanda user minta
@@ -854,6 +880,16 @@ async def supervisor_agent(state: AgentState) -> dict:
                             "error": None,
                         }
 
+    # Fix (audit chip multi-lang): gate project-wide UNTUK chat tiket dipanggil di
+    # alur UTAMA (bukan cuma dead-end) — "Show open tickets" / "Knowledge ... in this
+    # project" dari chat tiket harus project_agent, TIDAK boleh jatuh ke data_agent
+    # ("show" di DATA_INTENT_KEYWORDS) / ticket_agent ("tiket" di _TICKET_KEYWORDS)
+    # / service knowledge inventory (is_knowledge_query ID). Diletakkan SEBELUM
+    # is_ticket_intent & knowledge-service & data-request.
+    _ticket_project_gate = _ticket_chat_project_route(state, agents_visited)
+    if _ticket_project_gate:
+        return _ticket_project_gate
+
     # 2. Deteksi intent detail traceId (span_agent) — DULUAN dari follow-up,
     #    karena "detail trace <id>" mengandung kata "detail". Trigger:
     #    (b) intent menyebut traceId eksplisit (regex), ATAU
@@ -1046,6 +1082,37 @@ async def supervisor_agent(state: AgentState) -> dict:
             "agents_visited": agents_visited,
             "routing_strategy": "source_query",
             "routing_flag": routing_flag,
+            "error": None,
+        }
+
+    # Fix (audit chip multi-lang): chip insiden pasca-RCA di chat tiket →
+    # rute DETERMINISTIK (bukan triage buta / LLM arbiter saat model down):
+    #   - "Check/Cek error rate metrics" (EN/ID) → triage (metrics = Prometheus,
+    #     bukan raw data; dulu ID nyasar data_agent via _is_technical_intent)
+    #   - "Compare similar incidents"/"Bandingkan insiden serupa" → project_agent
+    #     (aktivitas + episode project; tidak ada penjawab 'similar' khusus di chat)
+    # Hanya aktif saat ada service match (preset ticket atau eksplisit).
+    _low_for_gate = intent.lower()
+    if matched_service and any(kw in _low_for_gate for kw in _METRICS_CHECK_KW):
+        logger.info(f"[Supervisor] metrics-check chip → triage: '{intent[:60]}'")
+        return {
+            "service_name": matched_service,
+            "collection_name": service_map.get(matched_service, "") or f"logs_{matched_service}",
+            "next_agent": "triage_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": routing_strategy or "metrics_check",
+            "routing_flag": routing_flag,
+            "error": None,
+        }
+    if any(kw in _low_for_gate for kw in _SIMILAR_INCIDENTS_KW) and state.get("project_id"):
+        logger.info(f"[Supervisor] similar-incidents chip → project_agent: '{intent[:60]}'")
+        return {
+            "service_name": "",
+            "collection_name": "",
+            "next_agent": "project_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": "project_query",
+            "routing_flag": "similar_episodes",
             "error": None,
         }
 

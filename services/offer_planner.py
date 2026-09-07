@@ -236,11 +236,15 @@ def build_chat_suggestions(
     locale: str = "en",
     max_items: int = 3,
     intent: str = "",
+    asked_intents: Optional[List[str]] = None,
 ) -> List[str]:
     """Chips follow-up untuk chat (tiket & project) — deterministik, bilingual.
 
-    Fix #215: `intent` dipakai utk men-skip chip yang topiknya sudah ditanyakan user
-    (mis. habis tanya status → tidak ditawari lagi "What is the current status?").
+    Fix #215: `intent`/`asked_intents` dipakai utk men-skip chip yang topiknya sudah
+    ditanyakan user (mis. habis tanya status → tidak ditawari lagi "What is the current status?").
+    `asked_intents` = SEMUA pesan user dalam sesi (riwayat) — Fix #248: tanpa ini, chip
+    status ↔ summarize bolak-balik selamanya (tiap jawaban menawarkan chip yang barusan
+    dijawab, topik beda dari intent terakhir → tak pernah di-skip).
 
     Prioritas sesuai konteks:
     - ticket open → "What is the current status?" / "Summarize this ticket"
@@ -270,11 +274,15 @@ def build_chat_suggestions(
     if want_knowledge:
         out.append(("knowledge", chat_suggestion("knowledge", locale)))
 
-    # Filter: skip chip yang topiknya sudah ada di intent user (redundancy polish #215)
+    # Fix #215: skip chip yang topiknya sudah ada di intent user (redundancy polish).
+    # `asked_intents` (seluruh riwayat user) lebih kuat dari `intent` terakhir saja —
+    # Fix #248: cegah siklus status ↔ summarize dalam satu sesi chat tiket.
+    asked = list(asked_intents or [])
+    if intent and intent not in asked:
+        asked.append(intent)
     # Fix #237: BOLEH KOSONG — chip tidak wajib selalu ada; bila semua topik sudah
-    # ditanya user, tidak ada chip lebih baik daripada chip redundan
-    # (perilaku lama memaksa balik daftar asli → chip yang baru ditanya muncul lagi).
-    filtered = [(k, s) for k, s in out if not _intent_asked_topic(intent, k)]
+    # ditanya user, tidak ada chip lebih baik daripada chip redundan.
+    filtered = [(k, s) for k, s in out if not _intent_asked_topic_any(asked, k)]
 
     # dedup + batas
     seen: List[str] = []
@@ -284,6 +292,13 @@ def build_chat_suggestions(
             seen.append(s)
             result.append(s)
     return result[:max_items]
+
+
+def _intent_asked_topic_any(intents: List[str], key: str) -> bool:
+    """True bila topik chip `key` sudah pernah ditanyakan di SALAH SATU intent."""
+    if not intents:
+        return False
+    return any(_intent_asked_topic(i, key) for i in intents)
 
 
 def render_offer_question(offer: dict) -> str:
@@ -407,11 +422,20 @@ def build_contextual_suggestions(state: Dict[str, Any], reply_language: str = "E
 
     # — Fallback ke chips generik bila tidak ada temuan spesifik —
     if not suggestions and not gap_chips:
+        # Fix (audit chip): konteks TIKET ≠ project. Di chat tiket, fallback chip
+        # TIDAK boleh menawarkan knowledge project / open tickets (project-wide) —
+        # itu chip chat project. Fallback ticket-scope: status/summarize tiket aktif,
+        # reopen/progress utk tiket resolved/closed. Tanpa ticket_context (project
+        # chat / non-tiket) → knowledge project tetap ditawarkan (perilaku lama).
+        tc = state.get("ticket_context") or {}
+        has_ticket_ctx = bool(tc.get("ticket_id") or tc.get("ticketNumber"))
         return build_chat_suggestions(
+            ticket=tc if has_ticket_ctx else None,
+            project={"key": (tc.get("projectKey") or "")} if tc else None,
             service_name=service,
             root_cause=state.get("root_cause_assessment") or "unknown",
             has_open_tickets=False,
-            want_knowledge=True,
+            want_knowledge=not has_ticket_ctx,
             locale=("id" if lang_id else "en"),
             max_items=3,
             intent=state.get("intent") or "",  # Fix #215: skip chip topik yang sudah ditanya

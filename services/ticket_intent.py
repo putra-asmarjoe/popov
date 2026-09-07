@@ -67,6 +67,13 @@ QUESTION_KEYWORDS = (
     # berakhir fallback "I'm focused on the ticket..." alih-alih summary tiket.
     # "summarize/summary" EN; "ringkas" ID sudah tercakup di daftar atas.
     "summarize", "summarise", "summary",
+    # frasa EN umum permintaan detail/ringkasan tiket (CPRO-38: "Ticket detail" = judul
+    # panel, bukan aksi — tanpa ini jatuh ke parse aksi LLM → redirect saat model down).
+    # HATI-HATI: jangan tambah frasa yang bisa bentrok aksi ("this ticket" saja terlalu
+    # umum — "close this ticket" adalah aksi). Hanya frasa yang tak pernah jadi aksi.
+    "ticket detail", "ticket details", "details of this ticket", "detail of this ticket",
+    "ticket summary", "tell me about", "what about this ticket",
+    "what is this ticket", "whats this ticket", "show ticket details", "show me this ticket",
 )
 
 

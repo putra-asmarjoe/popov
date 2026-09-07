@@ -474,9 +474,18 @@ async def _ticket_suggestions(ticket: Dict[str, Any], project: Dict[str, Any], s
     history = state.get("conversation_history") or []
     user_locale = await get_user_locale((state.get("sender") or {}).get("user_id"))
     locale = detect_chat_locale(history, default=user_locale)
-    # intent (Fix #215): skip chip yang topiknya sudah ditanyakan user
+    # Fix #248: chip yang topiknya SUDAH ditanyakan di SESI ini tidak muncul lagi —
+    # pass seluruh pesan user (riwayat) sbg asked_intents, bukan hanya intent terakhir.
+    # Tanpa ini, status ↔ summarize bolak-balik selamanya (siklus 2-chip).
+    asked_intents = [
+        (h.get("content") or "").strip()
+        for h in history if h.get("role") == "user" and (h.get("content") or "").strip()
+    ]
+    current = (state.get("intent") or "").strip()
+    if current and current not in asked_intents:
+        asked_intents.append(current)
     return build_chat_suggestions(ticket=ticket, project=project, locale=locale,
-                                  max_items=3, intent=state.get("intent") or "")
+                                  max_items=3, asked_intents=asked_intents)
 
 
 async def _user_context_for_state(user_id: str, workspace_id: str) -> str:
