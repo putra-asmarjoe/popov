@@ -26,6 +26,8 @@ from services.workspace_store import PROJECTS_COLLECTION
 logger = logging.getLogger(__name__)
 
 TICKETS_COLLECTION = "tickets"
+# Alias belajar dari link manual (Fix #246): raw devops → serviceId library kanonik.
+SERVICE_ALIAS_COLLECTION = "service_aliases"
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 STATUS_CHAIN = {"new": 0, "open": 1, "in_progress": 2, "needs_review": 3, "resolved": 4, "closed": 5}
@@ -42,6 +44,141 @@ TRACE_ID_RE = re.compile(r"^[0-9a-fA-F]{16,64}$")
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# ── Canonical service resolve (Fix #246) ──────────────────────────────────────
+
+async def library_service_ids() -> List[str]:
+    """Semua serviceId di service library (untuk canonical resolve)."""
+    try:
+        from services.mongodb_client import get_db as _db
+
+        db = _db()
+        ids = [
+            str(doc.get("serviceId", "")).strip()
+            async for doc in db["service_library"].find({}, {"serviceId": 1})
+        ]
+        return [i for i in ids if i]
+    except Exception as e:
+        logger.warning(f"[TicketStore] library_service_ids gagal (non-fatal): {e}")
+        return []
+
+
+async def _record_service_alias(raw: str, canonical: str, workspace_id: Optional[str] = None) -> None:
+    """Catat alias raw→kanonik dari LINK MANUAL user (belajar pola devops naming).
+    Upsert + increment count — makin sering dipakai makin kuat sinyalnya.
+    Exception-safe — belajar tidak boleh menggagalkan update tiket."""
+    try:
+        raw = (raw or "").strip()
+        canonical = (canonical or "").strip()
+        if not raw or not canonical or raw == canonical:
+            return
+        from services.mongodb_client import get_db as _db
+
+        now = _now_iso()
+        await _db()[SERVICE_ALIAS_COLLECTION].update_one(
+            {"raw": raw},
+            {
+                "$set": {"canonical": canonical, "updated_at": now},
+                "$inc": {"count": 1},
+                "$setOnInsert": {"workspace_id": workspace_id or None, "created_at": now},
+            },
+            upsert=True,
+        )
+        logger.info(f"[TicketStore] service alias belajar: '{raw}' → '{canonical}'")
+    except Exception as e:
+        logger.warning(f"[TicketStore] record alias gagal (non-fatal): {e}")
+
+
+async def resolve_service_alias(raw: str) -> Optional[str]:
+    """Cari alias yang sudah dipelajari dari link manual user (raw → kanonik)."""
+    try:
+        if not raw:
+            return None
+        from services.mongodb_client import get_db as _db
+
+        doc = await _db()[SERVICE_ALIAS_COLLECTION].find_one({"raw": raw.strip()})
+        return (doc or {}).get("canonical")
+    except Exception as e:
+        logger.warning(f"[TicketStore] resolve alias gagal (non-fatal): {e}")
+        return None
+
+
+async def _canonical_service_ids(service_ids: List[str], *, record_aliases: bool = False) -> List[str]:
+    """Canonicalize daftar service id terhadap service library.
+
+    Urutan per nilai:
+      1. alias yang sudah dipelajari (manual link sebelumnya)
+      2. canonical_service (normalize + strip affix + substring) ke library
+    Nilai tak dikenal dipertahankan (jangan patahkan link lama).
+    record_aliases=True → raw yang berhasil di-kanonikalisasi dicatat sbg alias
+    (dipakai saat LINK MANUAL — belajar dari keputusan user).
+    """
+    try:
+        libs = await library_service_ids()
+        if not libs:
+            return [s.strip() for s in (service_ids or []) if s and s.strip()]
+        from services.service_name_utils import canonical_service
+
+        out: List[str] = []
+        for s in service_ids or []:
+            val = (s or "").strip()
+            if not val:
+                continue
+            known = await resolve_service_alias(val)
+            canon = known or canonical_service(val, libs)
+            resolved = canon if canon and canon != val else val
+            if resolved not in out:  # dedup (raw + kanonik bisa sama)
+                out.append(resolved)
+            if canon and canon != val and record_aliases:
+                await _record_service_alias(val, canon)
+        return out
+    except Exception as e:
+        logger.warning(f"[TicketStore] canonical service_ids gagal (non-fatal): {e}")
+        return [s.strip() for s in (service_ids or []) if s and s.strip()]
+
+
+async def _learn_alias_from_relink(ticket_id: str, new_service_ids: List[str]) -> None:
+    """Gap 1 (Fix #246): belajar alias dari keputusan LINK MANUAL user.
+
+    Saat user mengganti service tiket via PATCH (dialog ServicePicker), nilai LAMA
+    yang TIDAK ada lagi di daftar baru bisa jadi nama devops raw (mis. "users-kuponku-apps")
+    yang TIDAK ter-resolve heuristic canonical_service (token terbalik, dst). User
+    menggantinya dgn pilihan eksplisit ("kuponku-users") = keputusan bahwa keduanya
+    service sama → rekam raw_lama → kanonik_baru supaya auto-ticket alert serupa
+    otomatis resolve ke depannya.
+
+    Guard ketat (jangan salah belajar):
+    - hanya nilai lama yang TIDAK dikenal library (raw asing) — user mengganti antar
+      service library berbeda (kuponku-core-api → kuponku-users) = ganti pikiran,
+      BUKAN alias.
+    - hanya bila ada ≥1 nilai baru.
+    Exception-safe — belajar tak boleh menggagalkan update.
+    """
+    try:
+        if not new_service_ids:
+            return
+        old_doc = await get_ticket(ticket_id)
+        if old_doc is None:
+            return
+        libs = set(await library_service_ids())
+        old_vals = [s for s in (old_doc.get("serviceIds") or []) if s and s.strip()]
+        old_name = (old_doc.get("serviceName") or "").strip()
+        if old_name and old_name not in old_vals:
+            old_vals.append(old_name)
+
+        known_new = set(new_service_ids)
+        for raw in old_vals:
+            if raw in known_new:
+                continue  # dipertahankan — bukan penggantian
+            if raw in libs:
+                continue  # service library valid diganti → bukan alias, ganti pikiran
+            # raw asing diganti dgn nilai baru → user bilang "ini service sama"
+            # Pilih nilai baru pertama (dialog multi-select; cukup 1 relasi)
+            target = new_service_ids[0]
+            await _record_service_alias(raw, target)
+    except Exception as e:
+        logger.warning(f"[TicketStore] learn alias dari relink gagal (non-fatal): {e}")
 
 
 def valid_transition(current: str, target: str) -> bool:
@@ -383,7 +520,22 @@ async def update_ticket(
             raise ValueError("TraceId harus hex 16-64 karakter")
         set_doc["traceId"] = trace_id or None
     if service_ids is not None:
-        set_doc["serviceIds"] = service_ids
+        # Fix #246: canonicalize nama service mentah → serviceId library kanonik.
+        # User/devops bisa mengirim "lovvit-release-coupon-apps" (suffix K8s) padahal
+        # library punya "lovvit-release-coupon" — simpan yang kanonik agar routing
+        # chat tiket / incident_router / filter ?service= konsisten. Nilai yang TIDAK
+        # bisa di-resolve tetap disimpan apa adanya (jangan patahkan link lama).
+        # record_aliases=True: PATCH serviceIds = LINK MANUAL user → belajar alias
+        # raw→kanonik utk auto-resolve ticket/alert serupa ke depan.
+        canonical_new = await _canonical_service_ids(service_ids, record_aliases=True)
+        # Fix #246 (Gap 1): bila nilai LAMA diganti manual oleh user (bukan agent)
+        # → rekam alias lama→baru. Skenario: tiket bawa "users-kuponku-apps" (raw
+        # tak dikenal library), user manual link ke "kuponku-users" di dialog →
+        # keputusan eksplisit bahwa keduanya service sama; auto-ticket alert
+        # "users-kuponku-apps" berikutnya akan resolve via alias.
+        if actor is not None and via != "agent":
+            await _learn_alias_from_relink(ticket_id, canonical_new)
+        set_doc["serviceIds"] = canonical_new
 
     # Progress entry utk perubahan severity — butuh nilai lama dari dokumen saat ini
     severity_entry = None

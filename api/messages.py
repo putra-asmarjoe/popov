@@ -18,6 +18,13 @@ class M:
     INVALID_CREDENTIALS = "invalid_credentials"
     USER_NOT_FOUND = "user_not_found"
     INVALID_LOCALE = "invalid_locale"
+    NAME_TOO_SHORT = "name_too_short"
+    INVALID_EMAIL_FORMAT = "invalid_email_format"
+    NO_DATA_TO_UPDATE = "no_data_to_update"
+    CURRENT_PASSWORD_WRONG = "current_password_wrong"
+    PASSWORD_TOO_SHORT = "password_too_short"
+    PASSWORD_CHANGED = "password_changed"
+    PROFILE_UPDATED = "profile_updated"
 
     # ── workspace ─────────────────────────────────────────────────────────
     NOT_WORKSPACE_MEMBER = "not_workspace_member"
@@ -158,6 +165,13 @@ _CATALOG: dict[str, tuple[str, str]] = {
     M.INVALID_CREDENTIALS: ("Email atau password salah", "Invalid email or password"),
     M.USER_NOT_FOUND: ("User tidak ditemukan", "User not found"),
     M.INVALID_LOCALE: ("Invalid locale", "Invalid locale"),
+    M.NAME_TOO_SHORT: ("Nama minimal 2 karakter", "Name must be at least 2 characters"),
+    M.INVALID_EMAIL_FORMAT: ("Format email tidak valid", "Invalid email format"),
+    M.NO_DATA_TO_UPDATE: ("Tidak ada data yang diupdate", "No data to update"),
+    M.CURRENT_PASSWORD_WRONG: ("Password saat ini salah", "Current password is incorrect"),
+    M.PASSWORD_TOO_SHORT: ("Password baru minimal 8 karakter", "New password must be at least 8 characters"),
+    M.PASSWORD_CHANGED: ("Password berhasil diubah", "Password changed successfully"),
+    M.PROFILE_UPDATED: ("Profil berhasil diperbarui", "Profile updated successfully"),
 
     # workspace
     M.NOT_WORKSPACE_MEMBER: ("Kamu bukan member workspace ini", "You are not a member of this workspace"),

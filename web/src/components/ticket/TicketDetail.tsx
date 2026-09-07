@@ -335,6 +335,7 @@ export function TicketDetail({
       <ServicePickerDialog
         open={servicePickerOpen}
         onOpenChange={setServicePickerOpen}
+        projectId={ticket.projectId ?? null}
         selected={ticket.serviceIds ?? (ticket.serviceName ? [ticket.serviceName] : [])}
         pending={update.isPending}
         onConfirm={(serviceIds) => {

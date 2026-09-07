@@ -184,6 +184,11 @@ class SendMessageRequest(BaseModel):
     # Chat by Project — depth analisis per pesan: low (ringan, default) |
     # medium (+tawaran investigasi) | thinking (pipeline insiden penuh)
     mode: Optional[str] = None
+    # USER_PROFILE_PLAN Phase 2: identifier chip yang dikirim user (opsional).
+    # FE mengirimnya saat pesan berasal dari klik chip rekomendasi/action
+    # (mis. "investigate:mongo_agent", "suggestion:<topic>") → dicatat counter
+    # chips_clicked di user_profiles. Bukan konten pesan — hanya key identifier.
+    chip_key: Optional[str] = None
 
 
 VALID_CHAT_MODES = ("low", "medium", "thinking")
@@ -264,6 +269,7 @@ def _now_iso() -> str:
 async def _run_pipeline(
     session_id: str, message: str, workspace_id: Optional[str] = None,
     project_id: Optional[str] = None, chat_depth: str = "low",
+    chip_key: Optional[str] = None,
 ) -> None:
     """Background task: jalankan graph → publish progress + token → persist jawaban.
     Slot antrian SUDAH diklaim endpoint /send (register) — di sini hanya konsumsi.
@@ -328,6 +334,7 @@ async def _run_pipeline(
                         "source": ticket.get("source"),
                         "tags": ticket.get("tags"),
                         "status": ticket.get("status"),
+                        "projectId": str(ticket["projectId"]) if ticket.get("projectId") else None,  # Fix #235
                     }
         except Exception as e:
             logger.warning(f"Ticket context load gagal (non-fatal): {e}")
@@ -449,6 +456,25 @@ async def _run_pipeline(
                 investigation_state=investigation_state,
                 agent_traces=agent_traces or None,
             )
+
+        # USER_PROFILE_PLAN Phase 1: counter pasif (fire-and-forget — TIDAK boleh
+        # menyentuh hot path; kegagalan diam). Hook SETELAH request log ditutup
+        # agar routing_strategy/service/agents sudah final.
+        try:
+            from services.user_profile import update_profile_counters
+
+            _up_uid = (sender or {}).get("user_id")
+            if _up_uid and workspace_id:
+                asyncio.create_task(update_profile_counters(
+                    str(_up_uid), workspace_id,
+                    service_name=merged.get("service_name"),
+                    intent=cleaned_message,
+                    routing_strategy=merged.get("routing_strategy"),
+                    agents=merged.get("agents_visited") or [],
+                    chip_key=chip_key,
+                ))
+        except Exception as e:
+            logger.warning(f"[UserProfile] counter hook gagal (non-fatal): {e}")
 
         meta = {
             "request_id": request_id,
@@ -631,6 +657,17 @@ async def send_chat_message(
     if chat_depth not in VALID_CHAT_MODES:
         raise HTTPException(status_code=422, detail="mode harus salah satu dari: low, medium, thinking")
     project_id = (session.get("projectId") or "") or None
+    # Fix #235: sesi chat tiket dibuat TANPA projectId (useCreateChatSession kirim
+    # ticketId saja) → derive dari tiket, agar gate knowledge/chips level project
+    # di supervisor (Fix #232/#233) punya project_id saat chat detail tiket.
+    if not project_id and session.get("ticketId"):
+        try:
+            from services.ticket_store import get_ticket
+            _tk = await get_ticket(session["ticketId"])
+            if _tk and _tk.get("projectId"):
+                project_id = str(_tk["projectId"])
+        except Exception as e:
+            logger.warning(f"Derive project_id from ticket gagal (non-fatal): {e}")
     # Chat by Project: guard owner/member workspace pemilik project
     if project_id:
         await _require_project_member(project_id, current_user)
@@ -648,6 +685,7 @@ async def send_chat_message(
     background_tasks.add_task(
         _run_pipeline, session_id, message,
         await _resolve_workspace_id(project_id), project_id, chat_depth,
+        body.chip_key,
     )
     return {"messageId": str(user_msg["_id"])}
 

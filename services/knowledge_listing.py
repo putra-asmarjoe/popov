@@ -17,6 +17,38 @@ _QUERY_KEYWORDS = ("dokumen", "knowledge", "pengetahuan", "grounding", "playbook
 _ASK_KEYWORDS = ("apa", "daftar", "list", "ada", "apa saja", "yang tersedia")
 
 
+_L = {
+    "id": {
+        "no_connections": "ℹ️ Tidak ada dokumen *connections* untuk service `{svc}` di Knowledge Library.",
+        "from_ticket": "🧩 Dari alert tiket, `{svc}` terhubung dengan: {others}",
+        "missing_docs": "   _Belum ada connection doc utk: {list}_",
+        "no_conn_detail": "ℹ️ Tidak ada detail koneksi untuk service ini (hubungkan service → tambah Knowledge).",
+        "escalation_line": "  - Eskalasi: primary `{p}` · slack `{slack}`",
+        "learned_line": "  - ➕ Berisi *Learned Patterns* (auto-generated)",
+        "no_linked": "\n🔗 *Knowledge Library:* (belum ada knowledge ter-link di project ini)",
+        "no_docs": "ℹ️ Tidak ada knowledge/dokumen terdaftar untuk service `{svc}`.",
+        "hint": "\n\n_Untuk isi lengkap setiap dokumen, silakan lihat halaman *Workspace → Settings → Services → Knowledge*._",
+        "proj_none": "📚 *Knowledge Project*\nBelum ada service ter-link pada project ini, jadi belum ada knowledge.\n_Link service lewat Workspace → Settings → Projects._",
+        "proj_empty": "Belum ada grounding docs maupun knowledge ter-link.",
+        "hint_marker": "\n\n_Untuk isi lengkap",
+    },
+    "en": {
+        "no_connections": "ℹ️ No *connections* document for service `{svc}` in the Knowledge Library.",
+        "from_ticket": "🧩 From the ticket alert, `{svc}` is connected to: {others}",
+        "missing_docs": "   _No connection doc yet for: {list}_",
+        "no_conn_detail": "ℹ️ No connection details for this service (link the service → add Knowledge).",
+        "escalation_line": "  - Escalation: primary `{p}` · slack `{slack}`",
+        "learned_line": "  - ➕ Contains *Learned Patterns* (auto-generated)",
+        "no_linked": "\n🔗 *Knowledge Library:* (no knowledge linked in this project yet)",
+        "no_docs": "ℹ️ No knowledge/documents registered for service `{svc}`.",
+        "hint": "\n\n_For the full content of each document, see *Workspace → Settings → Services → Knowledge*._",
+        "proj_none": "📚 *Project Knowledge*\nNo service is linked to this project yet, so there is no knowledge.\n_Link services via Workspace → Settings → Projects._",
+        "proj_empty": "No grounding docs or linked knowledge yet.",
+        "hint_marker": "\n\n_For the full content",
+    },
+}
+
+
 def is_knowledge_query(intent: str) -> bool:
     """Deteksi pertanyaan knowledge/dokumen service (bukan insiden/aksi)."""
     low = (intent or "").lower()
@@ -113,6 +145,7 @@ async def _connection_doc_from_library(service_id: str) -> Optional[dict]:
 async def build_service_connection_inventory(
     service_id: str,
     ticket_context: Optional[dict] = None,
+    locale: str = "id",
 ) -> str:
     """Jawab "X terhubung dengan service apa saja" — deterministik, tanpa LLM.
 
@@ -121,6 +154,7 @@ async def build_service_connection_inventory(
     2. Fallback: service yang terlibat dari alert tiket ("Services involved: ...").
     Sebelum Fix #199 pertanyaan ini ditolak supervisor sbg out-of-konteks.
     """
+    t = _L.get(locale, _L["en"])
     svc = (service_id or "").strip()
     lines: list[str] = []
     doc = await _connection_doc_from_library(svc) if svc else None
@@ -128,25 +162,25 @@ async def build_service_connection_inventory(
         lines.append(f"🔗 *Connection `{doc.get('name') or svc}`*")
         lines.append(_render_connection_sections(doc.get("content") or ""))
     else:
-        lines.append(f"ℹ️ Tidak ada dokumen *connections* untuk service `{svc}` di Knowledge Library.")
+        lines.append(t["no_connections"].format(svc=svc))
 
     involved = _services_involved(ticket_context)
     if involved:
-        others = [s for s in involved if s != svc]
+        others = [x for x in involved if x != svc]
         if others:
             lines.append("")
-            lines.append(f"🧩 Dari alert tiket, `{svc}` terhubung dengan: {', '.join(f'`{s}`' for s in others)}")
+            lines.append(t["from_ticket"].format(svc=svc, others=", ".join(f"`{x}`" for x in others)))
             missing = []
-            for s in involved:
-                if not await _connection_doc_from_library(s):
-                    missing.append(s)
+            for x in involved:
+                if not await _connection_doc_from_library(x):
+                    missing.append(x)
             if missing:
                 lines.append(
-                    "   _Belum ada connection doc utk: " + ", ".join(f"`{s}`" for s in missing) + "_"
+                    t["missing_docs"].format(list=", ".join(f"`{x}`" for x in missing))
                 )
     elif not doc:
         lines.append("")
-        lines.append("ℹ️ Tidak ada detail koneksi untuk service ini (hubungkan service → tambah Knowledge).")
+        lines.append(t["no_conn_detail"])
 
     if len(lines) == 1:
         return lines[0]
@@ -158,6 +192,7 @@ async def build_service_knowledge_inventory(
     workspace_id: Optional[str] = None,
     project_id: Optional[str] = None,
     detail: bool = False,
+    locale: str = "id",
 ) -> str:
     """Daftar knowledge/dokumen service — RINGKAS (list nama/type saja).
 
@@ -167,6 +202,7 @@ async def build_service_knowledge_inventory(
     Workspace-scoped: jika workspace_id diberikan, HANYA tampilkan grounding docs
     yang linked ke workspace via agent_doc_refs.
     """
+    t = _L.get(locale, _L["en"])
     lines: list[str] = []
 
     if workspace_id:
@@ -206,10 +242,10 @@ async def build_service_knowledge_inventory(
                 thr = meta.get("thresholds") or {}
                 lines.append(f"  - Collections: {meta.get('collections') or '-'}")
                 lines.append(f"  - Threshold: warning `{thr.get('error_count_warning')}` / critical `{thr.get('error_count_critical')}`")
-                lines.append(f"  - Eskalasi: primary `{esc.get('primary', '-')}` · slack `{esc.get('slack_channel', '-')}`")
+                lines.append(t["escalation_line"].format(p=esc.get('primary', '-'), slack=esc.get('slack_channel', '-')))
                 lines.append(f"  - Auto-remediation: {', '.join(meta.get('auto_remediation_allowed') or []) or '-'}")
             if "## Learned Patterns" in body:
-                lines.append("  - ➕ Berisi *Learned Patterns* (auto-generated)")
+                lines.append(t["learned_line"])
 
         if conn:
             lines.append(f"• 🔗 *Connection doc* `{conn.get('meta', {}).get('id') or service_id}`")
@@ -246,10 +282,10 @@ async def build_service_knowledge_inventory(
                 thr = meta.get("thresholds") or {}
                 lines.append(f"  - Collections: {meta.get('collections') or '-'}")
                 lines.append(f"  - Threshold: warning `{thr.get('error_count_warning')}` / critical `{thr.get('error_count_critical')}`")
-                lines.append(f"  - Eskalasi: primary `{esc.get('primary', '-')}` · slack `{esc.get('slack_channel', '-')}`")
+                lines.append(t["escalation_line"].format(p=esc.get('primary', '-'), slack=esc.get('slack_channel', '-')))
                 lines.append(f"  - Auto-remediation: {', '.join(meta.get('auto_remediation_allowed') or []) or '-'}")
             if "## Learned Patterns" in body:
-                lines.append("  - ➕ Berisi *Learned Patterns* (auto-generated)")
+                lines.append(t["learned_line"])
 
         conn = await get_connection_doc(service_id)
         if conn:
@@ -281,18 +317,14 @@ async def build_service_knowledge_inventory(
         for k in linked:
             lines.append(f"  - {k['folder']} / `{k['name']}`")
     elif project_id:
-        lines.append("\n🔗 *Knowledge Library:* (belum ada knowledge ter-link di project ini)")
+        lines.append(t["no_linked"])
 
     if not lines:
-        return f"ℹ️ Tidak ada knowledge/dokumen terdaftar untuk service `{service_id}`."
+        return t["no_docs"].format(svc=service_id)
 
-    header = f"📚 *Knowledge & Dokumen Service `{service_id}`*\n"
+    header = f"📚 *Knowledge & Documents — Service `{service_id}`*\n"
     body = "\n".join(lines)
-    hint = (
-        "\n\n_Untuk isi lengkap setiap dokumen, silakan lihat halaman "
-        "*Workspace → Settings → Services → Knowledge*._"
-    )
-    return header + body + hint
+    return header + body + t["hint"]
 
 
 async def _linked_knowledge_list(service_id: str, project_id: Optional[str] = None) -> list[dict]:
@@ -349,7 +381,7 @@ async def _linked_knowledge_list(service_id: str, project_id: Optional[str] = No
 
 
 async def build_project_knowledge_inventory(
-    project_id: str, workspace_id: Optional[str] = None
+    project_id: str, workspace_id: Optional[str] = None, locale: str = "id"
 ) -> str:
     """Daftar knowledge seluruh service ter-link project (Chat by Project fase 1).
     Deterministik, tanpa LLM: per service — grounding docs + knowledge library ter-link."""
@@ -362,12 +394,9 @@ async def build_project_knowledge_inventory(
         logger.warning(f"[KnowledgeListing] project refs gagal: {e}")
         service_ids = []
 
+    t = _L.get(locale, _L["en"])
     if not service_ids:
-        return (
-            "📚 *Knowledge Project*\n"
-            "Belum ada service ter-link pada project ini, jadi belum ada knowledge.\n"
-            "_Link service lewat Workspace → Settings → Projects._"
-        )
+        return t["proj_none"]
 
     header = f"📚 *Knowledge Project* ({len(service_ids)} service)\n"
     body_parts: list[str] = []
@@ -375,13 +404,9 @@ async def build_project_knowledge_inventory(
     for sid in service_ids:
         inv = await build_service_knowledge_inventory(sid, workspace_id, project_id, detail=False)
         # strip hint footer per-service (cukup sekali di akhir)
-        inv_clean = inv.split("\n\n_Untuk isi lengkap")[0]
+        inv_clean = inv.split("\n\n_")[0]  # strip hint footer (locale-agnostic)
         body_parts.append(f"\n*{sid}*\n{inv_clean}")
         total_items += inv_clean.count("•") + inv_clean.count("  - ")
     if total_items == 0:
-        return header + "\nBelum ada grounding docs maupun knowledge ter-link."
-    footer = (
-        "\n\n_Untuk isi lengkap setiap dokumen, silakan lihat halaman "
-        "*Workspace → Settings → Services → Knowledge*._"
-    )
-    return header + "".join(body_parts) + footer
+        return header + "\n" + t["proj_empty"]
+    return header + "".join(body_parts) + t["hint"]

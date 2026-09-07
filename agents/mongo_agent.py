@@ -159,6 +159,18 @@ async def mongo_agent(state: AgentState) -> dict:
             "next_agent": "response_agent",
             "agents_visited": agents_visited,
         }
+    except ValueError as e:
+        # Fix #235b: config log DB belum didaftarkan → degrade jujur, JANGAN
+        # bunuh pipeline (dulu: "Database query error" → pipeline finished with error).
+        logger.warning(f"Log DB config missing for '{service_name}': {e}")
+        return {
+            "raw_documents": [],
+            "query_used": {},
+            "mongo_summary": f"⚠️ Log DB untuk service '{service_name}' belum dikonfigurasi — pilar log dilewati (degraded).",
+            "mongo_available": False,
+            "next_agent": "response_agent",
+            "agents_visited": agents_visited,
+        }
     except Exception as e:
         logger.error(f"Database query failed: {e}")
         return {

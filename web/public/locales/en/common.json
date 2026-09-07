@@ -6,7 +6,8 @@
     "logout": "Logout",
     "all_projects": "All projects",
     "pick_project": "Pick a project…",
-    "role": "Role"
+    "role": "Role",
+    "preferences": "Preferences"
   },
   "action": {
     "save": "Save",

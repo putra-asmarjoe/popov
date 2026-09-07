@@ -212,6 +212,26 @@ def _build_dynamic_buttons(state: dict, locale: str = "en") -> Optional[dict]:
     return {"inline_keyboard": buttons}
 
 
+async def _user_context_for(state) -> str:
+    """USER_PROFILE_PLAN Phase 3: blok `### USER CONTEXT` utk prompt LLM.
+
+    Hanya berlaku utk user WEB (sender.user_id ObjectId) di workspace aktif —
+    profil scoped per (user, workspace). Telegram (sender.id = telegram id) &
+    tanpa workspace → "" (helper aman, render threshold D5 di dalam).
+    """
+    try:
+        from services.user_profile import render_user_context_block
+
+        sender = state.get("sender") or {}
+        uid = sender.get("user_id")
+        wsid = state.get("workspace_id")
+        if not uid or not wsid:
+            return ""
+        return await render_user_context_block(str(uid), str(wsid))
+    except Exception:
+        return ""
+
+
 async def response_agent(state: AgentState) -> dict:
     """
     1. Jika ini task Health Check (state memuat health_result): Format laporan status konektivitas & latency.
@@ -266,9 +286,11 @@ async def response_agent(state: AgentState) -> dict:
         except Exception:
             _span_locale = "id"
         try:
+            user_context = await _user_context_for(state)
             formatted = await _format_span_with_llm(intent, trace_id, span_summary, span_data, doc_context,
                                                 history=state.get("conversation_history"),
-                                                reply_language=("English" if _span_locale == "en" else "Bahasa Indonesia"))
+                                                reply_language=("English" if _span_locale == "en" else "Bahasa Indonesia"),
+                                                user_context=user_context)
         except Exception as e:
             logger.error(f"Span LLM formatting failed: {e}")
             formatted = _format_span_fallback(trace_id, span_summary) + await llm_unavailable_note_for(state)
@@ -309,9 +331,11 @@ async def response_agent(state: AgentState) -> dict:
         except Exception:
             _dloc = "id"
         try:
+            user_context = await _user_context_for(state)
             formatted = await _format_data_with_llm(
                 intent, service_name, documents,
                 reply_language=("English" if _dloc == "en" else "Bahasa Indonesia"),
+                user_context=user_context,
             )
         except Exception as e:
             logger.error(f"Data LLM formatting failed: {e}")
@@ -341,9 +365,11 @@ async def response_agent(state: AgentState) -> dict:
         except Exception:
             _floc = "id"
         try:
+            user_context = await _user_context_for(state)
             formatted = await _format_follow_up(
                 intent, follow_up_context,
                 reply_language=("English" if _floc == "en" else "Bahasa Indonesia"),
+                user_context=user_context,
             )
         except Exception as e:
             logger.error(f"Follow-up LLM formatting failed: {e}")
@@ -424,10 +450,12 @@ async def response_agent(state: AgentState) -> dict:
     try:
         correlation_result = state.get("correlation_result")
         # FASE 4A: span turut dianalisis di correlation → LLM telegram otomatis lebih kaya, cukup tambah catatan
+        user_context = await _user_context_for(state)
         formatted = await _format_with_llm(
             intent, service_name, documents, doc_context, incident_history, correlation_result,
             history=state.get("conversation_history"),
             locale=locale,
+            user_context=user_context,
         )
         if state.get("span_available") and state.get("correlation_result"):
             formatted += "\n\n" + _SPAN_OTEL_NOTE.get(locale, _SPAN_OTEL_NOTE["en"])
@@ -520,14 +548,27 @@ async def response_agent(state: AgentState) -> dict:
             from services.diagnostic_session import create_session, _get_first_question
             from services.telegram_client import send_message as _diag_send
 
+            # Fix #234: sesi diagnostik ikut bahasa user — deteksi sekali di sini,
+            # disimpan di session doc (advance_session render dari sana).
+            try:
+                from services.conversation import detect_chat_locale
+                from services.user_store import get_user_locale
+                _ulocale_diag = await get_user_locale((state.get("sender") or {}).get("user_id"))
+                _diag_locale = detect_chat_locale(
+                    state.get("conversation_history") or [], default=_ulocale_diag
+                )
+            except Exception:
+                _diag_locale = "id"
+
             async def _run_diag():
                 try:
                     sid = await create_session(
-                        episode_id_diag, service_name, root_cause, str(chat_id_diag), notif_id=notif_diag
+                        episode_id_diag, service_name, root_cause, str(chat_id_diag),
+                        notif_id=notif_diag, locale=_diag_locale,
                     )
                     if not sid:
                         return
-                    q, btns = _get_first_question(root_cause)
+                    q, btns = _get_first_question(root_cause, locale=_diag_locale)
                     if not q:
                         return
                     # btns is list[dict], kirim sebagai 1 row
@@ -619,6 +660,7 @@ async def _format_with_llm(
     correlation_result: dict = None,
     history: Optional[list] = None,
     locale: str = "id",
+    user_context: str = "",
 ) -> str:
     """LLM analisis log dengan grounding dari dokumen service + riwayat insiden + observability correlation.
 
@@ -693,6 +735,7 @@ async def _format_with_llm(
         incident_history_block=incident_history_block,
         history_block=history_block,
         reply_language=("English" if locale == "en" else "Bahasa Indonesia"),
+        user_context=user_context,
     )
 
     messages = [
@@ -815,7 +858,7 @@ async def _fallback_message(
 
 
 async def _format_follow_up(intent: str, follow_up_context: dict,
-                            reply_language: str = "English") -> str:
+                            reply_language: str = "English", user_context: str = "") -> str:
     """Format jawaban pertanyaan lanjutan menggunakan konteks riwayat sebelumnya.
     reply_language (Fix bahasa): jalur follow-up wajib bahasa eksplisit (pola #201/#222)."""
     if not follow_up_context or follow_up_context.get("not_found"):
@@ -838,7 +881,7 @@ async def _format_follow_up(intent: str, follow_up_context: dict,
 
     user_content = render_prompt(
         "telegram_followup_user", intent=intent, followup_block=followup_block,
-        reply_language=reply_language,
+        reply_language=reply_language, user_context=user_context,
     )
 
     messages = [
@@ -878,7 +921,7 @@ def _format_follow_up_fallback(follow_up_context: dict, locale: str = "id") -> s
 
 
 async def _format_data_with_llm(intent: str, service_name: str, documents: list,
-                                reply_language: str = "English") -> str:
+                                reply_language: str = "English", user_context: str = "") -> str:
     """Format data mentah yang diminta user (bukan analisis error).
     reply_language (Fix bahasa): jalur data wajib bahasa eksplisit — sama pola
     Fix #201/#217, bukan "same language as user" yang lemah."""
@@ -897,6 +940,7 @@ async def _format_data_with_llm(intent: str, service_name: str, documents: list,
     user_content = render_prompt(
         "telegram_data_user", intent=intent, service_name=service_name,
         records_block=records_block, reply_language=reply_language,
+        user_context=user_context,
     )
 
     messages = [
@@ -947,6 +991,7 @@ async def _format_span_with_llm(
     doc_context: str = "",
     history: Optional[list] = None,
     reply_language: str = "English",
+    user_context: str = "",
 ) -> str:
     """LLM menceritakan apa yang sebenarnya terjadi pada satu traceId (dari app_logs_db).
     reply_language (Fix bahasa CPRO-19): "English" / "Bahasa Indonesia" — prompt span
@@ -988,6 +1033,7 @@ async def _format_span_with_llm(
         extra_block=extra_block,
         history_block=history_block,
         reply_language=reply_language,
+        user_context=user_context,
     )
 
     messages = [

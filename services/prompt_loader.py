@@ -143,7 +143,10 @@ IMPORTANT: Write the entire reply in the language specified in the user prompt. 
 
 {{incident_history_block}}
 
-{{history_block}}""",
+{{history_block}}
+
+{{user_context}}
+IMPORTANT: Reply in {{reply_language}}. All prose, labels, and explanations must be in {{reply_language}} — never mix or default to another language.""",
     "telegram_span_system": """You are an AI ops assistant tracing a traceId in centralized OpenTelemetry logging (app_logs_db: span_logs + http_logs).
 Your task: narrate WHAT ACTUALLY HAPPENED on that trace based on the provided span data — request flow, involved services,
 which span failed/was slow, the failure point (candidate root cause), durations, status codes, and business context (business attributes).
@@ -168,6 +171,7 @@ TraceID: {{trace_id}}
 
 {{history_block}}
 
+{{user_context}}
 Narrate what actually happened on this trace and recommend next steps.
 
 IMPORTANT: Reply in {{reply_language}}. All prose, labels, and explanations must be in {{reply_language}} — never mix or default to another language.""",
@@ -181,6 +185,7 @@ Service: `{{service_name}}`
 
 {{records_block}}
 
+{{user_context}}
 Display those records as the latest data — do NOT turn them into an error analysis.
 
 IMPORTANT: Reply in {{reply_language}}. All prose, labels, and explanations must be in {{reply_language}} — never mix or default to another language.""",
@@ -192,6 +197,7 @@ IMPORTANT: Write the entire reply in the language specified in the user prompt (
 
 {{followup_block}}
 
+{{user_context}}
 Answer the user's question referring to the context above.
 
 IMPORTANT: Reply in {{reply_language}}. All prose, labels, and explanations must be in {{reply_language}} — never mix or default to another language.""",
@@ -309,6 +315,24 @@ Output format:
 
 Write ONLY the Learned Patterns section, no other text.
 Reply in the same language the user used in their latest message.""",
+
+    "user_profile_infer": """You are a behavior analyst for an AI ops assistant. You infer a user's COMMUNICATION PREFERENCES from their interaction patterns — never from conversation content (privacy).
+
+INPUT — anonymous interaction summary (counters only):
+{{counter_summary}}
+
+Fields you may suggest (choose ONLY fields marked "candidate"):
+{{field_candidates}}
+
+Rules:
+1. Suggest values ONLY when the counters give clear evidence. When in doubt, omit the field.
+2. Never invent specific services, names, or details not present in the summary.
+3. You are suggesting DRAFT preferences — the user approves before they take effect.
+4. Output ONLY JSON, no explanation:
+{"suggestions": [{"field": "<field>", "value": "<enum value>", "reason": "<short reason>"}]}
+5. Empty suggestions are valid: {"suggestions": []} when evidence is weak.
+6. Only use valid enum values for each field (see field_candidates).
+7. The "reason" must be short, factual, and reference the counter evidence (e.g. "active in morning hours", "frequent investigation requests").""",
 
     "supervisor_lane": """You are a routing classifier for a ticket-support AI. Decide which LANE a user message belongs to.
 

@@ -7,6 +7,7 @@ TraceID: {{trace_id}}
 
 {{history_block}}
 
+{{user_context}}
 Narrate what actually happened on this trace and recommend next steps.
 
 IMPORTANT: Reply in {{reply_language}}. All prose, labels, and explanations must be in {{reply_language}} — never mix or default to another language.

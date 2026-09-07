@@ -108,6 +108,51 @@ PROJECT_QUERY_KW = [
     "aktivitas", "alert", "knowledge", "dokumen", "playbook",
 ]
 
+# Fix #232: keyword KNOWLEDGE-spesifik (bukan PROJECT_QUERY_KW yang bor —
+# "ticket" ikut di situ dan akan menyandera pertanyaan tiket yang sah).
+# Gate ini hanya aktif di chat ber-ticket_context (lihat _arbitrate_or_redirect).
+_PROJECT_KNOWLEDGE_KW = ("knowledge", "dokumen", "document", "playbook")
+
+def _ticket_chat_project_route(state: dict, agents_visited: list) -> Optional[dict]:
+    """Fix #235b: gate knowledge/chips level project untuk chat tiket — SATU helper
+    untuk SEMUA jalur dead-end (dulu cuma di _arbitrate_or_redirect; jalur
+    strategy_4 memanggil arbiter langsung dan BYPASS gate → insiden buta).
+    Frasa spesifik per gate, bukan PROJECT_QUERY_KW yang bor ("ticket" ikut di situ)."""
+    tc = state.get("ticket_context")
+    low = (state.get("intent") or "").lower()
+    if not tc:
+        return None
+    # Fix #235: project_id bisa tidak ada di state (sesi tiket dibuat tanpa
+    # projectId) — fallback dari ticket_context.projectId.
+    _proj_id = state.get("project_id") or (tc or {}).get("projectId")
+    if not _proj_id:
+        return None
+    hit = any(kw in low for kw in _PROJECT_KNOWLEDGE_KW) or any(
+        kw in low for kw in _PROJECT_TICKETS_KW
+    )
+    if not hit:
+        return None
+    logger.info("[Supervisor] ticket-chat project gate → project_agent "
+                f"(kw knowledge={any(k in low for k in _PROJECT_KNOWLEDGE_KW)})")
+    return {
+        "service_name": "",
+        "collection_name": "",
+        "next_agent": "project_agent",
+        "agents_visited": agents_visited,
+        "routing_strategy": "project_query",
+        "routing_flag": "ticket_chat_knowledge",
+        "error": None,
+    }
+
+
+# Fix #233: chip "Show open tickets" / "Tampilkan tiket yang masih terbuka" —
+# pertanyaan PROJECT-WIDE (bukan tiket aktif). Frasa spesifik, bukan "ticket"
+# generik — "summarize this ticket" tidak kena.
+_PROJECT_TICKETS_KW = (
+    "show open tickets", "open tickets", "tiket terbuka",
+    "tampilkan tiket", "berapa tiket", "total tiket",
+)
+
 # Fix #191 + Fix #195: gate tiket (is_ticket_intent) TIDAK boleh menelan permintaan
 # data/log/analisis yang kebetulan menyebut "tiket". Kata query = tanda user minta
 # data/log/history (kata BENDA, bukan kata kerja generik — "lihat/tampilkan/show"
@@ -313,22 +358,54 @@ async def _list_project_refs(project_id: str) -> list[dict]:
         return []
 
 
-def _ticket_redirect(state: dict, agents_visited: list) -> dict:
-    """Guard out-of-konteks: chat tiket + pesan tanpa lane/service → arahkan kembali ke tiket.
-    Deterministik (tanpa LLM) — dijamin tidak menjawab chit-chat/umum. Return reply normal."""
-    tc = state.get("ticket_context") or {}
-    num = tc.get("ticketNumber") or "?"
-    title = tc.get("title") or ""
-    head = f"⚠️ Saya fokus membantu tiket yang sedang dibuka (nomor {num}." + (f" — {title}" if title else "") + ")"
-    return {
-        "next_agent": "response_agent",
-        "formatted_message": (
-            f"{head}\nPertanyaan itu di luar konteks tiket ini. Mau saya bantu:\n"
+_REDIRECT_TEXTS = {
+    "id": {
+        "llm_note": "\n\nℹ️ Pemahaman konteks terbatas saat ini (model bahasa tidak tersedia) — coba parafrase, atau ulangi nanti.",
+        "head": "⚠️ Saya fokus membantu tiket yang sedang dibuka (nomor {num}.",
+
+        "body": (
+            "\nPertanyaan itu di luar konteks tiket ini. Mau saya bantu:\n"
             "  • Menutup / membuka kembali tiket\n"
             "  • Mengubah status / severity / label\n"
             "  • Menambah catatan progress · Assign tiket\n"
             "  • Merangkum kondisi tiket ini"
         ),
+    },
+    "en": {
+        "llm_note": "\n\nℹ️ Context understanding is limited right now (the language model is unavailable) — rephrase, or try again later.",
+        "head": "⚠️ I'm focused on the ticket you have open (number {num}.",
+
+        "body": (
+            "\nThat question is outside this ticket's context. Want me to:\n"
+            "  • Close / reopen the ticket\n"
+            "  • Change status / severity / label\n"
+            "  • Add a progress note · Assign the ticket\n"
+            "  • Summarize this ticket"
+        ),
+    },
+}
+
+
+def _ticket_redirect(state: dict, agents_visited: list, llm_note: bool = False) -> dict:
+    """Guard out-of-konteks: chat tiket + pesan tanpa lane/service → arahkan kembali ke tiket.
+    Deterministik (tanpa LLM) — dijamin tidak menjawab chit-chat/umum. Return reply normal.
+    Bilingual (Fix #232): ikuti reply_language / deteksi dari riwayat — jangan hardcode ID."""
+    tc = state.get("ticket_context") or {}
+    num = tc.get("ticketNumber") or "?"
+    title = tc.get("title") or ""
+    locale = (state.get("reply_language") or "").lower()
+    if locale not in ("en", "id"):
+        try:
+            from services.conversation import detect_chat_locale
+            locale = detect_chat_locale(state.get("conversation_history"), default="en")
+        except Exception:
+            locale = "en"
+    t = _REDIRECT_TEXTS.get(locale, _REDIRECT_TEXTS["en"])
+    head = t["head"].format(num=num) + (f" — {title}" if title else "")
+    note = t.get("llm_note", "") if llm_note else ""
+    return {
+        "next_agent": "response_agent",
+        "formatted_message": f"{head}{t['body']}{note}",
         "agents_visited": agents_visited,
         "routing_strategy": None,
         "routing_flag": None,
@@ -340,7 +417,10 @@ def _ticket_redirect(state: dict, agents_visited: list) -> dict:
 # Saat SEMUA gate deterministik gagal di chat ber-ticket_context (dead-end
 # "_ticket_redirect" / jatuh ke insiden buta via strategy_4 preset), LLM
 # mengklasifikasikan lane secara bahasa-agnostik. Fallback = perilaku lama.
-LANE_CHOICES = ("ticket_question", "ticket_action", "data_request", "follow_up", "incident", "other")
+LANE_CHOICES = (
+    "ticket_question", "ticket_action", "data_request", "follow_up",
+    "incident", "knowledge", "project", "other",
+)
 LANE_CONFIDENCE_THRESHOLD = 0.55
 
 
@@ -417,17 +497,43 @@ def _route_arbitrated_lane(state: dict, agents_visited: list, lane: str,
         if svc:
             return {**common, "service_name": svc, "collection_name": col, "next_agent": "triage_agent"}
         return _ticket_redirect(state, agents_visited)
+    # Fix #239: lane knowledge/project → project_agent (read-only, aman di chat tiket)
+    if lane in ("knowledge", "project"):
+        _proj_id = state.get("project_id") or (state.get("ticket_context") or {}).get("projectId")
+        if _proj_id:
+            return {**common, "service_name": "", "collection_name": "", "next_agent": "project_agent"}
+        return _ticket_redirect(state, agents_visited)
     return _ticket_redirect(state, agents_visited)
 
 
 async def _arbitrate_or_redirect(state: dict, agents_visited: list,
                                  matched_service: Optional[str], service_map: dict) -> dict:
-    """Lapis 5 trigger: arbitrasi lane; bila None/LLM down → _ticket_redirect (lama)."""
+    """Lapis 5 trigger: arbitrasi lane; bila None/LLM down → _ticket_redirect (lama).
+
+    Fix #232: SEBELUM arbitrasi, gate knowledge level project — chip
+    "What knowledge is available in this project" di-offer di chat tiket, tapi
+    tanpa gate ini dia dead-end → redirect (chip yang tidak bisa dijawab).
+    project_agent read-only, aman dipanggil dari konteks tiket (preseden Fix #199
+    melakukannya untuk connection query)."""
+    # Fix #235b: gate project-level dari helper bersama (jalur mana pun).
+    gate_route = _ticket_chat_project_route(state, agents_visited)
+    if gate_route:
+        return gate_route
+    intent_low = (state.get("intent") or "").lower()
     tc = state.get("ticket_context")
     if tc:
+        # Fix #239: chip/known-action = contract, bukan natural language —
+        # JANGAN panggil LLM arbiter untuk itu (dulu "Check deployment (58min
+        # ago)" habis 1 panggilan LLM hanya untuk disebut data_request).
+        from services.conversation import _is_technical_intent
+        if _is_technical_intent(intent_low):
+            logger.info(f"[LaneArbiter] skipped (technical/chip intent): '{intent_low[:60]}'")
+            return _route_arbitrated_lane(state, agents_visited, "data_request", matched_service, service_map)
         lane = await _llm_arbiter_lane(state, state.get("intent", ""), matched_service, tc)
         if lane:
             return _route_arbitrated_lane(state, agents_visited, lane, matched_service, service_map)
+        # Fix #239: arbiter None (= LLM down/low-confidence) → redirect + catatan jujur
+        return _ticket_redirect(state, agents_visited, llm_note=True)
     return _ticket_redirect(state, agents_visited)
 
 
@@ -822,8 +928,23 @@ async def supervisor_agent(state: AgentState) -> dict:
         # lane data/insiden, bukan dianggap aksi tiket.
         _has_query_word = any(w in intent for w in _TICKET_GATE_QUERY_WORDS)
         _has_action_verb = any(w in intent for w in _TICKET_GATE_ACTION_WORDS)
+        # Fix #238: connection/knowledge query punya gate dedicated di bawah
+        # (jawaban deterministik dari knowledge library). Jangan biarkan gate
+        # pertanyaan-tiket menelan duluan — dulu "what service connected to
+        # this ticket?" → ticket summary generik, padahal inventory tersedia.
+        # Keyword knowledge/sama dgn gate project (Fix #232) — is_knowledge_query
+        # saja terlalu sempit ("is knowledge relevant with this ticket?" tak lolos).
+        _low_intent = intent.lower()
         if _has_query_word and not _has_action_verb:
             logger.info(f"Ticket-intent gate skipped (data/log query): '{intent}'")
+        elif (
+            is_connection_query(intent)
+            or is_knowledge_query(intent)
+            or any(kw in _low_intent for kw in _PROJECT_KNOWLEDGE_KW)
+            or "open tickets" in _low_intent
+            or "tiket terbuka" in _low_intent
+        ):
+            logger.info(f"Ticket-intent gate skipped (connection/knowledge query): '{intent}'")
         else:
             logger.info(f"Ticket intent detected: '{intent}'")
             return {
@@ -846,7 +967,8 @@ async def supervisor_agent(state: AgentState) -> dict:
             from services.knowledge_listing import build_service_knowledge_inventory
             _want_detail = any(k in intent for k in ("detail", "isi", "baca", "rinci", "lengkap"))
             inventory = await build_service_knowledge_inventory(
-                matched_service, state.get("workspace_id"), state.get("project_id"), detail=_want_detail
+                matched_service, state.get("workspace_id"), state.get("project_id"),
+                detail=_want_detail, locale=_k_locale,
             )
         except Exception as e:
             logger.warning(f"Knowledge inventory failed: {e}")
@@ -878,7 +1000,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             try:
                 from services.knowledge_listing import build_service_connection_inventory
                 inventory = await build_service_connection_inventory(
-                    _conn_svc, state.get("ticket_context")
+                    _conn_svc, state.get("ticket_context"), locale=_c_locale
                 )
             except Exception as e:
                 logger.warning(f"Connection inventory failed: {e}")
@@ -1138,6 +1260,16 @@ async def supervisor_agent(state: AgentState) -> dict:
     # semua lane gagal → pesan ambigu ("blabla", "ya cek log database X") seharusnya
     # TIDAK otomatis jadi insiden buta. Arbitrasi lane via LLM; fallback = insiden.
     if routing_strategy == "strategy_4" and state.get("ticket_context"):
+        # Fix #235b: gate project-level DULU — dulu jalur ini bypass gate dan
+        # saat arbiter down (LLM gagal) jatuh ke insiden buta → mongo_agent
+        # → error db config (kasus chip knowledge di CPRO-33).
+        gate_route = _ticket_chat_project_route(state, agents_visited)
+        if gate_route:
+            return gate_route
+        from services.conversation import _is_technical_intent
+        if _is_technical_intent(intent_raw.lower()):
+            logger.info(f"[LaneArbiter/s4] skipped (technical/chip intent): '{intent_raw[:60]}'")
+            return _route_arbitrated_lane(state, agents_visited, "data_request", matched_service, service_map)
         lane = await _llm_arbiter_lane(state, intent_raw, matched_service, state.get("ticket_context"))
         if lane:
             return _route_arbitrated_lane(state, agents_visited, lane, matched_service, service_map)

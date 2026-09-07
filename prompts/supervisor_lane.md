@@ -14,11 +14,15 @@ Choose EXACTLY one lane:
 - data_request: user wants to SEE raw data / logs / records / a table (of a service, database, or collection)
 - follow_up: user refers to something from the previous conversation ("what about that one", "continue", "the one you mentioned", "itu tadi", "lanjutkan", "yang barusan")
 - incident: user reports an error / failure / issue to be investigated
+- knowledge: user asks about documents / knowledge / playbooks of a service or the project ("what knowledge is available", "is there a playbook", "dokumen apa saja")
+- project: user asks project-level info (open tickets, ticket counts, project stats, services linked to the project) — NOT about this specific ticket
 - other: anything else (greeting, chit-chat, off-topic, unclear)
 
 Rules:
 - A question or a request to read/view data is NEVER ticket_action.
 - If the user asks to see logs/data/history → data_request.
+- If the user asks what documents/knowledge/playbooks exist → knowledge.
+- If the user asks about the project as a whole (open tickets, totals, connected services across the project) → project.
 - If the user says yes and then a new instruction (e.g. "yes check the database logs") → route by the INSTRUCTION, not the "yes".
 - When in doubt, set confidence below 0.5.
 

@@ -136,6 +136,21 @@ async def data_agent(state: AgentState) -> dict:
             "next_agent": "end",
             "agents_visited": agents_visited,
         }
+    except ValueError as e:
+        # Fix #235b: config log DB belum didaftarkan → jawab jujur, JANGAN error pipeline.
+        logger.warning(f"DataAgent log DB config missing for '{service_name}': {e}")
+        return {
+            "raw_documents": [],
+            "query_used": {},
+            "data_mode": True,
+            "error": None,
+            "formatted_message": (
+                f"⚠️ Log DB untuk service '{service_name}' belum dikonfigurasi.\n"
+                f"Daftarkan service + koneksi log-nya di *Workspace → Settings → Service*."
+            ),
+            "next_agent": "response_agent",
+            "agents_visited": agents_visited,
+        }
     except Exception as e:
         logger.error(f"DataAgent query failed: {e}")
         return {

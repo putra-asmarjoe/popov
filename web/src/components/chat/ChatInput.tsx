@@ -7,17 +7,21 @@ import { useChatStore } from "@/store/chat.store"
 
 /** Input chat: textarea autosize + kirim/stop. Chat selalu terikat tiket (1 sesi = 1 tiket).
  *  Props `value`/`onTextChange` opsional — controlled draft (dipakai ChatPanel utk chips
- *  suggestions); tanpa props, state internal dipakai (perilaku lama). */
+ *  suggestions); tanpa props, state internal dipakai (perilaku lama).
+ *  `chipKey` (USER_PROFILE_PLAN Phase 2): identifier chip asal draft — dikirim sekali
+ *  saat submit; parent reset via onTextChange saat user mengetik manual. */
 export function ChatInput({
   sessionId,
   disabled,
   value: externalValue,
   onTextChange,
+  chipKey,
 }: {
   sessionId: string
   disabled?: boolean
   value?: string
   onTextChange?: (v: string) => void
+  chipKey?: string
 }) {
   const { t } = useTranslation("project")
   const [internalText, setInternalText] = useState("")
@@ -44,7 +48,7 @@ export function ChatInput({
     const value = text.trim()
     if (value.length < 2 || isStreaming || disabled) return
     setText("")
-    void sendMessage(sessionId, value)
+    void sendMessage(sessionId, value, undefined, chipKey)
   }
 
   return (

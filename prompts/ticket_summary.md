@@ -8,6 +8,7 @@ PREVIOUS CONVERSATION (use to resolve "that one"/"continue"):
 
 User question: "{{intent}}"
 
+{{user_context}}
 Explain this ticket's condition in {{reply_language}}, in Telegram Markdown
 (single asterisk for bold, example *text*). Mention: status, severity, service, who created it &
 assignees, tags, and summarize the progress log (if any). DO NOT invent data not present in the JSON.

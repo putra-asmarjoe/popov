@@ -48,7 +48,7 @@ interface ChatStore {
   openTrace: (messageId: string, traces: AgentTrace[], requestId?: string | null) => void
   closeTrace: () => void
 
-  sendMessage: (sessionId: string, text: string, mode?: string) => Promise<void>
+  sendMessage: (sessionId: string, text: string, mode?: string, chipKey?: string) => Promise<void>
   /** Ikut stream yang SUDAH berjalan di server (mis. setelah refresh) — Fix #114 */
   attachStream: (sessionId: string) => void
   stopStream: () => void
@@ -103,7 +103,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ activeTraceMessageId: null, activeTraceMessages: [], activeTraceRequestId: null })
   },
 
-  async sendMessage(sessionId, text, mode) {
+  async sendMessage(sessionId, text, mode, chipKey) {
     const { streaming, appendMessage } = get()
     if (streaming[sessionId]?.isStreaming) return
 
@@ -121,10 +121,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // Konteks tiket di-handle backend via session.ticketId (Fix #49) — user
     // tidak perlu melihat teks yang bukan dia ketik.
     // Chat by Project: mode depth opsional (low/medium/thinking).
+    // USER_PROFILE_PLAN Phase 2: chipKey opsional (identifier chip asal pesan)
+    // → dicatat counter chips_clicked di backend (bukan bagian dari teks).
     try {
       await api.post(`/chat/sessions/${sessionId}/send`, {
         message: text,
         ...(mode ? { mode } : {}),
+        ...(chipKey ? { chip_key: chipKey } : {}),
       })
     } catch (error) {
       toast.error(apiErrorMessage(error, i18n.t("project:chat.send_failed")))

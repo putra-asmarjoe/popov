@@ -6,7 +6,8 @@
     "logout": "Keluar",
     "all_projects": "Semua project",
     "pick_project": "Pilih project…",
-    "role": "Role"
+    "role": "Role",
+    "preferences": "Preferensi"
   },
   "action": {
     "save": "Simpan",

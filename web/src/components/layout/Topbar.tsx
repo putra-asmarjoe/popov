@@ -1,6 +1,6 @@
 import { Link, useNavigate } from "react-router-dom"
 import { useTranslation } from "react-i18next"
-import { ChevronsUpDown, LogOut, FolderKanban } from "lucide-react"
+import { ChevronsUpDown, LogOut, FolderKanban, SlidersHorizontal } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -110,6 +110,12 @@ export function Topbar() {
               <Badge variant="secondary" className="ml-auto capitalize">
                 {user?.role}
               </Badge>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem className="gap-2" asChild>
+              <Link to="/account/preferences">
+                <SlidersHorizontal className="size-4" /> {t("nav.preferences")}
+              </Link>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem

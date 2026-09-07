@@ -10,12 +10,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { useWorkspaceServiceGroups } from "@/hooks/useServicesLib"
+import { useProjectServices } from "@/hooks/useServicesLib"
 
 interface ServicePickerDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Service yang sudah terpilih */
+  /** Project pemilik tiket — sumber daftar service ter-link project. */
+  projectId: string | null
+  /** Service yang sudah terpilih di tiket */
   selected: string[]
   /** Callback saat user simpan */
   onConfirm: (serviceIds: string[]) => void
@@ -23,18 +25,21 @@ interface ServicePickerDialogProps {
 }
 
 /**
- * Dialog multi-select service dari daftar service yang ter-link ke project.
- * Dari project_service_refs (sama dengan panel workspace service hierarki).
+ * Dialog multi-select service dari daftar service yang ter-link ke PROJECT
+ * (project_service_refs via GET /services/projects/{projectId}).
+ * Fix: sebelumnya salah pakai `useWorkspaceServiceGroups(null)` → query disabled
+ * → daftar selalu kosong ("No services connected to this project yet").
  */
 export function ServicePickerDialog({
   open,
   onOpenChange,
+  projectId,
   selected,
   onConfirm,
   pending,
 }: ServicePickerDialogProps) {
   const { t } = useTranslation("project")
-  const { data: groups } = useWorkspaceServiceGroups(null)
+  const { data: services, isLoading } = useProjectServices(projectId)
   const [picks, setPicks] = useState<Set<string>>(new Set(selected))
 
   // Sync picks saat dialog buka (selected berubah)
@@ -43,15 +48,6 @@ export function ServicePickerDialog({
     setLastOpen(open)
     if (open) setPicks(new Set(selected))
   }
-
-  // Flatten semua service dari semua project dalam workspace
-  const allServices = (groups ?? []).flatMap((g) =>
-    g.services.map((s) => ({
-      serviceId: s.serviceId,
-      label: s.label || s.serviceId,
-      projectName: g.projectName,
-    })),
-  )
 
   const toggle = (id: string) => {
     setPicks((prev) => {
@@ -62,6 +58,11 @@ export function ServicePickerDialog({
     })
   }
 
+  const list = (services ?? []).map((s) => ({
+    serviceId: s.serviceId,
+    label: s.label || s.serviceId,
+  }))
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
@@ -70,13 +71,15 @@ export function ServicePickerDialog({
           <DialogDescription>{t("service_picker.desc")}</DialogDescription>
         </DialogHeader>
 
-        {allServices.length === 0 ? (
+        {isLoading ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">…</p>
+        ) : list.length === 0 ? (
           <p className="py-4 text-center text-sm text-muted-foreground">
             {t("service_picker.empty")}
           </p>
         ) : (
           <div className="max-h-72 space-y-0.5 overflow-y-auto rounded-md border p-1">
-            {allServices.map((svc) => {
+            {list.map((svc) => {
               const isChecked = picks.has(svc.serviceId)
               return (
                 <label
@@ -90,7 +93,6 @@ export function ServicePickerDialog({
                     onChange={() => toggle(svc.serviceId)}
                   />
                   <span className="min-w-0 flex-1 truncate">{svc.label}</span>
-                  <span className="truncate text-[10px] text-muted-foreground">{svc.projectName}</span>
                   {isChecked && <Check className="size-3.5 shrink-0 text-primary" />}
                 </label>
               )

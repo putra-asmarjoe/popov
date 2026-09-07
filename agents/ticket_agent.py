@@ -409,7 +409,8 @@ async def _build_ticket_summary_deterministic(ticket: Dict[str, Any], project: D
 
 
 async def _build_ticket_summary(ticket: Dict[str, Any], project: Dict[str, Any], intent: str,
-                                history: Optional[List[dict]] = None, reply_language: str = "English") -> str:
+                                history: Optional[List[dict]] = None, reply_language: str = "English",
+                                user_context: str = "") -> str:
     """Jawab pertanyaan tentang tiket memakai LLM (konteks tiket + riwayat). Fallback deterministik.
     reply_language (Fix #144): kunci bahasa jawaban — "English" / "Bahasa Indonesia"."""
     import asyncio
@@ -449,6 +450,7 @@ async def _build_ticket_summary(ticket: Dict[str, Any], project: Dict[str, Any],
             history=hist_lines,
             intent=intent,
             reply_language=reply_language,
+            user_context=user_context,
         )
         resp = await asyncio.wait_for(
             llm.ainvoke([SystemMessage(content="Answer concisely in Telegram Markdown."), HumanMessage(content=prompt)]),
@@ -477,6 +479,18 @@ async def _ticket_suggestions(ticket: Dict[str, Any], project: Dict[str, Any], s
                                   max_items=3, intent=state.get("intent") or "")
 
 
+async def _user_context_for_state(user_id: str, workspace_id: str) -> str:
+    """USER_PROFILE_PLAN Phase 3: blok User Context dari profil (user web + workspace tiket)."""
+    try:
+        from services.user_profile import render_user_context_block
+
+        if not user_id or not workspace_id:
+            return ""
+        return await render_user_context_block(str(user_id), str(workspace_id))
+    except Exception:
+        return ""
+
+
 async def ticket_agent(state: dict) -> dict:
     agents_visited = state.get("agents_visited", []) + ["ticket_agent"]
     intent = state.get("intent", "")
@@ -494,8 +508,9 @@ async def ticket_agent(state: dict) -> dict:
     # Fix #197 (Lapis 5): lane arbiter memaksa pertanyaan → summary (bypass parse aksi).
     if state.get("ticket_question_forced"):
         _reply_lang = "English" if locale == "en" else "Bahasa Indonesia"
+        _uctx = await _user_context_for_state(str(user["_id"]), str(ws.get("_id", "")))
         summary = await _build_ticket_summary(ticket, project, intent,
-                                              state.get("conversation_history"), _reply_lang)
+                                              state.get("conversation_history"), _reply_lang, _uctx)
         suggestions = await _ticket_suggestions(ticket, project, state)
         return await _reply(state, agents_visited, summary,
                             {"ok": True, "action": "summary", "ticket_id": str(ticket["_id"])},
@@ -503,8 +518,9 @@ async def ticket_agent(state: dict) -> dict:
 
     if is_ticket_question(intent):
         _reply_lang = "English" if locale == "en" else "Bahasa Indonesia"
+        _uctx = await _user_context_for_state(str(user["_id"]), str(ws.get("_id", "")))
         summary = await _build_ticket_summary(ticket, project, intent,
-                                              state.get("conversation_history"), _reply_lang)
+                                              state.get("conversation_history"), _reply_lang, _uctx)
         suggestions = await _ticket_suggestions(ticket, project, state)
         return await _reply(state, agents_visited, summary,
                             {"ok": True, "action": "summary", "ticket_id": str(ticket["_id"])},

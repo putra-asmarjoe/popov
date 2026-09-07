@@ -68,13 +68,64 @@ STATE_MACHINE = {
     ],
 }
 
+# Fix #234: teks EN per stage — STATE_MACHINE tetap sumber ID + callback_data.
+# Render pilih locale: en → map ini; id → STATE_MACHINE apa adanya.
+_EN_TEXTS = {
+    "downstream": {
+        "awaiting_timeframe": {
+            "question": "Is this a new incident, or has it been going on for a while?",
+            "buttons": ["🆕 Just started", "🔄 Ongoing for a while", "❓ Not sure"],
+        },
+        "awaiting_escalation": {
+            "question": "Should I escalate to the payment team now?",
+            "buttons": ["📣 Yes, escalate", "⏳ Hold off for now"],
+        },
+    },
+    "service-fault": {
+        "awaiting_deploy_info": {
+            "question": "Was there a deployment for this service in the last 2 hours?",
+            "buttons": ["✅ Yes, there was a deploy", "❌ No deploy", "❓ Not sure"],
+        },
+    },
+    "unknown": {
+        "awaiting_scope": {
+            "question": "Are all endpoints affected, or only specific ones?",
+            "buttons": ["🌐 All endpoints", "🎯 Specific endpoints"],
+        },
+        "awaiting_endpoint_detail": {
+            "question": "List the affected endpoints (e.g. /api/v1/orders)",
+            "buttons": None,
+        },
+    },
+}
+
+
+def _stage_texts(root_cause: str, stage: str, locale: str = "id") -> Optional[dict]:
+    """Render question + buttons satu stage per locale (callback_data tetap sama)."""
+    flow = _get_flow(root_cause)
+    st = next((s for s in flow if s["stage"] == stage), None)
+    if not st:
+        return None
+    if locale == "en":
+        en = _EN_TEXTS.get(root_cause, {}).get(stage)
+        if en:
+            btns = None
+            if st.get("buttons") and en.get("buttons"):
+                btns = [
+                    {"text": txt, "callback_data": b["callback_data"]}
+                    for txt, b in zip(en["buttons"], st["buttons"])
+                ]
+            return {"question": en["question"], "buttons": btns}
+    return {"question": st["question"], "buttons": st.get("buttons")}
+
+
 def _get_flow(root_cause: str) -> list[dict]:
     return STATE_MACHINE.get(root_cause, STATE_MACHINE["unknown"])
 
 
-def _get_first_question(root_cause: str) -> tuple[str, Optional[list]]:
+def _get_first_question(root_cause: str, locale: str = "id") -> tuple[str, Optional[list]]:
     flow = _get_flow(root_cause)
-    first = flow[0]
+    first = _stage_texts(root_cause, flow[0]["stage"], locale) or flow[0]
     return first["question"], first["buttons"]
 
 
@@ -84,6 +135,7 @@ async def create_session(
     root_cause: str,
     chat_id: str,
     notif_id: Optional[str] = None,
+    locale: str = "id",
 ) -> Optional[str]:
     """Buat sesi diagnostik baru setelah laporan. Return session_id atau None.
 
@@ -96,15 +148,19 @@ async def create_session(
     session_id = f"DS-{episode_id}"
     now = datetime.now(timezone.utc)
     expires = now + timedelta(minutes=TTL_MINUTES)
+    if locale not in ("en", "id"):
+        locale = "id"
+    first_q = _get_first_question(root_cause, locale)[0]
     doc = {
         "session_id": session_id,
         "service_name": service_name,
         "root_cause": root_cause,
+        "locale": locale,  # Fix #234: bahasa sesi — dipakai advance_session render
         "stage": _get_flow(root_cause)[0]["stage"],
         "context": {
             "original_episode_id": episode_id,
             "answers": [],
-            "last_question": _get_flow(root_cause)[0]["question"],
+            "last_question": first_q,
         },
         "chat_id": str(chat_id),
         "notif_id": str(notif_id) if notif_id else None,
@@ -244,13 +300,14 @@ async def advance_session(session_id: str, user_answer: str) -> dict:
             # Sederhananya: cari flow dengan stage == next_stage
             next_flow = next((s for s in flow if s["stage"] == next_stage), None)
             if next_flow:
+                _rendered = _stage_texts(root_cause, next_stage, sess.get("locale", "id")) or next_flow
                 await db[COLLECTION].update_one(
                     {"session_id": session_id},
-                    {"$set": {"stage": next_stage, "context.answers": answers, "context.last_question": next_flow["question"]}},
+                    {"$set": {"stage": next_stage, "context.answers": answers, "context.last_question": _rendered["question"]}},
                 )
                 return {
-                    "next_question": next_flow["question"],
-                    "next_buttons": next_flow["buttons"],
+                    "next_question": _rendered["question"],
+                    "next_buttons": _rendered["buttons"],
                     "trigger_pipeline": trigger_pipeline,
                     "completed": False,
                 }

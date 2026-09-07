@@ -50,5 +50,5 @@ export function useAuth() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionChecked])
 
-  return { user, token, isAuthenticated, sessionChecked, login, register, logout }
+  return { user, token, isAuthenticated, sessionChecked, login, register, logout, setUser }
 }

@@ -61,6 +61,12 @@ QUESTION_KEYWORDS = (
     "check tiket", "check ticket", "cek tiket", "periksa tiket",
     "explain this ticket", "explain the ticket", "what's happening", "what is happening",
     "check this ticket", "what happened",
+    # chip "Summarize this ticket" / "Ringkas tiket ini" (build_chat_suggestions severity key,
+    # Fix #243 follow-up): label persis chip ini adalah PERTANYAAN ringkasan — tanpa ini
+    # intent jatuh ke parse_ticket_intent (LLM) yang saat model down/insufficient-credits
+    # berakhir fallback "I'm focused on the ticket..." alih-alih summary tiket.
+    # "summarize/summary" EN; "ringkas" ID sudah tercakup di daftar atas.
+    "summarize", "summarise", "summary",
 )
 
 

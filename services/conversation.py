@@ -68,7 +68,8 @@ def _is_technical_intent(text: str) -> bool:
         return False
     return any(p in t for p in ("cek error pada", "berikan ", "detail trace ", "cek koneksi",
                                 "cek metrics", "rawlog", "health_check", "metrics:", "detail:",
-                                "cek error terakhir", "centrall log"))
+                                "cek error terakhir", "centrall log",
+                                "check deployment", "cek deployment"))  # Fix #239: chip deploy
 
 
 async def build_conversation_history(
@@ -101,15 +102,32 @@ def _render_history(history: Optional[List[dict]]) -> str:
     return "\n".join(f"[{h.get('role')}] {h.get('content', '')}" for h in history[-6:])
 
 
-def _fallback_question(mode: str, options: Optional[List[str]]) -> str:
-    opts = "\n".join(f"  • {o}" for o in (options or [])) or "-"
+_FALLBACK_QUESTION_TEXTS = {
+    "id": {
+        "service_choice": "Service mana yang kamu maksud?",
+        "ticket_steer": (
+            "Saya fokus membantu tiket yang sedang dibuka.\n"
+            "Mau saya bantu dengan salah satu berikut?\n"
+        ),
+    },
+    "en": {
+        "service_choice": "Which service do you mean?",
+        "ticket_steer": (
+            "I'm focused on the ticket you have open.\n"
+            "Want me to help with one of the following?\n"
+        ),
+    },
+}
+
+
+def _fallback_question(mode: str, options: Optional[List[str]], locale: str = "en") -> str:
+    """Bilingual (Fix #232): ikuti locale chat — dulu hardcode Indonesia."""
+    t = _FALLBACK_QUESTION_TEXTS.get(locale, _FALLBACK_QUESTION_TEXTS["en"])
     if mode == "service_choice":
-        return f"Service mana yang kamu maksud?\n{opts}"
-    return (
-        "Saya fokus membantu tiket yang sedang dibuka.\n"
-        "Mau saya bantu dengan salah satu berikut?\n"
-        f"{opts}"
-    )
+        opts = "\n".join(f"  • {o}" for o in (options or [])) or "-"
+        return f"{t['service_choice']}\n{opts}"
+    opts = "\n".join(f"  • {o}" for o in (options or [])) or "-"
+    return f"{t['ticket_steer']}{opts}"
 
 
 _MODE_RULES = {
@@ -151,6 +169,7 @@ async def clarify_reply(
     ctx = context_text or "-"
     opt_str = "\n".join(f"- {o}" for o in options) or "-"
     rule = _MODE_RULES.get(mode, _MODE_RULES["ticket_action"])
+    locale = detect_chat_locale(history, default="en")
 
     try:
         from langchain_core.messages import SystemMessage, HumanMessage
@@ -185,7 +204,7 @@ async def clarify_reply(
         question = str(result.get("question") or "").strip()
         if isinstance(route, dict) and route.get("action") in ACTION_WHITELIST:
             return {"route": {"action": route["action"], "params": route.get("params") or {}}, "question": question}
-        return {"route": None, "question": question or _fallback_question(mode, options)}
+        return {"route": None, "question": question or _fallback_question(mode, options, locale)}
     except Exception as e:
         logger.warning(f"[Conversation] clarify_reply LLM failed ({mode}): {e}")
-        return {"route": None, "question": _fallback_question(mode, options)}
+        return {"route": None, "question": _fallback_question(mode, options, locale)}

@@ -99,6 +99,16 @@ async def main() -> None:
     except Exception as e:
         logger.warning(f"[WatchdogWorker] verification not started: {e}")
 
+    # 4. User Profile batch inference loop (Phase 4, USER_PROFILE_PLAN.md)
+    try:
+        from config.settings import settings as wd_settings
+        from services.user_profile_infer import start_infer_loop
+        interval = getattr(wd_settings, "profile_infer_interval_sec", 3600)
+        tasks.append(asyncio.create_task(start_infer_loop(interval_sec=interval), name="user-profile-infer"))
+        logger.info(f"[WatchdogWorker] user-profile-infer loop started interval={interval}s")
+    except Exception as e:
+        logger.warning(f"[WatchdogWorker] user-profile-infer not started: {e}")
+
     try:
         await asyncio.gather(*tasks)
     except asyncio.CancelledError:

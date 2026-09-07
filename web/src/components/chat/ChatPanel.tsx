@@ -37,6 +37,9 @@ export function ChatPanel({
   const activeTraceRequestId = useChatStore((s) => s.activeTraceRequestId)
   // Draft terisi dari chips suggestions (recommended questions) — klik chip → isi input
   const [draft, setDraft] = useState("")
+  // USER_PROFILE_PLAN Phase 2: chipKey asal draft (untuk counter chips_clicked).
+  // Terkirim sekali saat submit; di-reset bila user mengetik/ubah isi draft manual.
+  const [pendingChipKey, setPendingChipKey] = useState<string | undefined>(undefined)
 
   // Lebar panel Agent Trace — bisa di-resize user (drag divider), persist per user
   const { width: traceWidth, onPointerDown: traceResize } = useDragResize({
@@ -143,7 +146,7 @@ export function ChatPanel({
                     <button
                       type="button"
                       onClick={() => {
-                        void sendMessage(ticketSession.id, t("chat.check_ticket"))
+                        void sendMessage(ticketSession.id, t("chat.check_ticket"), undefined, "check_ticket")
                       }}
                       className="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/5 px-2.5 py-1 text-left text-xs font-medium text-primary hover:bg-primary/10"
                       aria-label={t("chat.check_ticket_aria")}
@@ -154,8 +157,24 @@ export function ChatPanel({
                   </div>
                 </div>
               )}
-              <ChatSuggestions suggestions={suggestions} onPick={setDraft} onSend={(t) => void sendMessage(ticketSession.id, t)} />
-              <ChatInput sessionId={ticketSession.id} value={draft} onTextChange={setDraft} />
+              <ChatSuggestions
+                suggestions={suggestions}
+                onPick={(text, chipKey) => {
+                  setDraft(text)
+                  setPendingChipKey(chipKey)
+                }}
+                onSend={(text, chipKey) => void sendMessage(ticketSession.id, text, undefined, chipKey)}
+              />
+              <ChatInput
+                sessionId={ticketSession.id}
+                value={draft}
+                chipKey={pendingChipKey}
+                onTextChange={(v) => {
+                  setDraft(v)
+                  // User mengetik manual (atau mengubah hasil pick chip) → chipKey basi
+                  if (v !== draft) setPendingChipKey(undefined)
+                }}
+              />
             </>
           ) : (
             <div className="flex flex-1 items-center justify-center text-xs text-muted-foreground">

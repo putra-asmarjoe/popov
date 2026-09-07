@@ -271,11 +271,10 @@ def build_chat_suggestions(
         out.append(("knowledge", chat_suggestion("knowledge", locale)))
 
     # Filter: skip chip yang topiknya sudah ada di intent user (redundancy polish #215)
+    # Fix #237: BOLEH KOSONG — chip tidak wajib selalu ada; bila semua topik sudah
+    # ditanya user, tidak ada chip lebih baik daripada chip redundan
+    # (perilaku lama memaksa balik daftar asli → chip yang baru ditanya muncul lagi).
     filtered = [(k, s) for k, s in out if not _intent_asked_topic(intent, k)]
-    # Jangan sampai kosong: bila filter membuang SEMUA chip, kembalikan daftar asli
-    # (redundansi ringan lebih baik daripada tanpa panduan).
-    if not filtered and out:
-        filtered = out
 
     # dedup + batas
     seen: List[str] = []
@@ -418,8 +417,9 @@ def build_contextual_suggestions(state: Dict[str, Any], reply_language: str = "E
             intent=state.get("intent") or "",  # Fix #215: skip chip topik yang sudah ditanya
         )
 
-    # — Selalu tambah chip tiket di akhir —
-    suggestions.append(texts["ticket"])
+    # — Chip tiket HANYA bila memang ada konteks tiket (Fix #237: tidak dipaksa) —
+    if state.get("ticket_context"):
+        suggestions.append(texts["ticket"])
 
     # Gabungkan: gap chips selalu di posisi pertama (primary CTA)
     all_suggestions: List[Any] = gap_chips + suggestions

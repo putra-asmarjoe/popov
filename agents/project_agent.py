@@ -92,11 +92,11 @@ async def _gather_ticket_stats(project_id: str, hours_today: float) -> tuple[Lis
         open_groups = {str(k): int(v) for k, v in (all_time.get("groups") or {}).items() if k in OPEN_STATUSES}
         blocks.append(
             "[TICKETS]\n"
-            f"- Total tiket (semua waktu): {all_time['total']}\n"
-            f"- Tiket terbuka (semua waktu): {sum(open_groups.values())} — status: {open_groups}\n"
-            f"- Tiket masuk hari ini (~{int(hours_today)} jam): {today['total']}\n"
-            f"- Status hari ini: {groups}\n"
-            f"- Jenis hari ini: {kinds['groups'] or '{}'}"
+            f"- Total tickets (all time): {all_time['total']}\n"
+            f"- Open tickets (all time): {sum(open_groups.values())} — status: {open_groups}\n"
+            f"- Tickets today (~{int(hours_today)}h): {today['total']}\n"
+            f"- Status today: {groups}\n"
+            f"- Kinds today: {kinds['groups'] or '{}'}"
         )
     except Exception as e:
         logger.warning(f"[project_agent] ticket stats gagal: {e}")
@@ -204,12 +204,14 @@ async def _gather_errors(ws_id: Optional[str], project_id: Optional[str], hours:
     return blocks
 
 
-async def _gather_knowledge(project_id: Optional[str], ws_id: Optional[str]) -> str:
+async def _gather_knowledge(
+    project_id: Optional[str], ws_id: Optional[str], locale: str = "en"
+) -> str:
     from services.knowledge_listing import build_project_knowledge_inventory
 
     if not project_id:
         return "[KNOWLEDGE] no project context"
-    return await build_project_knowledge_inventory(project_id, ws_id)
+    return await build_project_knowledge_inventory(project_id, ws_id, locale=locale)
 
 
 def _build_suggestions(
@@ -356,6 +358,13 @@ async def project_agent(state: AgentState) -> dict:
     alert_services: List[str] = []
     error_services: List[str] = []
 
+    # ── 4. Deteksi bahasa chat: isi percakapan dulu, preferensi user fallback ──
+    from services.user_store import get_user_locale
+
+    history = state.get("conversation_history") or []
+    user_locale = await get_user_locale((state.get("sender") or {}).get("user_id"))
+    locale = _detect_chat_locale(history, default=user_locale)
+
     if want_tickets:
         stats, today_groups, open_groups = await _gather_ticket_stats(project_id, hours)
         facts_blocks.extend(stats)
@@ -413,14 +422,7 @@ async def project_agent(state: AgentState) -> dict:
                     continue
 
     if want_knowledge:
-        facts_blocks.append(await _gather_knowledge(project_id, ws_id))
-
-    # ── 4. Deteksi bahasa chat: isi percakapan dulu, preferensi user fallback ──
-    from services.user_store import get_user_locale
-
-    history = state.get("conversation_history") or []
-    user_locale = await get_user_locale((state.get("sender") or {}).get("user_id"))
-    locale = _detect_chat_locale(history, default=user_locale)
+        facts_blocks.append(await _gather_knowledge(project_id, ws_id, locale=locale))
 
     suggestions = _build_suggestions(
         want_tickets=want_tickets, want_errors=want_errors, want_knowledge=want_knowledge,
@@ -439,6 +441,16 @@ async def project_agent(state: AgentState) -> dict:
     formatted = ""
     if _has_llm:
         try:
+            # USER_PROFILE_PLAN Phase 3: blok User Context (web user + workspace ini)
+            user_context = ""
+            try:
+                from services.user_profile import render_user_context_block
+
+                _uid = (state.get("sender") or {}).get("user_id")
+                if _uid and ws_id:
+                    user_context = await render_user_context_block(str(_uid), str(ws_id))
+            except Exception:
+                user_context = ""
             llm = get_chat_llm(temperature=0.2)
             messages = [
                 SystemMessage(content=render_prompt("project_system")),
@@ -448,6 +460,7 @@ async def project_agent(state: AgentState) -> dict:
                     facts_block="\n\n".join(facts_blocks),
                     history_block=history_block,
                     reply_language=("English" if locale == "en" else "Bahasa Indonesia"),
+                    user_context=user_context,
                 )),
             ]
             resp = await llm.ainvoke(messages)

@@ -34,6 +34,9 @@ export function ProjectChatPage() {
   const { wsSlug = "", sessionId = "" } = useParams()
   const [text, setText] = useState("")
   const [mode, setMode] = useState<ChatMode>("low")
+  // USER_PROFILE_PLAN Phase 2: chipKey asal draft (counter chips_clicked) — reset
+  // bila user mengubah isi draft manual (bukan pick chip).
+  const [pendingChipKey, setPendingChipKey] = useState<string | undefined>(undefined)
   const { activeWorkspace } = useWorkspaceStore()
   const { data: projects } = useProjects(activeWorkspace?.id ?? null)
   const sessionsQuery = useChatSessions(null, 100) // Fix G1
@@ -147,7 +150,21 @@ export function ProjectChatPage() {
                 </button>
               ))}
             </div>
-            <ProjectChatInput sessionId={sessionId} mode={mode} onTextChange={setText} draft={text} suggestions={suggestions} />
+            <ProjectChatInput
+              sessionId={sessionId}
+              mode={mode}
+              chipKey={pendingChipKey}
+              onTextChange={(v) => {
+                setText(v)
+                if (v !== text) setPendingChipKey(undefined)
+              }}
+              onPickChip={(label, ck) => {
+                setText(label)
+                setPendingChipKey(ck)
+              }}
+              draft={text}
+              suggestions={suggestions}
+            />
           </div>
         </div>
       </div>
@@ -170,14 +187,18 @@ function ProjectChatInput({
   sessionId,
   mode,
   onTextChange,
+  onPickChip,
   draft,
   suggestions,
+  chipKey,
 }: {
   sessionId: string
   mode: ChatMode
   onTextChange: (v: string) => void
+  onPickChip?: (text: string, chipKey?: string) => void
   draft: string
   suggestions: Suggestion[]
+  chipKey?: string
 }) {
   const { t } = useTranslation("pchat")
   const sendMessage = useChatStream().sendMessage
@@ -199,12 +220,20 @@ function ProjectChatInput({
     const value = draft.trim()
     if (value.length < 2 || !sessionId || isStreaming) return
     onTextChange("")
-    void sendMessage(sessionId, value, mode)
+    void sendMessage(sessionId, value, mode, chipKey)
   }
 
   return (
     <div className="space-y-2">
-      <ChatSuggestions suggestions={suggestions} onPick={onTextChange} onSend={(t) => void sendMessage(sessionId, t, mode)} contentClassName="max-w-3xl" />
+      <ChatSuggestions
+        suggestions={suggestions}
+        onPick={(label, ck) => {
+          if (onPickChip) onPickChip(label, ck)
+          else onTextChange(label)
+        }}
+        onSend={(t, ck) => void sendMessage(sessionId, t, mode, ck)}
+        contentClassName="max-w-3xl"
+      />
       <div className="flex items-end gap-2">
       <Textarea
         ref={taRef}

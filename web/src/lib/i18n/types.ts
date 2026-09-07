@@ -29,5 +29,6 @@ export const NAMESPACES = [
   "settings",
   "onboarding",
   "pchat",
+  "account",
 ] as const
 export type Namespace = (typeof NAMESPACES)[number]

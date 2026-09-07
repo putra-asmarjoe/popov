@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils"
-import type { Suggestion, SuggestionChip } from "@/lib/chat-meta"
+import { chipKeyOf, type Suggestion, type SuggestionChip } from "@/lib/chat-meta"
 
 function isChip(s: Suggestion): s is SuggestionChip {
   return typeof s === "object" && s !== null && "label" in s
@@ -10,7 +10,8 @@ function isChip(s: Suggestion): s is SuggestionChip {
  * Dua tipe (Gap 5):
  *  - investigation (🔍): klik → auto-send action identifier ("investigate:<node>") via onSend
  *  - general (💡): klik → isi input (onPick) — user bisa edit dulu (existing behavior)
- * DRY: dipakai chat tiket (ChatPanel) & chat project (ProjectChatPage).
+ * USER_PROFILE_PLAN Phase 2: chipKey ikut dikirim (key stabil / action) → counter
+ * chips_clicked di backend. DRY: dipakai chat tiket (ChatPanel) & chat project (ProjectChatPage).
  */
 export function ChatSuggestions({
   suggestions,
@@ -20,8 +21,8 @@ export function ChatSuggestions({
   contentClassName,
 }: {
   suggestions: Suggestion[]
-  onPick: (text: string) => void
-  onSend?: (text: string) => void
+  onPick: (text: string, chipKey?: string) => void
+  onSend?: (text: string, chipKey?: string) => void
   className?: string
   contentClassName?: string
 }) {
@@ -39,9 +40,9 @@ export function ChatSuggestions({
               type="button"
               onClick={() => {
                 if (isInvestigation && sug.action && onSend) {
-                  onSend(sug.action)
+                  onSend(sug.action, chipKeyOf(sug))
                 } else {
-                  onPick(label)
+                  onPick(label, chipKeyOf(sug))
                 }
               }}
               className={cn(

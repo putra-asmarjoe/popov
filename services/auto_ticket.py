@@ -96,6 +96,26 @@ async def maybe_create_watchdog_ticket(
     created: List[Dict[str, Any]] = []
     ticket_refs: Dict[str, List[str]] = {"new": [], "linked": []}
     try:
+        # Fix #246: canonicalize nama service mentah (suffix devops "-apps", prefix
+        # "prod-") → serviceId library kanonik + cek alias hasil link manual user.
+        # Dipakai utk resolve project & tulis tiket; service raw tetap dipakai di
+        # pesan/notif (sumber asal alert) supaya user mengenali apa yang dia lihat.
+        canonical_svc = service
+        try:
+            from services.ticket_store import library_service_ids, resolve_service_alias
+            from services.service_name_utils import canonical_service
+
+            _libs = await library_service_ids()
+            _alias = await resolve_service_alias(service)
+            canonical_svc = _alias or canonical_service(service, _libs) or service
+        except Exception as e:
+            logger.warning(f"Auto-ticket: canonicalize service gagal (non-fatal): {e}")
+        logger.info(
+            f"Auto-ticket: service '{service}' → canonical '{canonical_svc}'"
+            if canonical_svc != service else
+            f"Auto-ticket: service '{service}' (sudah kanonik)"
+        )
+
         observ_target = None
         if observ_id:
             try:
@@ -109,7 +129,7 @@ async def maybe_create_watchdog_ticket(
 
         projects = await resolve_projects_for_incident(
             workspace_id=workspace_id,
-            service_name=service,
+            service_name=canonical_svc,
             observ_target=observ_target,
         )
         if not projects:
@@ -188,13 +208,13 @@ async def maybe_create_watchdog_ticket(
                     severity=_ticket_severity(alerts),
                     environment="production",
                     trace_id=str(trace_id) if trace_id else None,
-                    tags=["watchdog", service],
+                    tags=["watchdog", service] + ([canonical_svc] if canonical_svc != service else []),
                     source="watchdog",
                     fingerprint=fingerprint,
                     content_fp=base_fp,
                     initial_note=f"Ticket auto-created by watchdog (alert {alert_id or '-'})",
-                    service_name=service,
-                    service_ids=[service],
+                    service_name=canonical_svc,
+                    service_ids=[canonical_svc],
                 )
                 # Alert pertama → dokumen alert ter-link ke tiket baru
                 await record_ticket_alert(

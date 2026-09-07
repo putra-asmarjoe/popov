@@ -92,7 +92,11 @@ async def update_locale(user_id: str, locale: str) -> bool:
 
 async def get_user_locale(user_id: Optional[str]) -> str:
     """Preferensi bahasa user ("en"/"id") utk pesan fallback backend (Fix #113).
-    user_id bukan ObjectId / tidak ditemukan → "id" (perilaku legacy pesan ID)."""
+    user_id bukan ObjectId / tidak ditemukan → "id" (perilaku legacy pesan ID).
+
+    NOTE (USER_PROFILE_PLAN.md §1 / Q5): field ini = SUMBER TUNGGAL bahasa user.
+    Collection `user_profiles` (services/user_profile.py) TIDAK menyimpan locale —
+    reference ke sini. Merge/deprecate baru dipertimbangkan setelah Phase 4 stabil."""
     try:
         from bson import ObjectId
         if not user_id or len(str(user_id)) != 24:
