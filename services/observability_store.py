@@ -47,12 +47,13 @@ def invalidate_obs_cfg_cache() -> None:
 # Typed stacks (Fix #45): satu stack mewakili SATU jenis sumber.
 # "otel" (Central Log OTel): konfigurasi DB span_logs/http_logs pindah dari .env
 # ke stack DB — resolusi via get_central_log_config_for_state (fallback .env legacy).
-TARGET_KINDS = ["prometheus", "tempo", "alertmanager", "loki", "otel"]
+TARGET_KINDS = ["prometheus", "tempo", "alertmanager", "loki", "otel", "k8s"]
 KIND_URL_FIELD = {
     "prometheus": "prometheus_url",
     "tempo": "tempo_url",
     "alertmanager": "alertmanager_url",
     "loki": "loki_url",
+    "k8s": "k8s_api_url",
     # "otel" tanpa url field — pakai log_db_uri/log_db_name/collections
 }
 
@@ -69,6 +70,7 @@ PROBE_PATHS = {
     "tempo": "/ready",
     "alertmanager": "/-/ready",
     "loki": "/ready",
+    "k8s": "/api/v1/namespaces",
 }
 
 
@@ -149,15 +151,24 @@ async def create_target(
     log_db_name: str = "",
     span_collection: str = DEFAULT_SPAN_COLLECTION,
     http_collection: str = DEFAULT_HTTP_COLLECTION,
+    # kind="k8s" (Fix #261)
+    k8s_api_url: str = "",
+    k8s_token: Optional[str] = None,
+    k8s_namespace: str = "",
+    k8s_verify_ssl: bool = False,
 ) -> dict:
-    """kind (Fix #45): tipe stack — prometheus/tempo/alertmanager/loki/otel.
+    """kind (Fix #45): tipe stack — prometheus/tempo/alertmanager/loki/otel/k8s.
     Wajib di UI baru; None ditoleransi untuk data legacy (resolusi skip kind kosong).
-    kind="otel": wajib log_db_uri + log_db_name (Central Log DB, multi-DB menyusul)."""
+    kind="otel": wajib log_db_uri + log_db_name (Central Log DB, multi-DB menyusul).
+    kind="k8s": wajib k8s_api_url (Fix #261)."""
     if kind is not None and kind not in TARGET_KINDS:
         raise ValueError(f"kind '{kind}' tidak valid (opsi: {TARGET_KINDS})")
     if kind == "otel":
         _validate_otel_fields(log_db_type, log_db_uri, log_db_name)
         await _ensure_single_otel(workspace_id)
+    if kind == "k8s":
+        if not (k8s_api_url or "").strip():
+            raise ValueError("K8s API URL wajib diisi")
     """
     Buat target baru. Return {target, webhook_token} — token plaintext HANYA
     sekali ini dikembalikan (untuk ditampilkan/copy di UI), DB simpan hash.
@@ -190,10 +201,22 @@ async def create_target(
             "span_collection": (span_collection or "").strip() or DEFAULT_SPAN_COLLECTION,
             "http_collection": (http_collection or "").strip() or DEFAULT_HTTP_COLLECTION,
         })
+    if kind == "k8s":
+        from services.secret_crypto import encrypt_secret
+        doc.update({
+            "k8s_api_url": (k8s_api_url or "").strip(),
+            "k8s_token_enc": encrypt_secret(k8s_token) if k8s_token else None,
+            "k8s_namespace": (k8s_namespace or "").strip() or "default",
+            "k8s_verify_ssl": bool(k8s_verify_ssl),
+        })
     await coll.insert_one(doc)
     doc["_id"] = str(doc["_id"])
     logger.info(f"[ObservStore] created target {doc['observ_id']} ws={workspace_id} kind={kind} webhook_mode={webhook_mode}")
-    return {"target": _strip_secret(doc), "webhook_token": token}
+    result = {"target": _strip_secret(doc), "webhook_token": token}
+    # kind=k8s: return one-time plaintext token for UI copy (Fix #261)
+    if kind == "k8s" and k8s_token:
+        result["k8s_token_once"] = k8s_token
+    return result
 
 
 def _validate_otel_fields(log_db_type: str, log_db_uri: str, log_db_name: str) -> None:
@@ -235,6 +258,8 @@ async def update_target(observ_id: str, patch: Dict[str, Any]) -> bool:
         "webhook_mode", "poll_interval_seconds", "enabled",
         "log_db_type", "log_db_uri", "log_db_name",
         "span_collection", "http_collection",
+        # kind="k8s" (Fix #261)
+        "k8s_api_url", "k8s_token", "k8s_namespace", "k8s_verify_ssl",
     }
     clean = {
         k: v for k, v in patch.items()
@@ -269,6 +294,20 @@ async def update_target(observ_id: str, patch: Dict[str, Any]) -> bool:
         for coll_key, default in (("span_collection", DEFAULT_SPAN_COLLECTION), ("http_collection", DEFAULT_HTTP_COLLECTION)):
             if coll_key in clean and not str(clean[coll_key]).strip():
                 clean[coll_key] = default
+
+    # kind=k8s: encrypt token, validate URL, default namespace (Fix #261)
+    if eff_kind == "k8s":
+        from services.secret_crypto import encrypt_secret
+        k8s_url = clean.get("k8s_api_url")
+        if k8s_url is not None and not str(k8s_url).strip():
+            raise ValueError("K8s API URL wajib diisi")
+        # encrypt plaintext token → k8s_token_enc
+        k8s_tok = clean.pop("k8s_token", None)
+        if k8s_tok is not None:
+            clean["k8s_token_enc"] = encrypt_secret(k8s_tok) if k8s_tok else None
+        # default namespace
+        if "k8s_namespace" in clean and not str(clean["k8s_namespace"]).strip():
+            clean["k8s_namespace"] = "default"
 
     clean["updated_at"] = _now()
     result = await _collection().update_one({"observ_id": observ_id}, {"$set": clean})
@@ -330,6 +369,17 @@ async def record_health_status(observ_id: str, status: str) -> None:
 def _strip_secret(doc: dict) -> dict:
     d = dict(doc)
     d.pop("webhook_secret_hash", None)
+    # kind=k8s: mask token, show only last-4 (Fix #261)
+    k8s_enc = d.pop("k8s_token_enc", None)
+    if k8s_enc:
+        from services.secret_crypto import decrypt_secret
+        try:
+            plain = decrypt_secret(k8s_enc) or ""
+            d["k8s_token_masked"] = f"***{plain[-4:]}" if len(plain) >= 4 else "****" if plain else ""
+        except Exception:
+            d["k8s_token_masked"] = "****"
+    else:
+        d["k8s_token_masked"] = ""
     return d
 
 
@@ -354,7 +404,8 @@ def mask_log_uri(uri: Optional[str]) -> str:
 
 
 def mask_otel_target(doc: dict) -> dict:
-    """Response API untuk kind=otel: ganti log_db_uri mentah dgn versi tersamar.
+    """Response API: ganti secret mentah dgn versi tersamar.
+    kind=otel → log_db_uri_masked; kind=k8s → k8s_token_masked.
     Resolver internal baca langsung dari DB — masking hanya di lapisan API."""
     d = dict(doc)
     if "log_db_uri" in d:
@@ -362,6 +413,18 @@ def mask_otel_target(doc: dict) -> dict:
         if not d.get("log_db_uri"):
             d.pop("log_db_uri_masked", None)
         d.pop("log_db_uri", None)
+    # kind=k8s: remove k8s_token_enc, expose masked token (Fix #262 security)
+    if "k8s_token_enc" in d:
+        k8s_enc = d.pop("k8s_token_enc")
+        if k8s_enc:
+            from services.secret_crypto import decrypt_secret
+            try:
+                plain = decrypt_secret(k8s_enc) or ""
+                d["k8s_token_masked"] = f"***{plain[-4:]}" if len(plain) >= 4 else "****" if plain else ""
+            except Exception:
+                d["k8s_token_masked"] = "****"
+        else:
+            d["k8s_token_masked"] = ""
     return d
 
 
@@ -437,6 +500,45 @@ def build_observ_config(target: Optional[dict]) -> Optional[Dict[str, str]]:
     return cfg
 
 
+async def resolve_k8s_targets_for_state(state: dict) -> List[Dict[str, Any]]:
+    """
+    Fix #268: SEMUA target kind=k8s untuk konteks state (project-linked > ws-wide,
+    sama seperti resolve_targets_for_project) — TIDAK di-collapse ke satu stack.
+    Project boleh punya >1 cluster K8s (mis. K8s Prox + K8s Core); inventory lane
+    butuh daftar penuh agar bisa query semua cluster.
+    Return [{observ_id, name, api_url, token(decrypted), namespace, verify_ssl}],
+    sorted created_at (deterministik). Kosong = tidak ada stack K8s.
+    """
+    try:
+        targets = await resolve_targets_for_project(
+            state.get("workspace_id"), state.get("project_id")
+        )
+        out: List[Dict[str, Any]] = []
+        for t in sorted(targets, key=lambda x: x.get("created_at") or _now()):
+            if t.get("kind") != "k8s":
+                continue
+            url = (t.get("k8s_api_url") or "").strip()
+            if not url:
+                continue
+            try:
+                from services import secret_crypto
+                tok = secret_crypto.decrypt_secret(t.get("k8s_token_enc") or "")
+            except Exception:
+                tok = ""
+            out.append({
+                "observ_id": t.get("observ_id"),
+                "name": t.get("name") or url,
+                "api_url": url.rstrip("/"),
+                "token": tok,
+                "namespace": t.get("k8s_namespace") or "default",
+                "verify_ssl": bool(t.get("k8s_verify_ssl", False)),
+            })
+        return out
+    except Exception as e:
+        logger.warning(f"resolve_k8s_targets_for_state failed (non-fatal): {e}")
+        return []
+
+
 async def get_observ_config_for_state(state: dict) -> Optional[Dict[str, str]]:
     """
     Resolusi satu-pintu untuk agent on-demand — Fix #45 M2M:
@@ -491,11 +593,14 @@ async def test_connection(target: dict, timeout_s: float = 4.0) -> Dict[str, Any
     Probe endpoint tiap sumber yang terdaftar di target (D7/D1).
     Prometheus: GET /-/ready · Tempo: GET /ready · Alertmanager: GET /-/ready · Loki: GET /ready
     kind="otel" → test_otel_connection (ping Mongo + cek db exists).
+    kind="k8s" → k8s_client.health_probe (Bearer token) (Fix #261).
     Return {source: {status, detail}} — status 'ok' | 'http_<code>' | 'error:<type>'.
     Sumber tanpa URL → {'status': 'not_configured'}.
     """
     if target.get("kind") == "otel":
         return await test_otel_connection(target, timeout_s)
+    if target.get("kind") == "k8s":
+        return await _test_k8s_connection(target, timeout_s)
     import httpx
     probes = {
         "prometheus": ((target.get("prometheus_url") or "").rstrip("/"), PROBE_PATHS["prometheus"]),
@@ -530,11 +635,44 @@ async def test_connection(target: dict, timeout_s: float = 4.0) -> Dict[str, Any
     }
 
 
-async def probe_single(kind: str, url: str, timeout_s: float = 4.0) -> Dict[str, Any]:
+async def _test_k8s_connection(target: dict, timeout_s: float = 4.0) -> Dict[str, Any]:
+    """Probe kind=k8s via Bearer token (Fix #261). Returns same shape as test_connection."""
+    from services.k8s_client import health_probe
+    from services.secret_crypto import decrypt_secret
+    api_url = (target.get("k8s_api_url") or "").strip()
+    if not api_url:
+        return {"overall": "not_configured", "sources": {"k8s": {"status": "not_configured", "url": ""}}, "checked_at": _now().isoformat()}
+    token_raw = target.get("k8s_token_enc") or ""
+    token = decrypt_secret(token_raw) if token_raw else ""
+    verify = bool(target.get("k8s_verify_ssl", False))
+    try:
+        ok = await health_probe(api_url=api_url, token=token or "", verify_ssl=verify)
+        status = "ok" if ok else "error:unauthorized_or_refused"
+    except Exception as e:
+        status = f"error:{type(e).__name__}"
+    return {
+        "overall": "ok" if status == "ok" else "error",
+        "sources": {"k8s": {"status": status, "url": api_url}},
+        "checked_at": _now().isoformat(),
+    }
+
+
+async def probe_single(kind: str, url: str, timeout_s: float = 4.0, token: str = "", verify_ssl: bool = False) -> Dict[str, Any]:
     """
     Probe satu endpoint observability sebelum stack disimpan (dipakai create dialog).
-    kind ∈ PROBE_PATHS. Return {status, url} dengan status 'ok' | 'http_<code>' | 'error:<type>'.
+    kind ∈ PROBE_PATHS + k8s (Bearer probe). Return {status, url} dengan status 'ok' | 'http_<code>' | 'error:<type>'.
     """
+    # kind=k8s: Bearer token probe (Fix #261)
+    if kind == "k8s":
+        from services.k8s_client import health_probe
+        base = (url or "").strip()
+        if not base:
+            return {"status": "not_configured", "url": ""}
+        try:
+            ok = await health_probe(api_url=base, token=token or "", verify_ssl=verify_ssl)
+            return {"status": "ok" if ok else "error:unauthorized_or_refused", "url": base}
+        except Exception as e:
+            return {"status": f"error:{type(e).__name__}", "url": base}
     path = PROBE_PATHS.get(kind)
     base = (url or "").rstrip("/")
     if not path or not base:
@@ -610,6 +748,7 @@ def build_observ_config_merged(targets: List[dict]) -> Optional[Dict[str, Any]]:
     cfg: Dict[str, Any] = {
         "prometheus_url": None, "tempo_url": None,
         "alertmanager_url": None, "loki_url": None,
+        "k8s_api_url": None,
         "sources": [],
     }
     for t in sorted(targets, key=lambda x: x.get("created_at") or _now()):
@@ -624,6 +763,25 @@ def build_observ_config_merged(targets: List[dict]) -> Optional[Dict[str, Any]]:
     cfg.pop("prometheus_url") if False else None
     # buang key internal utk konsumsi agent
     sources = cfg.pop("sources")
+
+    # Fase 2: resolve k8s-specific fields (token encrypted, namespace, SSL)
+    # Fix #268: deterministik — sorted by created_at (terlama menang), sama seperti
+    # pemilihan URL per-kind di atas. TANPA sort: urutan = natural Mongo → bisa
+    # berganti stack bila ada 2 target kind=k8s (user punya K8s Prox + K8s Core).
+    # Nama stack ikut diekspos (k8s_stack_name) agar jawaban menunjuk cluster mana.
+    for t in sorted(targets, key=lambda x: x.get("created_at") or _now()):
+        if t.get("kind") == "k8s":
+            try:
+                from services import secret_crypto
+                cfg["k8s_token"] = secret_crypto.decrypt_secret(t.get("k8s_token_enc") or "")
+            except Exception:
+                cfg["k8s_token"] = ""
+            cfg["k8s_namespace"] = t.get("k8s_namespace") or "default"
+            cfg["k8s_verify_ssl"] = bool(t.get("k8s_verify_ssl", False))
+            cfg["k8s_stack_name"] = t.get("name") or ""
+            cfg["k8s_api_url"] = (t.get("k8s_api_url") or "").rstrip("/") or None
+            break
+
     if not any(cfg.get(u) for u in KIND_URL_FIELD.values()):
         return None
     cfg["sources"] = sources

@@ -147,7 +147,7 @@ export function useDeleteEpisode() {
 
 // ── Observability Targets (SCALE Layer 2: multi-stack + webhook per-tenant) ──
 
-export type ObsStackKind = "prometheus" | "tempo" | "alertmanager" | "loki" | "otel"
+export type ObsStackKind = "prometheus" | "tempo" | "alertmanager" | "loki" | "otel" | "k8s"
 
 export interface ObservabilityTarget {
   observ_id: string
@@ -170,6 +170,11 @@ export interface ObservabilityTarget {
   log_db_name?: string
   span_collection?: string
   http_collection?: string
+  // kind="k8s" (Fix #261)
+  k8s_api_url?: string
+  k8s_token_masked?: string   // ***abcd, write-only di backend
+  k8s_namespace?: string
+  k8s_verify_ssl?: boolean
 }
 
 export interface ObservabilityTargetCreateInput {
@@ -189,6 +194,11 @@ export interface ObservabilityTargetCreateInput {
   log_db_name?: string
   span_collection?: string
   http_collection?: string
+  // kind="k8s" (Fix #261) — form values sebelum save
+  k8s_api_url?: string
+  k8s_token?: string           // plaintext → encrypted di backend
+  k8s_namespace?: string
+  k8s_verify_ssl?: boolean
 }
 
 export function useObservabilityTargets(options?: { enabled?: boolean }) {
@@ -252,7 +262,7 @@ export function useObservabilityTargetMutations() {
 /** Probe satu endpoint observability sebelum stack disimpan (create dialog). */
 export function useTestTargetUrl() {
   return useMutation({
-    mutationFn: async (input: { kind: string; url: string }) =>
+    mutationFn: async (input: { kind: string; url: string; token?: string; verify_ssl?: boolean }) =>
       (await api.post("/config/observability-targets/test-url", input)).data as {
         status: string
         url?: string

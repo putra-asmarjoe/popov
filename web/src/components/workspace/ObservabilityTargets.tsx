@@ -47,6 +47,7 @@ const OBS_KINDS = [
   { id: "tempo", label: "Tempo", placeholder: "http://tempo:3200" },
   { id: "loki", label: "Loki", placeholder: "http://loki:3100" },
   { id: "otel", label: "Central Log (OTel)", placeholder: "" },
+  { id: "k8s", label: "Kubernetes", placeholder: "http://localhost:8001" },
 ] as const
 
 type ObsKind = (typeof OBS_KINDS)[number]["id"]
@@ -196,6 +197,13 @@ export function ObservabilityTargets({ workspaceId }: { workspaceId?: string }) 
                           {tg.log_db_uri_masked}
                         </div>
                         <div className="font-mono text-xs text-muted-foreground">{tg.log_db_name}</div>
+                      </>
+                    ) : tg.kind === "k8s" ? (
+                      <>
+                        <div className="max-w-56 truncate font-mono text-xs text-muted-foreground" title={tg.k8s_api_url}>
+                          {tg.k8s_api_url}
+                        </div>
+                        <div className="font-mono text-xs text-muted-foreground">ns: {tg.k8s_namespace ?? "default"} {tg.k8s_token_masked ? `• ${tg.k8s_token_masked}` : ""}</div>
                       </>
                     ) : (
                       <div className="max-w-56 truncate font-mono text-xs text-muted-foreground" title={tg.observ_id}>{tg.observ_id}</div>
@@ -383,6 +391,7 @@ function CreateStackDialog({
     alertmanager: editing?.alertmanager_url ?? "",
     tempo: editing?.tempo_url ?? "",
     loki: editing?.loki_url ?? "",
+    k8s: editing?.k8s_api_url ?? "",
   })
   // kind="otel" — Central Log OTel (DB log span_logs/http_logs)
   const [logDbType, setLogDbType] = useState<string>(editing?.log_db_type ?? "mongodb")
@@ -391,6 +400,11 @@ function CreateStackDialog({
   const [spanCollection, setSpanCollection] = useState(editing?.span_collection || "span_logs")
   const [httpCollection, setHttpCollection] = useState(editing?.http_collection || "http_logs")
   const [webhookMode, setWebhookMode] = useState(editing?.webhook_mode ?? false)
+  // kind="k8s" (Fix #261)
+  const [k8sApiUrl, setK8sApiUrl] = useState(editing?.k8s_api_url ?? "")
+  const [k8sToken, setK8sToken] = useState("")  // write-only, never prefilled
+  const [k8sNamespace, setK8sNamespace] = useState(editing?.k8s_namespace ?? "default")
+  const [k8sVerifySsl, setK8sVerifySsl] = useState(editing?.k8s_verify_ssl ?? false)
   // Project linking: default all projects selected on create, pre-select on edit
   const [selectedProjectIds, setSelectedProjectIds] = useState<Set<string>>(
     () => new Set(editing?.project_ids ?? (allProjects?.map((p) => p.id) ?? []))
@@ -408,13 +422,17 @@ function CreateStackDialog({
   }, [isEdit, allProjects])
 
   const isOtel = kind === "otel"
+  const isK8s = kind === "k8s"
   const currentMeta = OBS_KINDS.find((k) => k.id === kind)!
   const hasUrl = Object.values(urls).some((v) => v.trim().startsWith("http"))
   const otelValid =
     (isEdit || logDbUri.trim().length > 0) &&
     logDbName.trim().length > 0
+  // Fix #262: token OPSIONAL (kubectl proxy / public cluster tanpa auth).
+  // Backend hanya menambah header Authorization bila token ada.
+  const k8sValid = k8sApiUrl.trim().length > 0
   const valid =
-    name.trim().length >= 3 && (isOtel ? otelValid : hasUrl)
+    name.trim().length >= 3 && (isOtel ? otelValid : isK8s ? k8sValid : hasUrl)
 
   const setUrl = (k: Exclude<ObsKind, "otel">, v: string) => {
     setUrls((prev) => ({ ...prev, [k]: v }))
@@ -450,7 +468,34 @@ function CreateStackDialog({
       }
       return
     }
-    const url = urls[kind as Exclude<ObsKind, "otel">].trim()
+    // kind=k8s: Bearer token probe (Fix #261)
+      if (isK8s) {
+        if (!k8sApiUrl.trim()) return
+        // Edit tanpa token baru → test pakai saved token via test-connection
+        if (isEdit && editing && !k8sToken.trim()) {
+          setCheck({ kind, status: "pending" })
+          try {
+            const { data: r } = await api.post(`/config/observability-targets/${editing.observ_id}/test-connection`)
+            const src = r.sources?.k8s
+            if (r.overall === "ok") setCheck({ kind, status: "ok", msg: t("observability.check_ok", { kind: "Kubernetes" }) })
+            else setCheck({ kind, status: "fail", msg: t("observability.check_fail", { status: src?.status ?? r.overall }) })
+          } catch (e) {
+            setCheck({ kind, status: "fail", msg: apiErrorMessage(e, t("observability.check_failed_fallback")) })
+          }
+          return
+        }
+        // Fix #262: token optional — izinkan probe tanpa token (mis. kubectl proxy)
+        setCheck({ kind, status: "pending" })
+        try {
+          const r = await testUrl.mutateAsync({ kind: "k8s", url: k8sApiUrl.trim(), token: k8sToken.trim(), verify_ssl: k8sVerifySsl })
+          if (r.status === "ok") setCheck({ kind, status: "ok", msg: t("observability.check_ok", { kind: "Kubernetes" }) })
+          else setCheck({ kind, status: "fail", msg: t("observability.check_fail", { status: r.status }) })
+        } catch (e) {
+          setCheck({ kind, status: "fail", msg: apiErrorMessage(e, t("observability.check_failed_fallback")) })
+        }
+        return
+    }
+    const url = urls[kind as Exclude<ObsKind, "otel" | "k8s">].trim()
     if (!/^https?:\/\//.test(url)) {
       setCheck({ kind, status: "fail", msg: t("observability.url_prefix_hint") })
       return
@@ -466,7 +511,7 @@ function CreateStackDialog({
   }
 
   const configuredKinds = OBS_KINDS.filter(
-    (k) => k.id !== "otel" && urls[k.id as Exclude<ObsKind, "otel">].trim() !== "",
+    (k) => k.id !== "otel" && k.id !== "k8s" && urls[k.id as Exclude<ObsKind, "otel" | "k8s">].trim() !== "",
   )
 
   return (
@@ -580,20 +625,81 @@ function CreateStackDialog({
                   </p>
                 )}
               </div>
+            ) : isK8s ? (
+              <div className="space-y-3 rounded-lg border p-3">
+                <p className="text-xs text-muted-foreground">{t("observability.k8s_intro") || "Kubernetes API endpoint — gunakan Service Account token untuk akses cluster."}</p>
+                <div className="grid grid-cols-[110px_1fr] items-center gap-2">
+                  <Label htmlFor="k8s-url" className="text-xs">{t("observability.k8s_api_label") || "K8s API Server"}</Label>
+                  <Input
+                    id="k8s-url"
+                    value={k8sApiUrl}
+                    onChange={(e) => { setK8sApiUrl(e.target.value); setCheck(null) }}
+                    placeholder="http://localhost:8001"
+                    className="h-8 font-mono text-xs"
+                  />
+                </div>
+                <div className="grid grid-cols-[110px_1fr] items-center gap-2">
+                  <Label htmlFor="k8s-token" className="text-xs">SA Token</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="k8s-token"
+                      type="password"
+                      value={k8sToken}
+                      onChange={(e) => { setK8sToken(e.target.value); setCheck(null) }}
+                      placeholder={
+                        isEdit && editing?.k8s_token_masked
+                          ? `${editing.k8s_token_masked} — ${t("observability.uri_keep_hint") || "Kosong = pertahankan token lama"}`
+                          : "eyJhbGciOiJSUzI1NiIs..."
+                      }
+                      className="h-8 min-w-0 flex-1 font-mono text-xs"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 shrink-0"
+                      disabled={!k8sApiUrl.trim() || check?.status === "pending" || testUrl.isPending}
+                      onClick={runCheck}
+                    >
+                      <PlugZap className={`size-3.5 ${check?.status === "pending" ? "animate-pulse" : ""}`} />
+                      {check?.status === "pending" ? t("observability.checking") : t("observability.check_connection")}
+                    </Button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-[110px_1fr] items-center gap-2">
+                  <Label htmlFor="k8s-ns" className="text-xs">Namespace</Label>
+                  <Input
+                    id="k8s-ns"
+                    value={k8sNamespace}
+                    onChange={(e) => setK8sNamespace(e.target.value)}
+                    placeholder="default"
+                    className="h-8 font-mono text-xs"
+                  />
+                </div>
+                <Label className="flex cursor-pointer items-center gap-2 text-xs font-normal">
+                  <input type="checkbox" checked={k8sVerifySsl} onChange={(e) => setK8sVerifySsl(e.target.checked)} className="size-3.5 accent-primary" />
+                  Verify SSL
+                </Label>
+                {check?.kind === "k8s" && check.status !== "pending" && (
+                  <p className={`text-xs ${check.status === "ok" ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>
+                    {check.msg}
+                  </p>
+                )}
+              </div>
             ) : (
               <>
                 <div className="flex gap-2">
                   <Input
                     id="obs-url"
-                    value={urls[kind as Exclude<ObsKind, "otel">]}
-                    onChange={(e) => setUrl(kind as Exclude<ObsKind, "otel">, e.target.value)}
+                    value={urls[kind as Exclude<ObsKind, "otel" | "k8s">]}
+                    onChange={(e) => setUrl(kind as Exclude<ObsKind, "otel" | "k8s">, e.target.value)}
                     placeholder={currentMeta.placeholder}
                     className="min-w-0 flex-1 font-mono text-xs"
                   />
                   <Button
                     type="button"
                     variant="outline"
-                    disabled={!urls[kind as Exclude<ObsKind, "otel">].trim() || check?.status === "pending" || testUrl.isPending}
+                    disabled={!urls[kind as Exclude<ObsKind, "otel" | "k8s">].trim() || check?.status === "pending" || testUrl.isPending}
                     onClick={runCheck}
                     className="shrink-0"
                   >
@@ -616,7 +722,7 @@ function CreateStackDialog({
                           type="button"
                           aria-label={t("action.delete", { ns: "common" })}
                           className="rounded-full p-0.5 hover:bg-foreground/10"
-                          onClick={() => setUrl(k.id as Exclude<ObsKind, "otel">, "")}
+                          onClick={() => setUrl(k.id as Exclude<ObsKind, "otel" | "k8s">, "")}
                         >
                           <X className="size-3" />
                         </button>
@@ -627,7 +733,7 @@ function CreateStackDialog({
               </>
             )}
           </div>
-          {!isOtel && (
+          {!isOtel && !isK8s && (
             <Label className="flex cursor-pointer items-center gap-2 text-sm font-normal">
               <input type="checkbox" checked={webhookMode} onChange={(e) => setWebhookMode(e.target.checked)} className="size-4 accent-primary" />
               {t("observability.webhook_label")}
@@ -712,6 +818,11 @@ function CreateStackDialog({
                   patch.span_collection = spanCollection.trim() || "span_logs"
                   patch.http_collection = httpCollection.trim() || "http_logs"
                   if (logDbUri.trim()) patch.log_db_uri = logDbUri.trim()
+                } else if (isK8s) {
+                  patch.k8s_api_url = k8sApiUrl.trim()
+                  patch.k8s_namespace = k8sNamespace.trim() || "default"
+                  patch.k8s_verify_ssl = k8sVerifySsl
+                  if (k8sToken.trim()) patch.k8s_token = k8sToken.trim()
                 } else {
                   patch.prometheus_url = urls.prometheus.trim()
                   patch.tempo_url = urls.tempo.trim()
@@ -734,17 +845,28 @@ function CreateStackDialog({
                       span_collection: spanCollection.trim() || "span_logs",
                       http_collection: httpCollection.trim() || "http_logs",
                     }
-                  : {
-                      name,
-                      kind: kind as ObsStackKind,
-                      workspace_id: fixedWorkspaceId || workspaceId || undefined,
-                      project_ids: projectIds,
-                      prometheus_url: urls.prometheus.trim(),
-                      tempo_url: urls.tempo.trim(),
-                      alertmanager_url: urls.alertmanager.trim(),
-                      loki_url: urls.loki.trim(),
-                      webhook_mode: webhookMode,
-                    }
+                  : isK8s
+                    ? {
+                        name,
+                        kind: "k8s" as const,
+                        workspace_id: fixedWorkspaceId || workspaceId || undefined,
+                        project_ids: projectIds,
+                        k8s_api_url: k8sApiUrl.trim(),
+                        k8s_token: k8sToken.trim(),
+                        k8s_namespace: k8sNamespace.trim() || "default",
+                        k8s_verify_ssl: k8sVerifySsl,
+                      }
+                    : {
+                        name,
+                        kind: kind as ObsStackKind,
+                        workspace_id: fixedWorkspaceId || workspaceId || undefined,
+                        project_ids: projectIds,
+                        prometheus_url: urls.prometheus.trim(),
+                        tempo_url: urls.tempo.trim(),
+                        alertmanager_url: urls.alertmanager.trim(),
+                        loki_url: urls.loki.trim(),
+                        webhook_mode: webhookMode,
+                      }
                 const r = await create.mutateAsync(payload)
                 onCreated?.(r)
               }

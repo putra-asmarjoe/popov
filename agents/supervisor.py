@@ -121,6 +121,55 @@ _PROJECT_KNOWLEDGE_PROJECT_MENTION = (
     "dalam project", "the project", "our project",
 )
 
+def _deployment_lane_route(
+    state: dict, intent: str, matched_service: Optional[str], agents_visited: list,
+) -> Optional[dict]:
+    """Fix (deployment ranking/overview): SATU sumber kebenaran gate lane K8s
+    replica untuk sesi project-level (kondisi wajib review — dipakai dua titik:
+    pre-check sebelum Strategy 5 LLM + gate sebelum is_data_request).
+
+    Route bila: project_id ADA + BUKAN sesi tiket + TIDAK ada matched_service
+    (service-scoped replica query tetap Gate A / metrics pod_health — Fix #272
+    tidak berubah) + intent ranking/overview deployment. Deterministik, zero-LLM.
+    None = bukan lane ini (biarkan gate lain bekerja)."""
+    if not (
+        state.get("project_id")
+        and not state.get("ticket_context")
+        and not matched_service
+    ):
+        return None
+    if _is_pod_health_ranking_intent(intent):
+        logger.info(
+            f"[Supervisor] deployment-ranking gate → k8s_agent: '{intent[:60]}'"
+        )
+        return {
+            "service_name": "",
+            "collection_name": "",
+            "k8s_mode": "deployment_ranking",
+            "k8s_intent": "deployment_ranking",
+            "next_agent": "k8s_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": "deployment_ranking",
+            "routing_flag": "deployment_ranking",
+            "error": None,
+        }
+    if _is_deployment_overview_intent(intent):
+        logger.info(
+            f"[Supervisor] deployment-overview gate → k8s_agent: '{intent[:60]}'"
+        )
+        return {
+            "service_name": "",
+            "collection_name": "",
+            "k8s_mode": "deployment_overview",
+            "k8s_intent": "deployment_overview",
+            "next_agent": "k8s_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": "deployment_overview",
+            "routing_flag": "deployment_overview",
+            "error": None,
+        }
+    return None
+
 def _ticket_chat_project_route(state: dict, agents_visited: list) -> Optional[dict]:
     """Fix #235b: gate knowledge/chips level project untuk chat tiket — SATU helper
     untuk SEMUA jalur dead-end (dulu cuma di _arbitrate_or_redirect; jalur
@@ -198,6 +247,38 @@ _TICKET_GATE_ACTION_WORDS = (
     "ubah", "ganti", "update", "batal", "cancel",
 )
 
+# Fix (implicit note accept): question words pelengkap _TICKET_GATE_QUERY_WORDS
+# (yang fokus query data) untuk guard isi catatan offer 'add_progress'.
+_NOTE_QUESTION_STARTS = (
+    "kenapa", "why", "how", "what", "apa", "bagaimana",
+    "kapan", "when", "where", "dimana",
+)
+
+def _looks_like_note_content(text: str) -> bool:
+    """Guard ketat isi catatan utk implicit-accept offer 'add_progress'
+    (needs_param=note). True bila text terlihat seperti isi catatan, BUKAN
+    pertanyaan / aksi kelola tiket / perintah add-note eksplisit.
+    Mencegah catatan sampah (lesson Fix #191).
+
+    Reuse _TICKET_GATE_QUERY_WORDS / _TICKET_GATE_ACTION_WORDS (lesson Fix #264:
+    satu sumber kebenaran, jangan duplikasi daftar keyword)."""
+    from services.ticket_intent import _is_progress_note_command
+    t = (text or "").strip().lower()
+    if not t or len(t.split()) < 3:
+        return False
+    if t.endswith("?"):
+        return False
+    # Mulai question word / query word = pertanyaan/query, bukan isi catatan.
+    if any(t.startswith(w) for w in (*_NOTE_QUESTION_STARTS, *_TICKET_GATE_QUERY_WORDS)):
+        return False
+    # Mengandung action word = perintah kelola tiket → biarkan gate tiket yang handle.
+    if any(w in t for w in _TICKET_GATE_ACTION_WORDS):
+        return False
+    # Pola "add progress note: ..." eksplisit → rule-based existing yang handle.
+    if _is_progress_note_command(t):
+        return False
+    return True
+
 
 # Fix #196: "cek log database X" / "lihat log X" = permintaan LIHAT LOG mentah
 # (data_agent), BUKAN analisis insiden. TAPI "log error pada X" tetap insiden.
@@ -206,6 +287,108 @@ _LOG_VIEW_KEYWORDS = (
     "log database", "log db", "log terakhir", "log error",
 )
 
+# ── STACK2 Fase 1 (Fix #259 + Fix #264): Pod Health keywords — MODUL LEVEL ──
+# Dipakai Gate A (pod health standalone) DAN pre-check bypass ticket routing
+# (Fix #264) agar satu sumber kebenaran — jangan duplikasi daftar keyword.
+# Gate A: status/kondisi pod ("is pod X up?", "apakah pod X up?", "pod running",
+# "berapa kali pod restart") → metrics_agent pod_health (zero-LLM).
+# Case-insensitive & bahasa EN/ID; guard: sinyal insiden tetap ke incident/RCA.
+_POD_HEALTH_KW = (
+    # EN — status/kondisi
+    "is pod", "is the pod", "is the pods", "are pods", "are the pods",
+    "pod up", "pods up", "is up", "pod running", "pod healthy",
+    "pod alive", "pod status", "check pod", "check pods",
+    # ID — status/kondisi
+    "apakah pod", "adakah pod", "pod aktif", "pod hidup", "pod sehat",
+    "pod nyala", "pod jalan", "pod berjalan", "cek pod", "cek pods",
+    "cek status pod", "status pod", "kesehatan pod",
+    # kompat lama + frase peristiwa
+    "health pod", "pod health", "health check pod",
+    "pod restart", "pod crash", "pod oom",
+)
+# O4: frasa kuantitatif natural language — selalu lane pod (tanpa guard)
+_POD_HEALTH_QUERY_KW = (
+    "berapa kali pod", "kapan terakhir pod", "pod mana",
+    "berapa kali restart", "kapan terakhir restart",
+    "crashloopbackoff", "oomkilled",
+    # Fix: pertanyaan replica deployment → lane pod (metrics pod_health)
+    "berapa replica", "jumlah replica", "how many replica", "replica count",
+)
+# Guard anti-false-positive: "apakah error pada pod X?" / "health check failing
+# service X" = insiden → jangan diserobot lane pod (biarkan RCA/incident).
+# NOTE: crash/oom TIDAK di-guard agar frase "pod crash/oom" tetap ke pod lane
+# (perilaku lama); guard fokus sinyal error/failing/alert.
+_POD_HEALTH_INCIDENT_GUARD = (
+    "error", "gagal", "5xx", "4xx", "fail", "failing", "unhealthy",
+    "not ready", "alert", "incident", "insiden", "service-fault",
+    "health endpoint", "down service", "service down",
+    # Fix: "replica set mongo" = MongoDB topology, bukan K8s replicas —
+    # jangan diserobot lane pod.
+    "replica set",
+)
+
+
+# Fix (deployment ranking): frasa ranking replica — frasa LENGKAP, BUKAN superlative
+# telanjang ("paling banyak" saja terlalu bor: "tiket paling banyak" = pertanyaan
+# project, bukan infra). Dipakai gate deployment_ranking (project-level chat) —
+# satu sumber kebenaran modul level (pelajaran Fix #264).
+_POD_HEALTH_RANKING_KW = (
+    "paling banyak replica", "replica terbanyak", "replica paling banyak",
+    "most replicas", "most pods",
+    "deployment terbanyak", "deployment paling banyak",
+)
+# Eksklusi wajib ranking: pertanyaan tiket/alert/error yang kebetulan menyebut
+# superlative TETAP jalur project/incident. "replica set" = MongoDB topology
+# (konsisten _POD_HEALTH_INCIDENT_GUARD).
+_POD_HEALTH_RANKING_EXCLUDE_KW = ("tiket", "ticket", "alert", "error", "replica set")
+
+# Fix (deployment overview): frasa deployment-health "apakah semua deployment
+# aman?" / "are the pods healthy?" — objek (deployment/pod) + kata status kesehatan.
+_DEPLOYMENT_OVERVIEW_HEALTH_KW = ("aman", "safe", "sehat", "healthy")
+_DEPLOYMENT_OVERVIEW_OBJ_RE = re.compile(r"\b(deployments?|pods?)\b")
+
+def _is_pod_health_ranking_intent(intent: str) -> bool:
+    """Fix (deployment ranking): True bila intent minta PERINGKAT replica
+    ("cek pod yang paling banyak replicanya", "most replicas") — frasa lengkap
+    saja, bukan superlative telanjang. Eksklusi: tiket/ticket/alert/error
+    ("tiket paling banyak" = pertanyaan project) + "replica set" (MongoDB)."""
+    low = (intent or "").lower()
+    if any(x in low for x in _POD_HEALTH_RANKING_EXCLUDE_KW):
+        return False
+    return any(kw in low for kw in _POD_HEALTH_RANKING_KW)
+
+def _is_deployment_overview_intent(intent: str) -> bool:
+    """Fix (deployment overview): True bila intent tanya KONDISI deployment/pod
+    secara umum ("apakah semua deployment aman?", "are the pods healthy?").
+    Hanya bila BUKAN ranking intent (ranking menang). Eksklusi sama dgn ranking."""
+    low = (intent or "").lower()
+    if _is_pod_health_ranking_intent(low):
+        return False
+    if any(x in low for x in _POD_HEALTH_RANKING_EXCLUDE_KW):
+        return False
+    return bool(_DEPLOYMENT_OVERVIEW_OBJ_RE.search(low)
+                and any(kw in low for kw in _DEPLOYMENT_OVERVIEW_HEALTH_KW))
+
+def _is_pod_health_intent(intent: str) -> bool:
+    """Fix #264: deteksi pod-health intent (logika Gate A, diekstrak agar bisa
+    dipakai pre-check bypass ticket SEBELUM is_ticket_intent).
+    True bila frasa kuantitatif match, ATAU frasa status match tanpa sinyal insiden.
+    Fix (guard _pod_query): jalur kuantitatif JUGA melewati incident guard — dulu
+    "berapa replica set mongo" lolos via "berapa replica" walau "replica set"
+    (MongoDB) ada di guard. Pre-existing hole."""
+    low = intent.lower()
+    _pod_query = any(kw in low for kw in _POD_HEALTH_QUERY_KW)
+    _pod_state = any(kw in low for kw in _POD_HEALTH_KW)
+    _pod_incident = any(g in low for g in _POD_HEALTH_INCIDENT_GUARD)
+    return (_pod_query or _pod_state) and not _pod_incident
+
+
+# Fix #269: sinyal pod-restart utk lane k8s di investigasi insiden (shared dgn
+# investigation_planner — satu sumber, lesson Fix #264).
+POD_RESTART_SIGNALS = (
+    "restart", "restarting", "crash", "crashloop", "crashloopbackoff",
+    "oom", "oomkilled", "matinya", "sering mati",
+)
 
 def is_data_request(intent: str) -> bool:
     """Deteksi intent pengambilan data mentah (bukan analisis error).
@@ -532,6 +715,33 @@ def _route_arbitrated_lane(state: dict, agents_visited: list, lane: str,
     return _ticket_redirect(state, agents_visited)
 
 
+def _is_deployment_chip(intent_low: str) -> bool:
+    """Fix: deteksi chip deployment "Check deployment" / "Cek deployment".
+    Dipakai call-site 1 (_arbitrate_or_redirect) dan call-site 2 (strategy_4)
+    dengan identitas routing yang sama (deployment_chip)."""
+    return any(kw in intent_low for kw in ("check deployment", "cek deployment"))
+
+
+def _deployment_chip_service(state: dict, matched_service: Optional[str]) -> str:
+    """Fix: fallback service chip deployment — matched → preset → ticket_context."""
+    tc = state.get("ticket_context") or {}
+    return (matched_service or state.get("preset_service_name") or tc.get("serviceName") or "")
+
+
+def _route_deployment_chip(state: dict, agents_visited: list, svc: str, service_map: dict) -> dict:
+    """Fix: chip deployment → triage_agent (deploy_checker via Loki), bukan
+    data_agent (MongoDB logs). User bertanya deployment, bukan database records."""
+    return {
+        "agents_visited": agents_visited,
+        "routing_strategy": "deployment_chip",
+        "routing_flag": "deployment_chip",
+        "error": None,
+        "service_name": svc,
+        "collection_name": service_map.get(svc) or (f"logs_{svc}" if svc else ""),
+        "next_agent": "triage_agent",
+    }
+
+
 async def _arbitrate_or_redirect(state: dict, agents_visited: list,
                                  matched_service: Optional[str], service_map: dict) -> dict:
     """Lapis 5 trigger: arbitrasi lane; bila None/LLM down → _ticket_redirect (lama).
@@ -552,6 +762,17 @@ async def _arbitrate_or_redirect(state: dict, agents_visited: list,
         # JANGAN panggil LLM arbiter untuk itu (dulu "Check deployment (58min
         # ago)" habis 1 panggilan LLM hanya untuk disebut data_request).
         from services.conversation import _is_technical_intent
+        svc = _deployment_chip_service(state, matched_service)
+        if _is_deployment_chip(intent_low):
+            if not svc:
+                # Fix: chip deployment tanpa service (matched/preset/ticket kosong)
+                # → redirect jujur, bukan data_request buta.
+                logger.info(f"[LaneArbiter] deployment chip tanpa service → redirect: '{intent_low[:60]}'")
+                return _ticket_redirect(state, agents_visited, llm_note=True)
+            # Fix: call-site 1 pakai identitas chip yang sama dengan s4
+            # (routing_strategy/flag = "deployment_chip"), bukan llm_lane_arbiter.
+            logger.info(f"[LaneArbiter] deployment chip → triage_agent: '{intent_low[:60]}'")
+            return _route_deployment_chip(state, agents_visited, svc, service_map)
         if _is_technical_intent(intent_low):
             logger.info(f"[LaneArbiter] skipped (technical/chip intent): '{intent_low[:60]}'")
             return _route_arbitrated_lane(state, agents_visited, "data_request", matched_service, service_map)
@@ -665,6 +886,32 @@ async def supervisor_agent(state: AgentState) -> dict:
                         "routing_strategy": "triage", "routing_flag": None, "error": None,
                         "agents_visited": agents_visited,
                     }
+            # Fix: implicit note accept (1-turn) — offer aktif add_progress
+            # (needs_param=note) + jawaban bukan ya/tidak + terlihat seperti isi
+            # catatan → langsung eksekusi, tanpa paksa "ya" dulu.
+            if (
+                _active.get("type") == "ticket_action"
+                and (_active.get("params") or {}).get("action") == "add_progress"
+                and _active.get("needs_param") == "note"
+                and _ans is None
+                and _looks_like_note_content(intent_raw)
+            ):
+                _note_params = dict(_active.get("params") or {})
+                _note_params["note"] = intent_raw.strip()
+                await accept_offer(_active["offer_id"])
+                logger.info(
+                    f"[Offer] implicit note accept {_active['offer_id']}: "
+                    f"'{intent_raw[:50]}'"
+                )
+                return {
+                    "next_agent": "ticket_agent",
+                    "pending_offer": {
+                        "action": _note_params.get("action"),
+                        "params": _note_params,
+                    },
+                    "agents_visited": agents_visited,
+                    "routing_strategy": None, "routing_flag": None, "error": None,
+                }
             # else: active tapi bukan ya/tidak → lanjut routing normal (offer tetap aktif)
 
     # Fix #189 (Opsi B): jawaban "ya"/"tidak"/"oke" LIEAR — tidak ada offer aktif.
@@ -820,6 +1067,13 @@ async def supervisor_agent(state: AgentState) -> dict:
         # Already matched via 1-3, check if preset also exists (not needed)
         is_preset_service = False
 
+    # Fix (deployment ranking/overview): pre-check deterministik SEBELUM Strategy 5
+    # LLM — zero-LLM di hot path (Q2 live "cek pod yang paling banyak replicanya"
+    # bisa ke-hijack LLM classify intent_type=project sebelum sempat ke gate bawah).
+    _dep_lane = _deployment_lane_route(state, intent, matched_service, agents_visited)
+    if _dep_lane:
+        return _dep_lane
+
     # FASE 6B Strategy 5: LLM fallback jika confidence < threshold atau no match
     routing_strategy = matched_strategy
     routing_flag = None
@@ -946,6 +1200,33 @@ async def supervisor_agent(state: AgentState) -> dict:
             "agents_visited": agents_visited,
             "routing_strategy": "ticket_investigate",
             "routing_flag": routing_flag,
+            "error": None,
+        }
+
+    # 1c-bis (Fix #264): Pod health bypass ticket routing — pre-check SEBELUM
+    # is_ticket_intent. Live: "check pod status kuponku-users-apps" di chat tiket
+    # kena Gate tiket ("status" ada di _TICKET_KEYWORDS) → ticket_agent →
+    # "Please specify the pod name" (generic). Padahal user minta data pod.
+    # Guard ketat: (a) ticket_context ADA, (b) matched_service ter-resolve,
+    # (c) intent match pod-health keywords DENGAN incident guard yang sama dgn Gate A
+    # ("kenapa pod X failing" tetap ke lane tiket/insiden). Behavior tanpa tiket
+    # tidak berubah (Gate A yang menangani). Reversible: hapus blok ini.
+    if state.get("ticket_context") and matched_service and _is_pod_health_intent(intent):
+        from services.promql_translator import parse_window_from_text
+        pod_window = parse_window_from_text(intent_raw, default="24h")
+        logger.info(
+            f"[Supervisor] pod-health bypass ticket gate → metrics_agent: "
+            f"'{intent[:60]}' (window={pod_window})"
+        )
+        return {
+            "service_name": matched_service,
+            "collection_name": service_map.get(matched_service, "") or f"logs_{matched_service}",
+            "metrics_mode": "pod_health",
+            "metrics_window": pod_window,
+            "next_agent": "metrics_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": "pod_health_ticket",
+            "routing_flag": "pod_health_direct",
             "error": None,
         }
 
@@ -1116,6 +1397,153 @@ async def supervisor_agent(state: AgentState) -> dict:
             "error": None,
         }
 
+    # ─── K8s Events gate ──────────────────────────────
+    # STACK2 Fase 2: k8s-specific keywords → k8s_agent.
+    _K8S_EVENT_KW = [
+        # Kausal / explain — butuh K8s Events/state
+        "kenapa pod", "why pod", "exit code", "alasan crash",
+        "describe pod", "lihat events pod", "show events pod",
+        # K8s native — exclusive
+        "pod events", "k8s event", "kubernetes event",
+        "node pressure", "evict",
+    ]
+    _has_k8s_kw = any(kw in intent for kw in _K8S_EVENT_KW)
+    if _has_k8s_kw and matched_service:
+        # Disambiguation: hitungan/status (berapa kali, crashloop, oomkilled) → pod_health
+        _POD_HEALTH_GUARD = [
+            "berapa kali", "pod status", "pod restart", "pod crash", "pod oom",
+            "crashloop", "oomkilled", "health pod", "pod health", "cek pod",
+        ]
+        intent_lower = intent.lower()
+        if any(g in intent_lower for g in _POD_HEALTH_GUARD):
+            # → pod_health (let Gate A handle)
+            pass
+        else:
+            # Determine k8s_intent from phrase
+            _k8s_intent = "events"  # default
+            k8s_node_name = None
+            if "node pressure" in intent_lower:
+                _k8s_intent = "node_pressure"
+                # Extract node name: "node pressure kind-worker-3" → "kind-worker-3"
+                # Require at least one hyphen (K8s node names always have hyphens)
+                import re as _re
+                _nm = _re.search(r"node\s+pressure\s+(\w[\w-]*-\w[\w-]*)", intent_lower)
+                if _nm:
+                    k8s_node_name = _nm.group(1)
+            elif "describe pod" in intent_lower:
+                _k8s_intent = "pod_status"
+
+            k8s_namespace = (state.get("k8s_namespace") or "default")
+            logger.info(
+                f"[Supervisor] k8s_events gate: '{intent[:60]}' → k8s_agent (svc={matched_service}, ns={k8s_namespace}, intent={_k8s_intent})")
+            _out: dict = {
+                "service_name": matched_service,
+                "k8s_intent": _k8s_intent,
+                "k8s_namespace": k8s_namespace,
+                "next_agent": "k8s_agent",
+                "agents_visited": agents_visited + ["supervisor"],
+                "routing_strategy": routing_strategy or "k8s_events",
+                "routing_flag": "k8s_events",
+                "error": None,
+            }
+            if k8s_node_name:
+                _out["k8s_node"] = k8s_node_name
+            return _out
+
+    # ── STACK2 Fase 1: Pod Health gate (Fix #262 lanjutan — multilingual EN/ID) ──
+    # Gate A: status/kondisi pod ("is pod X up?", "apakah pod X up?", "pod running",
+    # "berapa kali pod restart") → metrics_agent pod_health (zero-LLM).
+    # Fix #264: keyword lists + deteksi di-hoist ke modul level (_POD_HEALTH_KW dsb
+    # + _is_pod_health_intent) agar pre-check bypass ticket pakai sumber yang sama.
+    if bool(matched_service) and _is_pod_health_intent(intent):
+        # O3: parse window dari text, default 24h untuk pod health (spec)
+        from services.promql_translator import parse_window_from_text
+        pod_window = parse_window_from_text(intent_raw, default="24h")
+        logger.info(f"[Supervisor] pod-health gate → metrics_agent: '{intent[:60]}' (window={pod_window})")
+        return {
+            "service_name": matched_service,
+            "collection_name": service_map.get(matched_service, "") or f"logs_{matched_service}",
+            "metrics_mode": "pod_health",
+            "metrics_window": pod_window,
+            "next_agent": "metrics_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": routing_strategy or "pod_health",
+            "routing_flag": "pod_health_direct",
+            "error": None,
+        }
+
+    # ── STACK2 Fase 1: Freeform PromQL gate ────────────────────────────────
+    # Gate B: metrics-related keywords + matched_service → translate + set mode=promql_range.
+    # O1: translator dipanggil supervisor (spec K9), metrics_agent = pure executor.
+    # O2: guard — intent dengan kata kausal/tanya insiden → jangan freeform, biarkan triage.
+    _METRICS_FREEFORM_KW = (
+        "metrik", "metrics", "metric",
+        "error rate", "error count", "request rate", "throughput",
+        "cpu usage", "cpu utilization",
+        "memory usage", "memory pada", "ram pada",
+        "latency pada", "response time pada", "p99 pada",
+        "query prometheus", "promql",
+    )
+    # O2: guard — insiden keywords → triage, not freeform.
+    # Logic: metrics gate checked first. Then causal keywords checked OUTSIDE
+    # metric phrases. This prevents "kenapa error rate payment naik" → freeform
+    # while allowing "error rate payment 6h" → freeform.
+    _INCIDENT_CASUAL_KW = (
+        "kenapa", "mengapa", "why", "what is causing", "what caused",
+        "naik", "tinggi", "meningkat", "increasing", "rising",
+        "root cause", "investigat", "selidik",
+        "error", "gagal", "down", "5xx", "500", "insiden", "incident",
+        "crash", "fatal", "critical",
+    )
+    _has_metrics_kw = matched_service and any(kw in intent for kw in _METRICS_FREEFORM_KW)
+    # Check causal keywords OUTSIDE metric phrases to avoid false negatives
+    _intent_no_metrics = intent
+    for _mkw in _METRICS_FREEFORM_KW:
+        _intent_no_metrics = _intent_no_metrics.replace(_mkw, "")
+    _has_causal_kw = any(kw in _intent_no_metrics for kw in _INCIDENT_CASUAL_KW)
+    # Gate B: metrics keyword match AND no causal keywords outside metric phrases.
+    # "error rate payment6h" → metrics=True, causal=False → freeform.
+    # "kenapa error rate naik" → metrics=True, causal=True (kenapa, naik) → triage.
+    if _has_metrics_kw and not _has_causal_kw:
+        # O1+R1: call translator async here (supervisor owns LLM call)
+        from services.promql_translator import translate_to_promql, parse_window_from_text
+        freeform_window = parse_window_from_text(intent_raw, default="1h")
+        try:
+            import asyncio
+            translation = await asyncio.wait_for(
+                translate_to_promql(
+                    description=intent_raw.strip(),
+                    service_name=matched_service,
+                    window=freeform_window,
+                ),
+                timeout=8.0,
+            )
+        except Exception as e:
+            logger.warning(f"[Supervisor] PromQL translation failed: {e}")
+            translation = {"promql": None, "confidence": 0.0, "window": freeform_window}
+
+        promql = translation.get("promql")
+        confidence = translation.get("confidence", 0)
+        # O5: reject low confidence (no query without PromQL)
+        if not promql or confidence < 0.5:
+            logger.info(f"[Supervisor] promql-freeform rejected (conf={confidence:.2f}, promql={bool(promql)})")
+        else:
+            logger.info(f"[Supervisor] promql-freeform gate → metrics_agent: '{intent[:60]}' (conf={confidence:.2f}, window={freeform_window})")
+            return {
+                "service_name": matched_service,
+                "collection_name": service_map.get(matched_service, "") or f"logs_{matched_service}",
+                "metrics_mode": "promql_range",
+                "metrics_window": translation.get("window", freeform_window),
+                "metrics_promql": promql,
+                "metrics_description": translation.get("description") or f"{matched_service} metrics",
+                "metrics_confidence": confidence,
+                "next_agent": "metrics_agent",
+                "agents_visited": agents_visited,
+                "routing_strategy": routing_strategy or "promql_freeform",
+                "routing_flag": "promql_freeform",
+                "error": None,
+            }
+
     # 2. Deteksi follow-up question (Phase 1) — diutamakan sebelum health check.
     #    Follow-up = (a) user me-mention/balas jawaban agent sebelumnya, ATAU
     #    (b) intent berdiri sendiri dengan permintaan penjelasan/detail eksplisit.
@@ -1157,6 +1585,50 @@ async def supervisor_agent(state: AgentState) -> dict:
     # 3. Deteksi permintaan data mentah (mis. "berikan 1 data terakhir ...") →
     #    route ke data_agent (bukan mongo_agent yang khusus analisis error).
     #    Guard: sesi project dengan query level project (tiket/aktivitas/alert) → skip, biarkan project query check handle.
+
+    # ── Fix #268: K8s inventory gate — "show available pod" / "show available
+    # deployment" / "list pods" TIDAK butuh service — langsung k8s_agent (inventory).
+    # Harus SEBELUM is_data_request ("show" ada di DATA_INTENT_KEYWORDS → gate lama
+    # menuntut matched_service → error "Service yang tersedia: []").
+    # Guard: matched_service ADA → skip (service-scoped pod query → Gate A / k8s
+    # events gate yang lebih spesifik; jangan serobot listing inventory).
+    _K8S_INV_RE = re.compile(
+        r"\b(show|list|daftar|lihat|tampilkan|sebutkan)\b[^.?!]*\b"
+        r"(pods?|deployments?)\b",
+        re.IGNORECASE,
+    )
+    if not matched_service and _K8S_INV_RE.search(intent) \
+            and not _is_pod_health_ranking_intent(intent):
+        intent_lower_inv = intent.lower()
+        _inv_intent = "deployments" if re.search(r"\bdeployments?\b", intent_lower_inv) else "pods"
+        k8s_namespace_inv = state.get("k8s_namespace") or "default"
+        logger.info(
+            f"[Supervisor] k8s inventory gate: '{intent[:60]}' → k8s_agent "
+            f"(intent={_inv_intent}, ns={k8s_namespace_inv})"
+        )
+        return {
+            "service_name": matched_service or "",
+            "collection_name": service_map.get(matched_service, "") if matched_service else "",
+            "k8s_intent": _inv_intent,
+            "k8s_namespace": k8s_namespace_inv,
+            "next_agent": "k8s_agent",
+            "agents_visited": agents_visited + ["supervisor"],
+            "routing_strategy": "k8s_inventory",
+            "routing_flag": "k8s_inventory",
+            "error": None,
+        }
+
+    # ── Fix (deployment ranking/overview gate): project-level chat — Q2 "cek pod
+    # yang paling banyak replicanya" / Q1 "apakah semua deployment aman?" — SEMUA
+    # gate sebelumnya skip → no-match fallback (low_confidence_routing) →
+    # project_agent → LLM konflasi "4 tiket kuponku-core-api" jadi "4 replicas".
+    # Gate DETERMINISTIK (zero-LLM) sebelum is_data_request & project query.
+    # Kondisi + return shape di _deployment_lane_route (SATU sumber kebenaran —
+    # pelajaran Fix #264; pre-check sebelum Strategy 5 pakai helper yang sama).
+    _dep_lane_late = _deployment_lane_route(state, intent, matched_service, agents_visited)
+    if _dep_lane_late:
+        return _dep_lane_late
+
     if is_data_request(intent):
         # Project session + project query keywords → bukan data request mentah
         if not (
@@ -1334,6 +1806,12 @@ async def supervisor_agent(state: AgentState) -> dict:
         if gate_route:
             return gate_route
         from services.conversation import _is_technical_intent
+        # Fix: deployment chip → triage_agent (deploy_checker via Loki), bukan
+        # data_agent (MongoDB). Ini jalur UTAMA tiket dengan preset service.
+        svc = _deployment_chip_service(state, matched_service)
+        if _is_deployment_chip(intent_raw.lower()) and svc:
+            logger.info(f"[LaneArbiter/s4] deployment chip → triage_agent: '{intent_raw[:60]}'")
+            return _route_deployment_chip(state, agents_visited, svc, service_map)
         if _is_technical_intent(intent_raw.lower()):
             logger.info(f"[LaneArbiter/s4] skipped (technical/chip intent): '{intent_raw[:60]}'")
             return _route_arbitrated_lane(state, agents_visited, "data_request", matched_service, service_map)

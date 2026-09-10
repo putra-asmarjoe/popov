@@ -217,6 +217,25 @@ def _chunks(text: str, size: int):
         yield text[i : i + size]
 
 
+def _coerce_final_message(raw: object, locale: str) -> str:
+    """Fix #262 (P0): jawaban akhir SELALU str sebelum dipakai.
+
+    - dict = bilingual {"en","id"} (pre-formatted supervisor) → pilih sesuai locale.
+    - None/dict-correlation (raw JSON) → jangan pernah di-strip; return "" bila bukan teks.
+    Guard di sini mencegah `'dict' object has no attribute 'strip'` di pipeline chat.
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, dict):
+        if "en" in raw or "id" in raw:
+            picked = raw.get(locale) or raw.get("en") or raw.get("id") or ""
+            return picked.strip() if isinstance(picked, str) else ""
+        return ""  # dict non-bilingual (mis. correlation_result) bukan teks jawaban
+    if isinstance(raw, str):
+        return raw.strip()
+    return str(raw).strip()
+
+
 def _strip_ticket_context_prefix(text: str) -> str:
     """Buang prefix FE `[context: ...]` dari intent (redundan — server sudah inject
     ticket_context terstruktur via Fix #49). Robust terhadap kurung bersarang
@@ -264,6 +283,17 @@ async def _require_project_member(project_id: str, user: dict) -> dict:
 def _now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+def _resolve_chat_answer(merged: dict, locale: str = "en") -> str:
+    """Guard (Fix #262 P0): coerce dict → locale-aware string before .strip().
+    Returns a string (never None, never dict).
+    """
+    raw_answer = merged.get("formatted_message") or merged.get("correlation_result") or ""
+    if isinstance(raw_answer, dict):
+        raw_answer = raw_answer.get(locale) or raw_answer.get("en") or raw_answer.get("id") or str(raw_answer)
+    elif not isinstance(raw_answer, str):
+        raw_answer = str(raw_answer)
+    return raw_answer.strip()
 
 
 async def _run_pipeline(
@@ -418,11 +448,8 @@ async def _run_pipeline(
         if agent_traces and _trace_start is not None:
             agent_traces[-1]["duration_ms"] = round((time.perf_counter() - _trace_start) * 1000, 1)
 
-        answer = (
-            merged.get("formatted_message")
-            or merged.get("correlation_result")
-            or ""
-        ).strip()
+        # Guard: coerce dict → locale-aware string before use (Fix #262 P0)
+        answer = _resolve_chat_answer(merged, locale)
         if merged.get("error"):
             err_head = {
                 "id": f"⚠️ Pipeline selesai dengan error: {merged['error']}",

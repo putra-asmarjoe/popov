@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react"
 import { cn } from "@/lib/utils"
 import { chipKeyOf, type Suggestion, type SuggestionChip } from "@/lib/chat-meta"
 
@@ -19,17 +20,36 @@ export function ChatSuggestions({
   onSend,
   className,
   contentClassName,
+  showDelayMs,
 }: {
   suggestions: Suggestion[]
   onPick: (text: string, chipKey?: string) => void
   onSend?: (text: string, chipKey?: string) => void
   className?: string
   contentClassName?: string
+  showDelayMs?: number
 }) {
-  if (suggestions.length === 0) return null
+  const sig = suggestions
+    .map((s) => (isChip(s) ? s.label : s))
+    .join("\u0000")
+  const [prevSig, setPrevSig] = useState(sig)
+  const [visible, setVisible] = useState(() => !showDelayMs)
+
+  if (prevSig !== sig) {
+    setPrevSig(sig)
+    setVisible(!showDelayMs)
+  }
+
+  useEffect(() => {
+    if (visible || !showDelayMs || sig === "") return
+    const t = setTimeout(() => setVisible(true), showDelayMs)
+    return () => clearTimeout(t)
+  }, [visible, showDelayMs, sig])
+
+  if (suggestions.length === 0 || !visible) return null
   return (
-    <div className={cn("border-t px-4 py-2", className)}>
-      <div className={cn("mx-auto flex flex-wrap gap-1.5", contentClassName)}>
+    <div className={cn("pt-2 pb-1", className)}>
+      <div className={cn("flex flex-wrap gap-1.5", contentClassName)}>
         {suggestions.map((sug) => {
           const chip = isChip(sug)
           const label = chip ? sug.label : sug
@@ -46,10 +66,10 @@ export function ChatSuggestions({
                 }
               }}
               className={cn(
-                "rounded-full border px-2.5 py-1 text-left text-xs",
+                "rounded-full border px-2.5 py-1 text-left text-xs transition-colors",
                 isInvestigation
                   ? "bg-primary/10 border-primary/30 hover:bg-primary/20"
-                  : "bg-muted/40 hover:bg-muted"
+                  : "bg-muted/50 hover:bg-muted border-border/60 text-foreground/90"
               )}
             >
               {isInvestigation ? "🔍" : "💡"} {label}

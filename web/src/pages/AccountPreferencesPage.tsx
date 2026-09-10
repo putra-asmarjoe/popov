@@ -85,6 +85,20 @@ export function AccountPreferencesPage() {
     updateProfile.mutate(patch as Parameters<typeof updateProfile.mutate>[0])
   }
 
+  /** Map chip key internal → label human-readable (fix: "investigate:mongo_agent"
+   *  jangan tampil mentah di "Popov noticed"). */
+  function chipLabel(key: string): string {
+    const clean = key.replace(/^(investigate|suggestion):/, "")
+    const map: Record<string, string> = {
+      status: "Status check",
+      reopen: "Reopen ticket",
+      close: "Close ticket",
+      check_ticket: "Check ticket",
+      investigate: "Investigate",
+    }
+    return map[clean] ?? clean
+  }
+
   // "Popov noticed" — top insight ringkas dari counter (Q4: ringkas, bukan dump)
   const noticed = useMemo(() => {
     if (!profile || profile.interaction_count < 10) return [] as string[]
@@ -95,7 +109,7 @@ export function AccountPreferencesPage() {
     const chips = Object.entries(profile.chips_clicked)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3)
-      .map(([k, c]) => t("noticed.chip", { chip: k, count: c }))
+      .map(([k, c]) => t("noticed.chip", { chip: chipLabel(k), count: c }))
     return [...svcs, ...chips]
   }, [profile, t])
 

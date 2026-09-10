@@ -351,6 +351,84 @@ async def response_agent(state: AgentState) -> dict:
             "agents_visited": agents_visited,
         }
 
+    # 0. Handling Metrics Standalone (STACK2 F1: pod_health / promql_range)
+    metrics_mode = state.get("metrics_mode")
+    if metrics_mode in ("pod_health", "promql_range"):
+        logger.info(f"TelegramAgent formatting metrics standalone (mode={metrics_mode})")
+        metrics_summary = state.get("metrics_summary") or "No metrics data."
+        metrics_data = state.get("metrics_data")
+        confidence = state.get("metrics_confidence")
+        description = state.get("metrics_description") or ""
+        window = state.get("metrics_window") or "1h"
+
+        # Build formatted response
+        lines = []
+        if metrics_mode == "pod_health":
+            lines.append(metrics_summary)
+        elif metrics_mode == "promql_range":
+            lines.append(metrics_summary)
+            if confidence is not None and confidence < 0.6:
+                lines.append(f"\n⚠️ Low confidence ({confidence:.0%}) — PromQL may need refinement.")
+
+        formatted = "\n".join(lines)
+
+        # Fix #260: web-only follow-up chips for STACK2 standalone metrics
+        _csuggestions: list = []
+        if state.get("suppress_telegram"):
+            try:
+                from services.offer_planner import build_standalone_suggestions
+                from services.conversation import resolve_state_locale
+                _svc_name = state.get("service_name") or state.get("preset_service_name") or ""
+                _csuggestions = build_standalone_suggestions(
+                    mode=metrics_mode,
+                    service_name=_svc_name,
+                    locale=await resolve_state_locale(state),
+                )
+            except Exception:
+                pass
+
+        success, send_error = await _deliver(state, formatted)
+        return {
+            "formatted_message": formatted,
+            "telegram_sent": success,
+            "telegram_error": send_error,
+            "next_agent": "end",
+            "agents_visited": agents_visited,
+            **({"chat_suggestions": _csuggestions} if _csuggestions else {}),
+        }
+
+    # F2-T6: K8s standalone mode — k8s_agent → response_agent
+    k8s_intent = state.get("k8s_intent")
+    if k8s_intent:
+        logger.info(f"TelegramAgent formatting k8s standalone (intent={k8s_intent})")
+        k8s_summary = state.get("k8s_summary") or "Tidak ada data K8s."
+        formatted = k8s_summary
+
+        # Fix #260: web-only follow-up chips for K8s standalone
+        _csuggestions_k8s: list = []
+        if state.get("suppress_telegram"):
+            try:
+                from services.offer_planner import build_standalone_suggestions
+                from services.conversation import resolve_state_locale
+                _svc_name_k8s = state.get("service_name") or state.get("preset_service_name") or ""
+                _csuggestions_k8s = build_standalone_suggestions(
+                    mode="k8s_events",
+                    service_name=_svc_name_k8s,
+                    locale=await resolve_state_locale(state),
+                )
+            except Exception:
+                pass
+
+        success, send_error = await _deliver(state, formatted)
+        return {
+            "formatted_message": formatted,
+            "telegram_sent": success,
+            "telegram_error": send_error,
+            "next_agent": "end",
+            "agents_visited": agents_visited,
+            **({"chat_suggestions": _csuggestions_k8s} if _csuggestions_k8s else {}),
+        }
+
     # 0. Handling Follow-up Question (Phase 1)
     if is_follow_up:
         logger.info("TelegramAgent handling follow-up question")
@@ -410,6 +488,20 @@ async def response_agent(state: AgentState) -> dict:
     if state.get("formatted_message") and not state.get("correlation_result") and not state.get("triage_result"):
         logger.info("TelegramAgent delivering supervisor pre-formatted message (non-incident)")
         preformatted = state["formatted_message"]
+        # Fix #262 (P0): pre-formatted supervisor bisa bilingual dict {en,id}
+        # → koersi ke str sesuai locale SEBELUM deliver (Telegram/request_log tak menerima dict).
+        if isinstance(preformatted, dict):
+            try:
+                from services.conversation import resolve_state_locale
+                _ploc = await resolve_state_locale(state)
+            except Exception:
+                _ploc = "id"
+            preformatted = (
+                preformatted.get(_ploc)
+                or preformatted.get("en")
+                or preformatted.get("id")
+                or ""
+            )
         success, send_error = await _deliver(state, preformatted)
         return {
             "formatted_message": preformatted,

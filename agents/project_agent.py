@@ -425,6 +425,21 @@ async def project_agent(state: AgentState) -> dict:
     if want_knowledge:
         facts_blocks.append(await _gather_knowledge(project_id, ws_id, locale=locale))
 
+    # ── Fix (hallucination guard): pertanyaan infrastruktur yang bocor ke lane
+    # project (mis. routing race) TIDAK boleh dijawab dari hitungan tiket —
+    # dulu LLM konflasi "4 tiket kuponku-core-api" jadi "4 replicas". Pre-check
+    # deterministik SEBELUM LLM synthesis: intent menyinggung dimensi infra +
+    # facts tidak punya blok K8s → append blok eksplisit agar LLM bilang jujur
+    # data tidak tersedia (bukan mengarang angka dari tiket).
+    _INFRA_DIMENSION_KW = ("replica", "pod", "deployment", "cluster", "namespace")
+    _facts_text = "\n".join(facts_blocks).lower()
+    if any(kw in intent_lower for kw in _INFRA_DIMENSION_KW) and "[k8s data]" not in _facts_text:
+        facts_blocks.append(
+            "[K8S DATA] unavailable — data replica/pod/deployment tidak dikumpulkan "
+            "di lane project (pertanyaan infrastruktur akan diroute ke lane k8s). "
+            "Ticket counts are NOT infrastructure metrics."
+        )
+
     suggestions = _build_suggestions(
         want_tickets=want_tickets, want_errors=want_errors, want_knowledge=want_knowledge,
         open_count=open_count, alert_services=alert_services, error_services=error_services,

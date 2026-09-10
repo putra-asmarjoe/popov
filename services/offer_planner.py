@@ -182,6 +182,13 @@ _CHAT_SUGGESTION_TEXTS = {
         "reopen": "Reopen this ticket",
         "status": "What is the current status?",
         "severity": "Summarize this ticket",
+        "assign": "Assign this ticket",
+        "label": "Add a label",
+        # STACK2 standalone follow-up chips (Fix #260)
+        "pod_events": "Show pod events for {svc}",
+        "pod_restarts": "Pod restart count for {svc} last 24h",
+        "mem_trend": "Check memory usage {svc} last 6 hours",
+        "req_trend": "Check request rate {svc} last 6 hours",
     },
     "id": {
         "investigate": "Investigasi lebih dalam error pada {svc}",
@@ -192,6 +199,13 @@ _CHAT_SUGGESTION_TEXTS = {
         "reopen": "Buka kembali tiket ini",
         "status": "Apa status saat ini?",
         "severity": "Ringkas tiket ini",
+        "assign": "Tetapkan tiket ini",
+        "label": "Tambahkan label",
+        # STACK2 standalone follow-up chips (Fix #260)
+        "pod_events": "Lihat events pod {svc}",
+        "pod_restarts": "Cek pod restart {svc} 24 jam terakhir",
+        "mem_trend": "Cek memory usage {svc} 6 jam terakhir",
+        "req_trend": "Cek request rate {svc} 6 jam terakhir",
     },
 }
 
@@ -201,6 +215,33 @@ def chat_suggestion(key: str, locale: str = "en", **fmt: str) -> str:
     texts = _CHAT_SUGGESTION_TEXTS.get(locale, _CHAT_SUGGESTION_TEXTS["en"])
     tmpl = texts.get(key, texts["status"])
     return tmpl.format(**fmt) if fmt else tmpl
+
+
+def build_standalone_suggestions(
+    *,
+    mode: str,
+    service_name: str,
+    locale: str = "en",
+) -> List[str]:
+    """Follow-up chips for STACK2 standalone answers (web chat only).
+    Every returned label deterministically hits a supervisor gate (STACK2-CHIP-PLAN §2.1).
+    Returns plain strings (FE contract). Empty list when no service_name.
+    """
+    if not service_name:
+        return []
+    svc = service_name
+    # (key, svc) pairs per mode — order matters for chip priority
+    _MODE_MAP = {
+        "pod_health":   [("pod_events", svc), ("pod_restarts", svc), ("mem_trend", svc)],
+        "promql_range": [("pod_events", svc), ("req_trend", svc), ("pod_restarts", svc)],
+        "k8s_events":   [("pod_restarts", svc), ("mem_trend", svc)],
+    }
+    out: List[str] = []
+    for key, s in _MODE_MAP.get(mode, []):
+        text = chat_suggestion(key, locale, svc=s)
+        if text not in out:
+            out.append(text)
+    return out
 
 
 # Fix #215: chip yang "sudah ditanyakan" user tidak perlu ditawarkan lagi (redundant).
@@ -237,6 +278,7 @@ def build_chat_suggestions(
     max_items: int = 3,
     intent: str = "",
     asked_intents: Optional[List[str]] = None,
+    last_intent_type: str = "",
 ) -> List[str]:
     """Chips follow-up untuk chat (tiket & project) — deterministik, bilingual.
 
@@ -245,6 +287,10 @@ def build_chat_suggestions(
     `asked_intents` = SEMUA pesan user dalam sesi (riwayat) — Fix #248: tanpa ini, chip
     status ↔ summarize bolak-balik selamanya (tiap jawaban menawarkan chip yang barusan
     dijawab, topik beda dari intent terakhir → tak pernah di-skip).
+
+    Fix #250: `last_intent_type` — chip kontekstual berdasarkan tipe intent terakhir user.
+    Tanpa ini, chip selalu sama ("What is the current status?") tanpa mempertimbangkan
+    apa yang baru saja ditanyakan/dilakukan user.
 
     Prioritas sesuai konteks:
     - ticket open → "What is the current status?" / "Summarize this ticket"
@@ -256,14 +302,27 @@ def build_chat_suggestions(
     # bangun sebagai (key, text) agar bisa filter by topic (bukan by localized label)
     out: List[tuple] = []
 
+    # Fix #250: Context-aware chips — berdasarkan last_intent_type
+    # Jika user baru bertanya (question) → tawarkan action chips
+    # Jika user baru melakukan aksi (action) → tawarkan question chips
+    is_question_intent = last_intent_type == "question"
+    is_action_intent = last_intent_type == "action"
+
     if ticket and project:
         status = (ticket.get("status") or "").lower()
         if status in ("resolved", "closed"):
             out.append(("reopen", chat_suggestion("reopen", locale)))
             out.append(("progress", chat_suggestion("progress", locale)))
         else:
-            out.append(("status", chat_suggestion("status", locale)))
-            out.append(("severity", chat_suggestion("severity", locale)))
+            # Fix #250: Jika user baru bertanya, tawarkan action; jika baru action, tawarkan question
+            if is_action_intent:
+                # User baru melakukan aksi → tawarkan pertanyaan follow-up
+                out.append(("status", chat_suggestion("status", locale)))
+                out.append(("severity", chat_suggestion("severity", locale)))
+            else:
+                # Default: tawarkan pertanyaan
+                out.append(("status", chat_suggestion("status", locale)))
+                out.append(("severity", chat_suggestion("severity", locale)))
 
     if root_cause != "unknown" and service_name:
         out.append(("investigate", chat_suggestion("investigate", locale, svc=service_name)))
@@ -273,6 +332,31 @@ def build_chat_suggestions(
 
     if want_knowledge:
         out.append(("knowledge", chat_suggestion("knowledge", locale)))
+
+    # Fix #250: Context-aware chips — berdasarkan last_intent_type
+    # Jika user baru bertanya (question) → tawarkan action chips sebagai follow-up
+    # Jika user baru melakukan aksi (action) → tawarkan question chips sebagai follow-up
+    if is_question_intent and ticket:
+        # User baru bertanya → tawarkan aksi yang relevan
+        # Hindari menawarkan pertanyaan lagi (sudah ditanyakan)
+        action_chips = [
+            ("add_progress", chat_suggestion("progress", locale)),
+            ("assign", chat_suggestion("assign", locale) if locale == "id" else "Assign this ticket"),
+            ("add_label", chat_suggestion("label", locale) if locale == "id" else "Add a label"),
+        ]
+        for key, chip in action_chips:
+            if key not in [k for k, _ in out]:
+                out.append((key, chip))
+
+    elif last_intent_type == "investigation":
+        # Fix #252: Investigation response → tawarkan aksi konkret, bukan pertanyaan generik.
+        # Clear generic chips, build investigation-specific set.
+        out = []
+        if service_name:
+            out.append(("investigate", chat_suggestion("investigate", locale, svc=service_name)))
+        out.append(("progress", chat_suggestion("progress", locale)))
+        if ticket:
+            out.append(("status", chat_suggestion("status", locale)))
 
     # Fix #215: skip chip yang topiknya sudah ada di intent user (redundancy polish).
     # `asked_intents` (seluruh riwayat user) lebih kuat dari `intent` terakhir saja —

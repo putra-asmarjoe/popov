@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ChatMessages } from "@/components/chat/ChatMessages"
-import { ChatSuggestions } from "@/components/chat/ChatSuggestions"
 import { AgentTracePanel } from "@/components/chat/AgentTracePanel"
 import { SplitHandle } from "@/components/shared/SplitHandle"
 import { useDragResize } from "@/hooks/useDragResize"
@@ -16,7 +15,6 @@ import { useProjects } from "@/hooks/useWorkspaces"
 import { useWorkspaceStore } from "@/store/workspace.store"
 import { cn } from "@/lib/utils"
 import { lastAssistantMeta } from "@/lib/chat-meta"
-import type { Suggestion } from "@/lib/chat-meta"
 
 /**
  * ProjectChatPage — halaman chat ber-konteks project (Chat by Project fase 1).
@@ -31,6 +29,7 @@ type ChatMode = (typeof CHAT_MODES)[number]
 
 export function ProjectChatPage() {
   const { t } = useTranslation("pchat")
+  const { sendMessage } = useChatStream()
   const { wsSlug = "", sessionId = "" } = useParams()
   const [text, setText] = useState("")
   const [mode, setMode] = useState<ChatMode>("low")
@@ -71,8 +70,19 @@ export function ProjectChatPage() {
 
   // Chips dari meta jawaban assistant TERAKHIR
   const meta = lastAssistantMeta(messagesQuery.data)
-  const suggestions = meta?.suggestions ?? []
   const ticketRefs = meta?.ticket_refs ?? []
+
+  // Fix: Sembunyikan suggestions saat user baru kirim pesan (setelah ": " message count).
+  // Reset saat meta berubah (response baru tiba).
+  const [hideSuggestions, setHideSuggestions] = useState(false)
+  const metaSig = meta?.messageId ?? meta?.summary ?? ""
+  const prevMetaSigRef = useRef(metaSig)
+  if (prevMetaSigRef.current !== metaSig) {
+    // Meta berubah = response baru tiba → tampilkan chips
+    prevMetaSigRef.current = metaSig
+    if (hideSuggestions) setHideSuggestions(false)
+  }
+  const suggestions = hideSuggestions ? [] : (meta?.suggestions ?? [])
 
   return (
     <div className="flex h-full min-w-0">
@@ -102,31 +112,26 @@ export function ProjectChatPage() {
 
         {/* Messages */}
         {sessionId ? (
-          <ChatMessages sessionId={sessionId} contentClassName="max-w-3xl" />
+          <ChatMessages
+            sessionId={sessionId}
+            contentClassName="max-w-3xl"
+            suggestions={suggestions}
+            ticketRefs={ticketRefs}
+            projects={projects}
+            project={project}
+            wsSlug={wsSlug}
+            onPickSuggestion={(label, ck) => {
+              setText(label)
+              setPendingChipKey(ck)
+            }}
+            onSendSuggestion={(t, ck) => {
+              setHideSuggestions(true)
+              void sendMessage(sessionId, t, mode, ck)
+            }}
+          />
         ) : (
           <div className="flex flex-1 items-center justify-center px-4 text-sm text-muted-foreground">
             <div className="mx-auto w-full max-w-3xl">{t("no_session")}</div>
-          </div>
-        )}
-
-        {/* Chips: link tiket (🎟️) — saran follow-up (💡) via ChatSuggestions */}
-        {ticketRefs.length > 0 && (
-          <div className="border-t px-4 py-2">
-            <div className="mx-auto flex max-w-3xl flex-wrap gap-1.5">
-              {ticketRefs.map((ref) => {
-                const proj = projects?.find((p) => p.key === ref.projectKey) ?? project
-                const href = proj ? `/w/${wsSlug}/${proj.slug}?ticket=${proj.key}-${ref.ticketNumber}` : "#"
-                return (
-                  <Link
-                    key={`ref-${ref.ticketId}`}
-                    to={href}
-                    className="rounded-full border bg-muted/40 px-2.5 py-1 text-xs hover:bg-muted"
-                  >
-                    🎟️ {ref.projectKey ?? project?.key}-{ref.ticketNumber}
-                  </Link>
-                )
-              })}
-            </div>
           </div>
         )}
         {/* Mode selector + input */}
@@ -158,12 +163,8 @@ export function ProjectChatPage() {
                 setText(v)
                 if (v !== text) setPendingChipKey(undefined)
               }}
-              onPickChip={(label, ck) => {
-                setText(label)
-                setPendingChipKey(ck)
-              }}
+              onSendMessage={() => setHideSuggestions(true)}
               draft={text}
-              suggestions={suggestions}
             />
           </div>
         </div>
@@ -187,17 +188,15 @@ function ProjectChatInput({
   sessionId,
   mode,
   onTextChange,
-  onPickChip,
+  onSendMessage,
   draft,
-  suggestions,
   chipKey,
 }: {
   sessionId: string
   mode: ChatMode
   onTextChange: (v: string) => void
-  onPickChip?: (text: string, chipKey?: string) => void
+  onSendMessage?: () => void
   draft: string
-  suggestions: Suggestion[]
   chipKey?: string
 }) {
   const { t } = useTranslation("pchat")
@@ -220,20 +219,12 @@ function ProjectChatInput({
     const value = draft.trim()
     if (value.length < 2 || !sessionId || isStreaming) return
     onTextChange("")
+    onSendMessage?.()
     void sendMessage(sessionId, value, mode, chipKey)
   }
 
   return (
     <div className="space-y-2">
-      <ChatSuggestions
-        suggestions={suggestions}
-        onPick={(label, ck) => {
-          if (onPickChip) onPickChip(label, ck)
-          else onTextChange(label)
-        }}
-        onSend={(t, ck) => void sendMessage(sessionId, t, mode, ck)}
-        contentClassName="max-w-3xl"
-      />
       <div className="flex items-end gap-2">
       <Textarea
         ref={taRef}

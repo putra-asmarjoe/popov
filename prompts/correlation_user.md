@@ -21,7 +21,7 @@ Source: Tempo HTTP API (distributed trace aggregate).
 
 ---
 {{health_section}}
-
+{{k8s_section}}
 ---
 Perform a complete correlation analysis. Format your answer exactly:
 

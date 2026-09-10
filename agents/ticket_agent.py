@@ -14,7 +14,10 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from services.ticket_intent import parse_ticket_intent, is_ticket_question, is_member_query
+from services.ticket_intent import (
+    parse_ticket_intent, is_ticket_question, is_member_query, is_investigation_query,
+    _is_progress_note_command, _extract_progress_note,
+)
 from services.ticket_store import (
     add_progress_note,
     can_reopen,
@@ -465,8 +468,16 @@ async def _build_ticket_summary(ticket: Dict[str, Any], project: Dict[str, Any],
                                                      "id" if reply_language.lower() == "bahasa indonesia" else "en")
 
 
-async def _ticket_suggestions(ticket: Dict[str, Any], project: Dict[str, Any], state: dict) -> List[str]:
-    """Chips follow-up utk chat tiket (web) — deterministik, bilingual (DRY via offer_planner)."""
+async def _ticket_suggestions(ticket: Dict[str, Any], project: Dict[str, Any],
+                              state: dict, intent_type: str = "") -> List[str]:
+    """Chips follow-up utk chat tiket (web) — deterministik, bilingual (DRY via offer_planner).
+
+    Fix #253 (CHIP_CONTEXT_PLAN A1/A2): `intent_type` di-pass dari branch pemanggil
+    ("question" | "action" | "investigation") → wired ke `last_intent_type`
+    build_chat_suggestions — tanpa ini Fix #250/#252 (chip kontekstual) tidak pernah
+    aktif di jalur live. `service_name` dari tiket juga di-pass → branch investigation
+    bisa menawarkan chip "Investigate deeper the error on X".
+    """
     from services.conversation import detect_chat_locale
     from services.offer_planner import build_chat_suggestions
     from services.user_store import get_user_locale
@@ -484,8 +495,11 @@ async def _ticket_suggestions(ticket: Dict[str, Any], project: Dict[str, Any], s
     current = (state.get("intent") or "").strip()
     if current and current not in asked_intents:
         asked_intents.append(current)
-    return build_chat_suggestions(ticket=ticket, project=project, locale=locale,
-                                  max_items=3, asked_intents=asked_intents)
+    return build_chat_suggestions(ticket=ticket, project=project,
+                                  service_name=(ticket.get("serviceName") or ""),
+                                  locale=locale, max_items=3,
+                                  asked_intents=asked_intents,
+                                  last_intent_type=intent_type)
 
 
 async def _user_context_for_state(user_id: str, workspace_id: str) -> str:
@@ -513,14 +527,106 @@ async def ticket_agent(state: dict) -> dict:
     if err:
         return await _reply(state, agents_visited, f"⚠️ {err}")
 
+    # Fix #252: Progress note guard — WAJIB sebelum is_investigation_query.
+    # "Add a progress note about scaling investigation" → progress note, bukan investigasi.
+    # Sinyal eksplisit aksi tulis ("add"/"tambah" + "note"/"catatan") wins.
+    if _is_progress_note_command(intent):
+        note_text = _extract_progress_note(intent)
+        if note_text:
+            reply = await _execute_action(
+                state, agents_visited, user, ticket, project, ws,
+                "add_progress", {"note": note_text}, locale,
+            )
+            return reply
+        # pattern detected tapi note kosong → jatuh ke branch berikutnya (clarify/LLM)
+
+    # Fix #251: Investigation query — route ke investigasi/analysis, bukan summary.
+    # "Why is X happening?", "What is causing Y?" → tawarkan investigasi lebih dalam.
+    # WAJIB sebelum ticket_question_forced — supervisor set ticket_question_forced=True
+    # untuk semua pertanyaan, tapi investigasi butuh respons berbeda.
+    if is_investigation_query(intent):
+        _reply_lang = "English" if locale == "en" else "Bahasa Indonesia"
+        service_name = ticket.get("serviceName") or ticket.get("service") or ""
+        ticket_num = ticket.get("ticketNumber") or ""
+        ticket_status = ticket.get("status") or ""
+        ticket_severity = ticket.get("severity") or ""
+        root_cause = ticket.get("rootCause") or "unknown"
+
+        # Build investigation response
+        if _reply_lang == "English":
+            response_parts = [
+                f"🔍 *Investigation Analysis for {project.get('key', 'TKT')}-{ticket_num}*",
+                "",
+                f"*Status:* {ticket_status} | *Severity:* {ticket_severity}",
+                f"*Service:* {service_name or 'N/A'}",
+                f"*Root Cause Assessment:* {root_cause}",
+                "",
+                "Based on the ticket information, here are the recommended investigation steps:",
+            ]
+            if root_cause != "unknown":
+                response_parts.extend([
+                    f"1. *Review root cause:* The assessed root cause is '{root_cause}' — verify this aligns with observed symptoms",
+                    f"2. *Check related alerts:* Look for correlated alerts in the last 3 hours for service `{service_name}`",
+                    f"3. *Analyze traces:* Review distributed traces for latency/error patterns",
+                    f"4. *Compare with similar incidents:* Check if this pattern matches previous incidents",
+                ])
+            else:
+                response_parts.extend([
+                    f"1. *Gather more data:* Check logs and metrics for service `{service_name}`",
+                    f"2. *Review recent changes:* Check for recent deployments or configuration changes",
+                    f"3. *Analyze error patterns:* Look for recurring error messages or patterns",
+                    f"4. *Check dependencies:* Verify downstream service health",
+                ])
+            response_parts.extend([
+                "",
+                "💡 *Tip:* You can say \"Investigate deeper the error on {svc}\" to start a detailed investigation.".format(svc=service_name),
+            ])
+            response = "\n".join(response_parts)
+        else:
+            response_parts = [
+                f"🔍 *Analisis Investigasi untuk {project.get('key', 'TKT')}-{ticket_num}*",
+                "",
+                f"*Status:* {ticket_status} | *Severity:* {ticket_severity}",
+                f"*Service:* {service_name or 'N/A'}",
+                f"*Penilaian Akar Masalah:* {root_cause}",
+                "",
+                "Berdasarkan informasi tiket, berikut langkah investigasi yang direkomendasikan:",
+            ]
+            if root_cause != "unknown":
+                response_parts.extend([
+                    f"1. *Tinjau akar masalah:* Akar masalah yang dinilai adalah '{root_cause}' — verifikasi ini sesuai dengan gejala yang diamati",
+                    f"2. *Periksa alert terkait:* Cari alert yang berkorelasi dalam 3 jam terakhir untuk service `{service_name}`",
+                    f"3. *Analisis trace:* Tinjau trace distribusi untuk pola latency/error",
+                    f"4. *Bandingkan insiden serupa:* Periksa apakah pola ini cocok dengan insiden sebelumnya",
+                ])
+            else:
+                response_parts.extend([
+                    f"1. *Kumpulkan data tambahan:* Periksa log dan metrik untuk service `{service_name}`",
+                    f"2. *Tinjau perubahan terakhir:* Periksa deployment atau perubahan konfigurasi terbaru",
+                    f"3. *Analisis pola error:* Cari pesan error atau pola yang berulang",
+                    f"4. *Periksa dependensi:* Verifikasi kesehatan service downstream",
+                ])
+            response_parts.extend([
+                "",
+                "💡 *Tips:* Anda bisa mengatakan \"Investigasi lebih dalam error pada {svc}\" untuk memulai investigasi detail.".format(svc=service_name),
+            ])
+            response = "\n".join(response_parts)
+
+        suggestions = await _ticket_suggestions(ticket, project, state,
+                                                intent_type="investigation")
+        return await _reply(state, agents_visited, response,
+                            {"ok": True, "action": "investigation", "ticket_id": str(ticket["_id"])},
+                            suggestions=suggestions)
+
     # Pertanyaan tentang tiket → jawab via LLM dengan konteks tiket + riwayat.
     # Fix #197 (Lapis 5): lane arbiter memaksa pertanyaan → summary (bypass parse aksi).
+    # WAJIB setelah is_investigation_query — investigasi butuh respons berbeda.
     if state.get("ticket_question_forced"):
         _reply_lang = "English" if locale == "en" else "Bahasa Indonesia"
         _uctx = await _user_context_for_state(str(user["_id"]), str(ws.get("_id", "")))
         summary = await _build_ticket_summary(ticket, project, intent,
                                               state.get("conversation_history"), _reply_lang, _uctx)
-        suggestions = await _ticket_suggestions(ticket, project, state)
+        suggestions = await _ticket_suggestions(ticket, project, state, intent_type="question")
         return await _reply(state, agents_visited, summary,
                             {"ok": True, "action": "summary", "ticket_id": str(ticket["_id"])},
                             suggestions=suggestions)
@@ -530,7 +636,7 @@ async def ticket_agent(state: dict) -> dict:
         _uctx = await _user_context_for_state(str(user["_id"]), str(ws.get("_id", "")))
         summary = await _build_ticket_summary(ticket, project, intent,
                                               state.get("conversation_history"), _reply_lang, _uctx)
-        suggestions = await _ticket_suggestions(ticket, project, state)
+        suggestions = await _ticket_suggestions(ticket, project, state, intent_type="question")
         return await _reply(state, agents_visited, summary,
                             {"ok": True, "action": "summary", "ticket_id": str(ticket["_id"])},
                             suggestions=suggestions)
@@ -586,5 +692,7 @@ async def ticket_agent(state: dict) -> dict:
         reply["formatted_message"] = await _offer_next(
             state, agents_visited, ticket, project, action, reply.get("formatted_message", ""), locale
         )
-        reply["chat_suggestions"] = await _ticket_suggestions(ticket, project, state)
+        # Fix #253: aksi baru dieksekusi → chips kontekstual "question" (Fix #250).
+        reply["chat_suggestions"] = await _ticket_suggestions(ticket, project, state,
+                                                               intent_type="action")
     return reply

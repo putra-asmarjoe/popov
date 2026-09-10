@@ -97,6 +97,112 @@ def is_member_query(intent: str) -> bool:
     return any(kw in low for kw in _MEMBER_QUERY_KEYWORDS)
 
 
+# Fix #251: investigation query detection — "why is X happening?", "what is causing Y?"
+# Pertanyaan ini seharusnya route ke investigasi/analysis, bukan summary tiket.
+# Fix #253 (CHIP_CONTEXT_PLAN C1): HANYA frasa kausal eksplisit. Bare noun/verb
+# ("investigation", "analyze", dst.) DIHAPUS — "What was the conclusion of the
+# investigation?" adalah pertanyaan summary, bukan permintaan investigasi.
+# Jalur "Investigate deeper..." aman: punya gate sendiri di supervisor
+# (_investigate_ticket_kw) dan dicek SEBELUM tiket lane.
+_INVESTIGATION_KEYWORDS = (
+    # EN — kausal eksplisit
+    "why is", "why does", "why did", "why are", "why was", "why were",
+    "what is causing", "what causes", "what caused", "what's causing",
+    "what is the root cause", "what's the root cause", "root cause",
+    "what is the reason", "what's the reason", "reason for",
+    "how did this happen", "how does this happen", "how did this occur",
+    "what led to", "what led up to", "what triggered", "what triggered this",
+    # ID — kausal eksplisit
+    "kenapa", "mengapa", "apa yang menyebabkan", "apa penyebab",
+    "akar masalah", "mengapa ini terjadi",
+    "bagaimana ini bisa terjadi", "apa yang membuat", "apa yang memicu",
+)
+
+
+def is_investigation_query(intent: str) -> bool:
+    """True bila intent adalah pertanyaan investigasi (root cause, analysis).
+
+    Fix #251: pertanyaan investigasi seharusnya route ke investigasi/analysis,
+    bukan summary tiket. Tanpa ini, "Why is X happening?" dijawab summary generik.
+    """
+    low = _clean_intent(intent).lower()
+    return any(kw in low for kw in _INVESTIGATION_KEYWORDS)
+
+
+# Fix #249: rule-based detect "add progress note" — pattern umum EN/ID.
+# Tanpa ini, intent jatuh ke parse_ticket_intent (LLM) → gagal saat model down →
+# clarify_reply → fallback "I'm focused on the ticket..." (dead-end).
+_PROGRESS_NOTE_PATTERNS = (
+    # EN patterns
+    "add a progress note", "add progress note", "add progress",
+    "add a note", "add note",
+    "write a progress note", "write progress note",
+    "post a progress note", "post progress note",
+    "insert a progress note", "insert progress note",
+    "note that",
+    # ID patterns
+    "tambahkan catatan progress", "tambah catatan progress", "tambah progress",
+    "tambahkan catatan", "tambah catatan",
+    "tulis catatan progress", "tulis catatan",
+    "buat catatan progress", "buat catatan",
+    "catat bahwa",
+    # chip label (EN/ID)
+    "add progress note", "catatan progress",
+)
+
+
+def _is_progress_note_command(intent: str) -> bool:
+    """True bila intent adalah perintah 'add progress note' (deterministic, tanpa LLM)."""
+    low = _clean_intent(intent).lower()
+    return any(p in low for p in _PROGRESS_NOTE_PATTERNS)
+
+
+def _extract_progress_note(intent: str) -> Optional[str]:
+    """Ekstrak teks catatan dari perintah 'add progress note'.
+
+    supported patterns:
+      - "add progress note: we are checking the gateway logs"
+      - "add progress note saying we are checking the gateway logs"
+      - "add a progress note about scaling investigation"   (Fix #253 B2: separator about/that/regarding)
+      - "note that we are investigating the error"          (Fix #253 B1: tanpa verb perintah)
+      - "tambahkan catatan progress: kami sedang memeriksa log gateway"
+      - "tambah catatan progress sedang investigasi"
+      - "catat bahwa kami sedang memeriksa log"             (Fix #253 B1)
+    """
+    import re
+    text = _clean_intent(intent)
+    # EN pattern 1: "add/write/post/insert [a] [progress] note <sep> <text>"
+    # Fix #253 B2: separator diperluas — 'about/that/regarding/says' ikut dibuang,
+    # bukan tersimpan sebagai bagian note (bocor kata penghubung ke progressLog).
+    m = re.search(
+        r'\b(?:add|write|post|insert)\s+(?:a\s+)?(?:progress\s+)?note\s*'
+        r'(?:saying|says|that|about|regarding|:|;|-|,)?\s*(.+)',
+        text, re.IGNORECASE
+    )
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    # EN pattern 2 (Fix #253 B1): "note that <text>" — tanpa verb perintah.
+    # Pattern list sudah memuat "note that" (Fix #252) — extract wajib ikut,
+    # kalau tidak guard match lalu jatuh ke clarify (dead-end deterministik).
+    m = re.search(r'\bnote\s+that\s*[:\-]?\s*(.+)', text, re.IGNORECASE)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    # ID pattern 1 (Fix #253 B1): "catat bahwa <text>"
+    m = re.search(r'\bcatat\s+bahwa\s*[:\-]?\s*(.+)', text, re.IGNORECASE)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    # ID pattern 2: "tambahkan/tambah/buat/tulis catatan progress <sep> <text>"
+    # Fix #253 B2: separator + bahwa/tentang.
+    m = re.search(
+        r'(?:tambahkan|tambah|buat|tulis)\s+catatan\s+progress\s*'
+        r'(?:bahwa|tentang|:|;|-|_|,)?\s*(.+)',
+        text, re.IGNORECASE
+    )
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    return None
+
+
 def _clean_intent(intent: str) -> str:
     """Buang prefix FE `[context: ...]` (robust terhadap kurung bersarang)."""
     text = intent or ""
@@ -146,6 +252,17 @@ async def parse_ticket_intent(
         logger.info("[TicketIntent] question (?) detected → not an action")
         return None
     intent = _clean_intent(intent)
+
+    # Fix #249: rule-based "add progress note" — tanpa LLM, selalu jalan walau model down.
+    # Pattern umum EN/ID sudah cukup stabil; parsing teks catatan via regex.
+    if _is_progress_note_command(intent):
+        note = _extract_progress_note(intent)
+        if note:
+            logger.info(f"[TicketIntent] rule-based add_progress (note={note[:50]}...)")
+            return {"action": "add_progress", "params": {"note": note}}
+        # pattern detected tapi teks kosong → tetap return None, biar clarify_reply handle
+        logger.info("[TicketIntent] rule-based add_progress detected but note empty → None")
+
     try:
         from langchain_core.messages import SystemMessage, HumanMessage
         from services.llm_factory import get_chat_llm

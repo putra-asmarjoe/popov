@@ -133,7 +133,9 @@
     "link_projects_label": "Link projects",
     "select_all": "Select all",
     "deselect_all": "Deselect all",
-    "link_projects_hint": "{{count}} project(s) linked — stack will monitor these projects"
+    "link_projects_hint": "{{count}} project(s) linked — stack will monitor these projects",
+    "k8s_intro": "Kubernetes API endpoint — use a Service Account token to access the cluster.",
+    "k8s_api_label": "K8s API Server"
   },
   "snippet": {
     "title": "Alertmanager snippet — {{name}}",

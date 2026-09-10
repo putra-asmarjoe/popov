@@ -9,18 +9,21 @@ import { useChatStore } from "@/store/chat.store"
  *  Props `value`/`onTextChange` opsional — controlled draft (dipakai ChatPanel utk chips
  *  suggestions); tanpa props, state internal dipakai (perilaku lama).
  *  `chipKey` (USER_PROFILE_PLAN Phase 2): identifier chip asal draft — dikirim sekali
- *  saat submit; parent reset via onTextChange saat user mengetik manual. */
+ *  saat submit; parent reset via onTextChange saat user mengetik manual.
+ *  `onSend`: callback saat pesan terkirim (digunakan parent utk hide suggestions). */
 export function ChatInput({
   sessionId,
   disabled,
   value: externalValue,
   onTextChange,
+  onSend,
   chipKey,
 }: {
   sessionId: string
   disabled?: boolean
   value?: string
   onTextChange?: (v: string) => void
+  onSend?: () => void
   chipKey?: string
 }) {
   const { t } = useTranslation("project")
@@ -48,6 +51,7 @@ export function ChatInput({
     const value = text.trim()
     if (value.length < 2 || isStreaming || disabled) return
     setText("")
+    onSend?.()
     void sendMessage(sessionId, value, undefined, chipKey)
   }
 

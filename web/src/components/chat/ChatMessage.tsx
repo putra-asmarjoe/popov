@@ -17,7 +17,7 @@ export function ChatMessage({ message }: { message: ChatMessageType }) {
   const openTrace = useChatStore((s) => s.openTrace)
 
   return (
-    <div className={cn("flex min-w-0 gap-2.5", isUser && "flex-row-reverse")}>
+    <div data-role={message.role} data-message-id={message.id} className={cn("flex min-w-0 gap-2.5", isUser && "flex-row-reverse")}>
       <div
         className={cn(
           "flex size-7 shrink-0 items-center justify-center rounded-full",

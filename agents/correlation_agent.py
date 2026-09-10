@@ -106,6 +106,7 @@ _GAP_DESCRIPTIONS = {
         "trace_agent":   "Distributed traces belum diperiksa (relevan untuk downstream timeout & latency)",
         "health_agent":  "Koneksi database belum diuji (relevan untuk downstream connection failures)",
         "span_agent":    "Detail span central log belum diperiksa (relevan untuk tracing error spesifik)",
+        "k8s_agent":     "Events Kubernetes belum diperiksa (relevan untuk pod restart/crash: BackOff, OOMKilled, probe gagal)",
     },
     "en": {
         "metrics_agent": "Error rate & HPA metrics not yet examined (relevant for traffic spike / resource exhaustion)",
@@ -113,6 +114,7 @@ _GAP_DESCRIPTIONS = {
         "trace_agent":   "Distributed traces not yet examined (relevant for downstream timeout & latency)",
         "health_agent":  "Database connection not yet tested (relevant for downstream connection failures)",
         "span_agent":    "Central log span detail not yet examined (relevant for specific error tracing)",
+        "k8s_agent":     "Kubernetes events not yet examined (relevant for pod restart/crash: BackOff, OOMKilled, failed probes)",
     },
 }
 
@@ -125,6 +127,7 @@ _GAP_ACTIONS = {
         "trace_agent":   "Lihat distributed traces",
         "health_agent":  "Uji koneksi database",
         "span_agent":    "Periksa detail span",
+        "k8s_agent":     "Periksa events K8s",
     },
     "en": {
         "metrics_agent": "Check error rate & HPA metrics",
@@ -132,6 +135,7 @@ _GAP_ACTIONS = {
         "trace_agent":   "View distributed traces",
         "health_agent":  "Test database connections",
         "span_agent":    "Inspect span details",
+        "k8s_agent":     "Inspect K8s events",
     },
 }
 
@@ -259,6 +263,20 @@ async def correlation_agent(state: AgentState) -> dict:
     span_summary_raw = state.get("span_summary") or ""
     span_available = state.get("span_available", False)
     health_result = state.get("health_result")
+    # Fix #269: events K8s = pilar ke-5 saat pod restart/crash (BackOff/OOMKilled
+    # hanya muncul di events, tidak di metrics/logs). Guard stand-alone: k8s_summary
+    # di-set juga oleh lane k8s mandiri (tanpa correlation) — hanya sertakan bila
+    # ini investigasi fan-out (planned_nodes/triage ada) DAN k8s dijalankan.
+    k8s_summary = ""
+    _k8s_ran = "k8s_agent" in (state.get("agents_visited") or [])
+    _is_fanout = bool(state.get("planned_nodes") or state.get("triage_result") is not None)
+    if _k8s_ran and _is_fanout:
+        k8s_summary = state.get("k8s_summary") or ""
+    k8s_section = (
+        f"\n---\n### PILLAR 5: KUBERNETES EVENTS (pod restart/crash evidence)\n"
+        f"{k8s_summary}\n"
+        if k8s_summary else ""
+    )
     agents_visited = ["correlation_agent"]
     # Fix #143: bahasa analisis eksplisit — dipakai utk reply_language di prompt LLM
     # DAN teks V2.1 (gap/suggested). Web chat = detect → user pref; telegram = owner ws.
@@ -377,6 +395,7 @@ explain from the ticket description what might be happening; stay honest about d
         trace_summary=trace_summary,
         span_section=span_section,
         health_section=health_section,
+        k8s_section=k8s_section,
         reply_language=("English" if locale == "en" else "Bahasa Indonesia"),
     )
 

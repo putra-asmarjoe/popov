@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next"
 import { Activity, Bot, Loader2 } from "lucide-react"
 import { ChatInput } from "@/components/chat/ChatInput"
 import { ChatMessages } from "@/components/chat/ChatMessages"
-import { ChatSuggestions } from "@/components/chat/ChatSuggestions"
 import { AgentTracePanel } from "@/components/chat/AgentTracePanel"
 import { SplitHandle } from "@/components/shared/SplitHandle"
 import { useDragResize } from "@/hooks/useDragResize"
@@ -61,10 +60,21 @@ export function ChatPanel({
   // refresh-safe (pola yang sama dgn chat project / ProjectChatPage).
   const messagesMap = useChatStore((s) => s.messages)
   const ticketMessages = ticketSession ? (messagesMap[ticketSession.id] ?? []) : []
-  const suggestions = useMemo(() => lastAssistantMeta(ticketMessages)?.suggestions ?? [], [ticketMessages])
+  const rawMeta = useMemo(() => lastAssistantMeta(ticketMessages), [ticketMessages])
   // Belum ada chat sama sekali → tampilkan chip "check ticket detail" (pengecekan dini)
   const hasMessages = ticketMessages.length > 0
   const isStreamingThis = useChatStore((s) => s.streaming[ticketSession?.id ?? ""]?.isStreaming ?? false)
+
+  // Fix: Sembunyikan suggestions saat user baru kirim pesan.
+  // Reset saat meta berubah (response baru tiba).
+  const [hideSuggestions, setHideSuggestions] = useState(false)
+  const metaSig = rawMeta?.messageId ?? rawMeta?.summary ?? ""
+  const prevMetaSigRef = useRef(metaSig)
+  if (prevMetaSigRef.current !== metaSig) {
+    prevMetaSigRef.current = metaSig
+    if (hideSuggestions) setHideSuggestions(false)
+  }
+  const suggestions = hideSuggestions ? [] : (rawMeta?.suggestions ?? [])
 
   // Auto-buat sesi saat belum ada (sekali per tiket; ref mencegah dobel create)
   const requestedTicketId = useRef<string | null>(null)
@@ -139,7 +149,18 @@ export function ChatPanel({
         <div className="flex h-full min-h-0 flex-1 flex-col">
           {ticketSession ? (
             <>
-              <ChatMessages sessionId={ticketSession.id} />
+              <ChatMessages
+                sessionId={ticketSession.id}
+                suggestions={suggestions}
+                onPickSuggestion={(text, chipKey) => {
+                  setDraft(text)
+                  setPendingChipKey(chipKey)
+                }}
+                onSendSuggestion={(text, chipKey) => {
+                  setHideSuggestions(true)
+                  void sendMessage(ticketSession.id, text, undefined, chipKey)
+                }}
+              />
               {!hasMessages && !isStreamingThis && (
                 <div className="border-t px-4 py-2">
                   <div className="flex flex-wrap gap-1.5">
@@ -157,14 +178,6 @@ export function ChatPanel({
                   </div>
                 </div>
               )}
-              <ChatSuggestions
-                suggestions={suggestions}
-                onPick={(text, chipKey) => {
-                  setDraft(text)
-                  setPendingChipKey(chipKey)
-                }}
-                onSend={(text, chipKey) => void sendMessage(ticketSession.id, text, undefined, chipKey)}
-              />
               <ChatInput
                 sessionId={ticketSession.id}
                 value={draft}
@@ -174,6 +187,7 @@ export function ChatPanel({
                   // User mengetik manual (atau mengubah hasil pick chip) → chipKey basi
                   if (v !== draft) setPendingChipKey(undefined)
                 }}
+                onSend={() => setHideSuggestions(true)}
               />
             </>
           ) : (

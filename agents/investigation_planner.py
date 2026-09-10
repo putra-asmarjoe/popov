@@ -20,6 +20,7 @@ NODES = {
     "trace": "trace_agent",
     "health": "health_agent",
     "span": "span_agent",
+    "k8s": "k8s_agent",  # Fix #269: lane events K8s utk RCA pod restart
 }
 
 MAP: Dict[str, List[str]] = {
@@ -184,6 +185,21 @@ def plan(state: dict) -> dict:
             f"skip_hints={skip_hints} focus_hints={focus_hints} "
             f"{'(FOCUS bypass narrow)' if focus_trigger else ''} base={base} → {nodes}"
         )
+
+    # Fix #269: pod restart/crash RCA butuh events K8s (BackOff/OOMKilled/Unhealthy)
+    # — TIDAK ada lane lain yang mengambilnya (metrics hanya menghitung restarts,
+    # bukan sebab). Append k8s_agent saat intent mengandung sinyal restart/crash.
+    # Sumber kata kunci: supervisor.POD_RESTART_SIGNALS (import lokal — planner
+    # tetap pure, hindari cycle import).
+    try:
+        from agents.supervisor import POD_RESTART_SIGNALS
+        _intent_low = (state.get("intent") or "").lower()
+        if (any(sig in _intent_low for sig in POD_RESTART_SIGNALS)
+                and NODES["k8s"] not in nodes):
+            nodes.append(NODES["k8s"])
+            reason += " + k8s_agent (pod restart signal)"
+    except Exception as e:  # non-blocking — lane tambahan bersifat best-effort
+        logger.warning(f"[Planner] pod-restart lane check failed (non-fatal): {e}")
 
     # Fase 4A: span fan-in jika watchdog traceId dan hipotesis butuh trace
     needs_trace = hyp in ("regression_post_deploy", "downstream_timeout", "traffic_spike", "unknown")

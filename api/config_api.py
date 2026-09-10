@@ -307,7 +307,7 @@ async def update_observability(body: ObservabilityUpdateRequest, admin: dict = D
 
 class ObservabilityTargetUpsert(BaseModel):
     name: str
-    kind: Optional[str] = None          # Fix #45: prometheus/tempo/alertmanager/loki/otel
+    kind: Optional[str] = None          # Fix #45: prometheus/tempo/alertmanager/loki/otel/k8s
     workspace_id: Optional[str] = None
     project_ids: list[str] = []
     alertmanager_url: str = ""
@@ -322,6 +322,11 @@ class ObservabilityTargetUpsert(BaseModel):
     log_db_name: str = ""
     span_collection: Optional[str] = None   # default span_logs
     http_collection: Optional[str] = None   # default http_logs
+    # kind="k8s" (Fix #261)
+    k8s_api_url: Optional[str] = None       # cluster API endpoint, e.g. https://k8s.prod:6443
+    k8s_token: Optional[str] = None         # SA token (write-only, encrypted at rest)
+    k8s_namespace: Optional[str] = None     # default "default"
+    k8s_verify_ssl: Optional[bool] = None  # default False (self-signed clusters)
 
 
 def _public_url() -> str:
@@ -357,11 +362,16 @@ async def create_observability_target(body: ObservabilityTargetUpsert, admin: di
             log_db_name=body.log_db_name,
             span_collection=body.span_collection or "",
             http_collection=body.http_collection or "",
+            k8s_api_url=body.k8s_api_url or "",
+            k8s_token=body.k8s_token,
+            k8s_namespace=body.k8s_namespace or "",
+            k8s_verify_ssl=body.k8s_verify_ssl if body.k8s_verify_ssl is not None else False,
         )
     except ValueError as e:
         raise HTTPException(409 if "sudah memiliki" in str(e) else 422, str(e))
     snippet = build_alertmanager_snippet(_public_url(), result["target"]["observ_id"], result["webhook_token"])
-    return {**result, "target": mask_otel_target(result["target"]), "alertmanager_snippet": snippet}
+    resp = {**result, "target": mask_otel_target(result["target"]), "alertmanager_snippet": snippet}
+    return resp
 
 
 class ObservabilityTargetPatchRequest(BaseModel):
@@ -382,6 +392,11 @@ class ObservabilityTargetPatchRequest(BaseModel):
     log_db_name: Optional[str] = None
     span_collection: Optional[str] = None
     http_collection: Optional[str] = None
+    # kind="k8s" (Fix #261) — token write-only, masked di response
+    k8s_api_url: Optional[str] = None
+    k8s_token: Optional[str] = None       # plaintext → encrypted di backend
+    k8s_namespace: Optional[str] = None
+    k8s_verify_ssl: Optional[bool] = None
 
 
 @router.patch("/observability-targets/{observ_id}")
@@ -450,14 +465,21 @@ class TestUrlRequest(BaseModel):
     """Probe satu endpoint observability dgn value form (belum disimpan) — Fix #108."""
     kind: str
     url: str
-
+    # kind=k8s (Fix #261) — token + verify di form sebelum save
+    token: Optional[str] = None
+    verify_ssl: Optional[bool] = None
 
 @router.post("/observability-targets/test-url")
 async def test_target_url(body: TestUrlRequest, admin: dict = Depends(require_admin)):
     from services.observability_store import PROBE_PATHS, probe_single
-    if body.kind not in PROBE_PATHS:
-        raise HTTPException(422, f"kind harus salah satu dari {sorted(PROBE_PATHS)}")
-    result = await probe_single(body.kind, body.url)
+    allowed_kinds = set(PROBE_PATHS.keys()) | {"k8s"}
+    if body.kind not in allowed_kinds:
+        raise HTTPException(422, f"kind harus salah satu dari {sorted(allowed_kinds)}")
+    result = await probe_single(
+        body.kind, body.url,
+        token=body.token or "",
+        verify_ssl=body.verify_ssl if body.verify_ssl is not None else False,
+    )
     if result.get("status") == "not_configured":
         raise HTTPException(422, "URL wajib diisi")
     return result

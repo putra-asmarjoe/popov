@@ -208,3 +208,55 @@ async def clarify_reply(
     except Exception as e:
         logger.warning(f"[Conversation] clarify_reply LLM failed ({mode}): {e}")
         return {"route": None, "question": _fallback_question(mode, options, locale)}
+
+
+# ─── STACK2-LANG (Fix #259): single locale resolver for standalone lanes ────────
+async def resolve_state_locale(state: dict) -> str:
+    """Resolve user locale from state context. Returns 'en' or 'id'.
+
+    Order:
+      1. sender.user_id → user_store.get_user_locale
+      2. conversation_history → detect_chat_locale
+      3. workspace owner → locale_pref.get_workspace_locale
+      4. fallback 'en'
+
+    Exception-safe — always returns a valid locale.
+    """
+    locale = None
+    sender = state.get("sender") or {}
+    user_id = sender.get("user_id")
+
+    # 1. User preference
+    if user_id:
+        try:
+            from services.user_store import get_user_locale
+            locale = await get_user_locale(user_id)
+        except Exception:
+            pass
+
+    # 2. Chat history detection
+    history = state.get("conversation_history") or []
+    if history:
+        try:
+            detected = detect_chat_locale(history, default=locale or "en")
+            if detected and detected != (locale or "en"):
+                # History overrides user pref only if it clearly detects a different language
+                locale = detected
+        except Exception:
+            pass
+
+    # 3. Workspace owner locale
+    if not locale or locale not in ("id", "en"):
+        workspace_id = state.get("workspace_id")
+        if workspace_id:
+            try:
+                from services.locale_pref import get_workspace_locale
+                locale = await get_workspace_locale(workspace_id)
+            except Exception:
+                pass
+
+    # 4. Fallback
+    if not locale or locale not in ("id", "en"):
+        locale = "en"
+
+    return locale
