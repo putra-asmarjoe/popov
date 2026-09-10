@@ -124,6 +124,21 @@ class AgentState(TypedDict):
     # Diisi api/chat.py; dipakai ticket summary, telegram format, correlation (2-3 turn).
     conversation_history: Optional[list]  # [{role: user|assistant, content}]
 
+    # STACK2 Fase 1: Pod Health & PromQL Range
+    metrics_mode: Optional[str]           # "pod_health" | "promql_range" | None
+    metrics_window: Optional[str]         # e.g. "30m", "1h", "6h", "24h", "7d"
+    metrics_promql: Optional[str]         # translated PromQL (from promql_translator)
+    metrics_description: Optional[str]    # human-readable description of the query
+    metrics_confidence: Optional[float]   # translator confidence (0.0-1.0)
+    # STACK2 Fase 2: K8s Events Integration
+    k8s_intent: Optional[str]            # "events" | "pod_status" | "node_pressure" | "all" | None
+    k8s_mode: Optional[str]              # "deployment_ranking" | "deployment_overview" | None
+    k8s_summary: Optional[str]           # formatted K8s summary for response_agent
+    k8s_available: Optional[bool]        # True if K8s stack is configured and reachable
+    k8s_raw: Optional[dict]              # raw K8s API data (events, pod_status, node_pressure)
+    k8s_node: Optional[str]              # specific node name for node_pressure queries
+    k8s_namespace: Optional[str]         # override namespace (default: from observ_config)
+
     # Fix #40 — notifikasi multi-bot: channel asal pesan masuk (mention/callback/webhook).
     # Diisi listener/webhook; response_agent membalas via channel ini saja.
     origin_notif_id: Optional[str]
@@ -144,7 +159,7 @@ class AgentState(TypedDict):
     # CHATFLOW V2.1 (Tahap 1) — transparansi & investigasi otonom.
     # Diisi correlation_agent setelah RCA (tanpa LLM tambahan).
     investigation_confidence: float   # 0.0 – 1.0, default 0.0
-    data_gaps: list[str]              # deskripsi human-readable lane yang di-skip
+    data_gaps: List[Dict[str, Any]]              # structured: [{node, description, reason, suggested_action, priority}]
     gap_nodes: list[str]              # nama node graph yang di-skip (utk router Tahap 4)
     suggested_next: list[str]         # aksi investigasi spesifik (maks 3)
     internal_loop_count: int          # jumlah kali autonomous loop berjalan, default 0

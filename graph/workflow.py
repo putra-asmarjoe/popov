@@ -15,6 +15,7 @@ from agents.triage_agent import triage_agent
 from agents.knowledge_agent import knowledge_agent
 from agents.ticket_agent import ticket_agent
 from agents.project_agent import project_agent
+from agents.k8s_agent import k8s_agent  # STACK2 F2 — node #16
 import logging
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,8 @@ def _route(state: AgentState) -> Union[str, List[str]]:
         "span_agent":      "span_agent",
         "ticket_agent":    "ticket_agent",
         "project_agent":   "project_agent",
+        "metrics_agent":   "metrics_agent",   # STACK2 F1: direct to metrics (pod_health/promql_range)
+        "k8s_agent":       "k8s_agent",       # STACK2 F2: direct to k8s (k8s_events)
         "end":             END,
     }
     return route_map.get(next_a, END)
@@ -163,6 +166,23 @@ def _route_health_agent(state: AgentState) -> str:
     return "response_agent"
 
 
+def _route_metrics_agent(state: AgentState) -> str:
+    """
+    STACK2 F1: metrics_agent → response_agent when standalone mode
+    (pod_health or promql_range), knowledge_agent when part of incident fan-out
+    OR default (no mode set — investigate:metrics chip, direct fan-out).
+    """
+    metrics_mode = state.get("metrics_mode")
+    if metrics_mode in ("pod_health", "promql_range"):
+        # Standalone: response_agent directly (format + send)
+        return "response_agent"
+    # Default: knowledge_agent (R3 fix — incident fan-out, investigate:metrics chip)
+    # Without triage_result/planned_nodes, this is still a collector that should
+    # feed into correlation (knowledge → correlation → response). Returning
+    # response_agent here would skip correlation entirely — regression.
+    return "knowledge_agent"
+
+
 def build_graph() -> StateGraph:
     workflow = StateGraph(AgentState)
 
@@ -171,6 +191,7 @@ def build_graph() -> StateGraph:
     workflow.add_node("triage_agent",      triage_agent)
     workflow.add_node("mongo_agent",       mongo_agent)
     workflow.add_node("metrics_agent",     metrics_agent)
+    workflow.add_node("k8s_agent",          k8s_agent)  # STACK2 F2
     workflow.add_node("trace_agent",       trace_agent)
     workflow.add_node("correlation_agent", correlation_agent)
     workflow.add_node("health_agent",      health_agent)
@@ -194,7 +215,24 @@ def build_graph() -> StateGraph:
 
     # Fan-in: Semua parallel observability agents → knowledge_agent (FE-7) → correlation
     workflow.add_edge("mongo_agent",       "knowledge_agent")
-    workflow.add_edge("metrics_agent",     "knowledge_agent")
+    # STACK2 F1: metrics_agent conditional edge (standalone vs incident fan-out)
+    workflow.add_conditional_edges("metrics_agent", _route_metrics_agent, {
+        "knowledge_agent": "knowledge_agent",
+        "response_agent": "response_agent",
+    })
+
+    def _route_k8s_agent(state: AgentState) -> str:
+        """STACK2 F2: k8s standalone → response_agent.
+        Fix #269: k8s dalam fan-out insiden (triage_result/planned_nodes ada) →
+        knowledge_agent (fan-in single telegram + correlation melihat k8s_summary)."""
+        if state.get("triage_result") is not None or "planner_node" in state.get("agents_visited", []):
+            return "knowledge_agent"
+        return "response_agent"
+
+    workflow.add_conditional_edges("k8s_agent", _route_k8s_agent, {
+        "knowledge_agent": "knowledge_agent",
+        "response_agent": "response_agent",
+    })
     workflow.add_edge("trace_agent",       "knowledge_agent")
     # span_agent → conditional (incident fan-in vs mandiri) — FASE 4A
     workflow.add_conditional_edges("span_agent", _route_span_agent, {
