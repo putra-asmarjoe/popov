@@ -64,7 +64,7 @@ It takes the signals you already have, gathers the relevant context, investigate
 ## Screenshots
 
 <p align="center">
-  <img src="screenshots/ss1.png" alt="War Room Overview" width="800" />
+  <img src="screenshots/ss1-v2.png" alt="War Room Overview" width="800" />
   <br><em>War Room — tickets, alerts, stack health, and incident pulse in one view.</em>
 </p>
 
@@ -376,7 +376,7 @@ kubectl apply -f deploy/            # secret, configmap, deployment, service,
 
 See [`deploy/README.md`](deploy/README.md) for the full step-by-step guide (private registry secret, resource sizing, verification). Resource footprint is modest: requests `100m` CPU / `256Mi` RAM, limits `500m` / `512Mi`.
 
-<!-- Screenshots live in screenshots/ (ss1 Overview · ss2 ticket chat · ss3 ticket War Room); add new ones and reference them in the Screenshots section above. -->
+<!-- Screenshots live in screenshots/ (ss1-v2 Overview · ss2 ticket chat · ss3 ticket War Room); add new ones and reference them in the Screenshots section above. -->
 
 ## Tech Stack
 
