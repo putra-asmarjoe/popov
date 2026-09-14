@@ -35,8 +35,20 @@ import {
 } from "@/hooks/useProfile"
 import { useWorkspaces } from "@/hooks/useWorkspaces"
 import { useWorkspaceStore } from "@/store/workspace.store"
+import { chatModeFromDepth, useChatStore, type ChatMode } from "@/store/chat.store"
 import { api } from "@/lib/api"
 import type { FormatPreference, PendingSuggestion, Tone, Verbosity } from "@/types/profile"
+
+/** CHAT3 §4.1/§4A.4 (Rev 4, owner lock §7.10): depth TIDAK ada di chatbox —
+ *  diatur di Settings → profile. Field profil tetap int 1-5 (C9); UI menampilkan
+ *  3 level wire (low|medium|thinking). Tulis-balik = int TERKECIL dalam band
+ *  D-P1.1 (1-2→low, 3→medium, 4-5→thinking) supaya display tetap bolak-balik
+ *  konsisten lewat chatModeFromDepth(). */
+const DEPTH_LEVELS: { mode: ChatMode; int: number }[] = [
+  { mode: "low", int: 1 },
+  { mode: "medium", int: 3 },
+  { mode: "thinking", int: 4 },
+]
 
 /**
  * Account Preferences (/account/preferences) — USER_PROFILE_PLAN Phase 2.
@@ -46,6 +58,9 @@ import type { FormatPreference, PendingSuggestion, Tone, Verbosity } from "@/typ
  */
 export function AccountPreferencesPage() {
   const { t } = useTranslation("account")
+  // CHAT3 K9: label/tooltip depth = i18n keys common:settings.chat_depth.* (§4A.4)
+  const { t: ct } = useTranslation("common")
+  const setChatMode = useChatStore((s) => s.setChatMode)
   const { user, setUser } = useAuth()
   const { data: workspaces, isLoading: wsLoading } = useWorkspaces()
   const { activeWorkspace, setActiveWorkspace } = useWorkspaceStore()
@@ -75,8 +90,10 @@ export function AccountPreferencesPage() {
         format_preference: profile.format_preference ?? "",
         default_chat_depth: profile.default_chat_depth ?? "",
       })
+      // chat.store ikut profil → mode wire tiap request (D-P1.1, tanpa toggle chatbox)
+      setChatMode(chatModeFromDepth(profile.default_chat_depth))
     }
-  }, [profile])
+  }, [profile, setChatMode])
 
   // Simpan field saat user pilih (auto-save — langsung PATCH sekali, pola simpel)
   const saveField = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
@@ -232,20 +249,33 @@ export function AccountPreferencesPage() {
                   <div className="space-y-1.5">
                     <Label>{t("field.default_chat_depth")}</Label>
                     <Select
-                      value={form.default_chat_depth === "" ? "" : String(form.default_chat_depth)}
-                      onValueChange={(v) => saveField("default_chat_depth", Number(v))}
+                      value={
+                        form.default_chat_depth === "" ? "" : chatModeFromDepth(form.default_chat_depth)
+                      }
+                      onValueChange={(v) => {
+                        const level = DEPTH_LEVELS.find((l) => l.mode === v)
+                        if (!level) return
+                        saveField("default_chat_depth", level.int)
+                        // terapkan langsung utk sesi ini (refetch profil mengonfirmasi)
+                        setChatMode(level.mode)
+                      }}
                     >
                       <SelectTrigger className="w-full">
                         <SelectValue placeholder={t("default")} />
                       </SelectTrigger>
                       <SelectContent>
-                        {[1, 2, 3, 4, 5].map((n) => (
-                          <SelectItem key={n} value={String(n)}>
-                            {n} — {t(`depth.${n}`)}
+                        {DEPTH_LEVELS.map((l) => (
+                          <SelectItem key={l.mode} value={l.mode}>
+                            {ct(`settings.chat_depth.${l.mode}_label`)}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
+                    {form.default_chat_depth !== "" && (
+                      <p className="text-xs text-muted-foreground">
+                        {ct(`settings.chat_depth.${chatModeFromDepth(form.default_chat_depth)}`)}
+                      </p>
+                    )}
                   </div>
                 </div>
               </Card>

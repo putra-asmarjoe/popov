@@ -1,0 +1,123 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL: In-cluster MongoDB for Popov Agent
+#
+# Apply this file ONLY if you do NOT have a MongoDB instance yet:
+#
+#     kubectl apply -f deploy/mongodb-optional.yaml
+#
+# It creates three resources:
+#   1. PersistentVolumeClaim  (10Gi — mongo data survives pod restarts)
+#   2. Deployment             (mongo:8, 1 replica, strategy Recreate)
+#   3. Service                (ClusterIP, DNS name: mongodb-service:27017)
+#
+# The Service name matches the default MONGODB_URI already set in
+# deploy/secret.yaml (mongodb://mongodb-service:27017) — so after applying
+# this file, NO other configuration change is needed.
+#
+# Already have MongoDB (managed service or self-hosted)? Skip this file.
+#
+# Verify after applying:
+#     kubectl get pods -l app=mongodb
+#     kubectl exec deploy/mongodb -- mongosh --eval "db.runCommand({ping:1})"
+#
+# Remove everything again with:
+#     kubectl delete -f deploy/mongodb-optional.yaml
+#     (this also deletes the PVC and its data — make a backup first!)
+# ─────────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-data
+  namespace: default
+  labels:
+    app: mongodb
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # Uses the cluster's default StorageClass. On a single-node / homelab
+  # cluster prefer a local-SSD-backed class — MongoDB (like SQLite WAL) is
+  # not reliable on network filesystems (NFS/SMB).
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+  namespace: default
+  labels:
+    app: mongodb
+spec:
+  # Keep replicas: 1 — a single PVC (ReadWriteOnce) cannot be shared by
+  # multiple pods, and a lone MongoDB must not run twice.
+  replicas: 1
+  # Recreate: the old pod must be fully gone before the new one binds the PVC.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+        - name: mongodb
+          image: mongo:8
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 27017
+              name: mongo
+          # fsGroup 999 = "mongodb" group inside the official image, so the
+          # mounted PVC is writable by the container process.
+          securityContext:
+            fsGroup: 999
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          readinessProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: mongodb-data
+              mountPath: /data/db
+      volumes:
+        - name: mongodb-data
+          persistentVolumeClaim:
+            claimName: mongodb-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  # ⚠️ Do NOT rename: deploy/secret.yaml defaults to
+  #    mongodb://mongodb-service:27017 — the name IS the contract.
+  name: mongodb-service
+  namespace: default
+  labels:
+    app: mongodb
+spec:
+  type: ClusterIP
+  selector:
+    app: mongodb
+  ports:
+    - port: 27017
+      targetPort: 27017
+      protocol: TCP
+      name: mongo

@@ -2,7 +2,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from pydantic import BaseModel
 from graph.workflow import app as langgraph_app
-from api.deps import require_admin
+from api.deps import require_admin, get_current_user
 from config.settings import settings
 from services.doc_loader import list_all_services, build_agent_context, reload_docs
 from services.request_log import create_request_log, update_request_log, generate_request_id
@@ -338,11 +338,38 @@ async def get_request_log_detail(request_id: str):
 
 # ── Second Brain (Fase 1): Episodes ──────────────────────────────────────────
 
+async def _episode_read_scope(user: dict) -> dict:
+    """Filter Mongo yang membatasi baca incident_episodes milik user (BUG-EPISODES-AUTH-1).
+
+    - global admin (role=admin) → {} (tanpa filter): lintas workspace, sesuai perannya
+      sebagai pemegang panel FE-6 (MemoryViewer admin-only, DELETE sibling require_admin).
+    - member biasa → {'workspace_id': {'$in': [workspace milik user]}}; tanpa membership
+      → $in: [] = nol hasil (deny by default, bukan fallback global).
+
+    Membership dibaca dari workspace_store.list_workspaces_for_user (satu-satunya sumber
+    kebenaran keanggotaan) dan dinormalisasi ke str(_id) — same shape yang ditulis
+    second_brain.write_episode_bg ke incident_episodes.workspace_id.
+    invariant: query koleksi bersama WAJIB workspace-scoped.
+    """
+    from services.workspace_store import list_workspaces_for_user
+
+    if user.get("role") == "admin":
+        return {}
+    # Defense-in-depth (review-episodesauth minor): .get + deny-by-default agar user dict
+    # malformed (tanpa _id) tidak meledak jadi 500 — get_current_user selalu mengembalikan
+    # doc DB berisi _id, jadi jalur ini tidak terjangkau via produksi.
+    uid = user.get("_id")
+    if uid is None:
+        return {"workspace_id": {"$in": []}}
+    workspaces = await list_workspaces_for_user(str(uid))
+    return {"workspace_id": {"$in": [str(ws["_id"]) for ws in workspaces]}}
+
 @router.get("/brain/episodes")
 async def get_episodes(
     service: Optional[str] = None,
     limit: int = 20,
     status: str = "all",
+    current_user: dict = Depends(get_current_user),
 ):
     """
     List episode Second Brain.
@@ -350,10 +377,14 @@ async def get_episodes(
       - service: filter service_name (optional)
       - limit: max 100, default 20
       - status: all | correct | wrong | pending
+
+    BUG-EPISODES-AUTH-1: wajib login + terbatas pada workspace tempat caller adalah
+    member (global admin tetap lintas-workspace untuk panel MemoryViewer).
     """
     try:
         db = get_db()
         query: dict = {}
+        query.update(await _episode_read_scope(current_user))
         if service:
             query["service_name"] = service
         if status == "correct":
@@ -551,11 +582,17 @@ async def reload_prompts_endpoint():
 
 
 @router.get("/brain/episodes/{episode_id}")
-async def get_episode_detail(episode_id: str):
-    """Detail satu episode by episode_id."""
+async def get_episode_detail(episode_id: str, current_user: dict = Depends(get_current_user)):
+    """Detail satu episode by episode_id.
+
+    BUG-EPISODES-AUTH-1: wajib login + hanya episode workspace milik caller.
+    Episode di luar scope → 404 (bukan 403) agar tidak membocorkan keberadaannya.
+    """
     try:
         db = get_db()
-        doc = await db["incident_episodes"].find_one({"episode_id": episode_id}, {"_id": 0})
+        query = {"episode_id": episode_id}
+        query.update(await _episode_read_scope(current_user))
+        doc = await db["incident_episodes"].find_one(query, {"_id": 0})
         if not doc:
             raise HTTPException(status_code=404, detail="Episode not found")
         return doc

@@ -819,6 +819,32 @@ async def recent_tickets_by_project(
     return [doc async for doc in cursor]
 
 
+async def distinct_service_names_for_project(project_id: str) -> List[str]:
+    """SCOPE-FIX-1 (Opsi C): nama service yang MUNCUL DI TIKEt MILIK project ini.
+
+    `distinct` (aggregasi) — BUKAN slice `recent_tickets_by_project(limit=20)`.
+    Slice truncate membuat daftar service berubah antar turn (bug 16 vs 11).
+    Scoped `projectId` → tidak pernah menyontol tiket project lain.
+    """
+    if not project_id:
+        return []
+    names = await get_db()[TICKETS_COLLECTION].distinct(
+        "serviceName", {"projectId": str(project_id)}
+    )
+    return sorted({str(n).strip() for n in (names or []) if n and str(n).strip()})
+
+
+async def ticket_ids_for_project(project_id: str) -> List[str]:
+    """Semua _id tiket milik project (str). Dipakai untuk scope `incident_episodes`
+    yang tidak punya field project_id (SCOPE-FIX-1)."""
+    if not project_id:
+        return []
+    ids = await get_db()[TICKETS_COLLECTION].distinct(
+        "_id", {"projectId": str(project_id)}
+    )
+    return [str(i) for i in (ids or []) if i]
+
+
 async def get_ticket_by_number(
     ticket_number: int, *, workspace_id: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:

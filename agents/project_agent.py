@@ -52,6 +52,10 @@ _ACTIVITY_KW = (
 _ERROR_KW = ("error", "gagal", "masalah", "down", "5xx", "500", "bermasalah")
 _KNOWLEDGE_KW = ("knowledge", "dokumen", "playbook", "grounding")
 
+# SCOPE-FIX-1: batas tampilan daftar service di facts (inventory TETAP dihitung
+# penuh; hanya presentasi yang di-cap, dan sisanya dinyatakan eksplisit).
+_SERVICE_LIST_CAP = 30
+
 
 def _detect_chat_locale(history: Optional[List[dict]], default: str = "en") -> str:
     """Alias DRY — implementasi di services/conversation.detect_chat_locale."""
@@ -78,7 +82,8 @@ def _hours_from_intent(intent_lower: str, default: float) -> float:
     return default
 
 
-async def _gather_ticket_stats(project_id: str, hours_today: float) -> tuple[List[str], Dict[str, int]]:
+async def _gather_ticket_stats(project_id: str, hours_today: float) -> tuple[List[str], Dict[str, int], Dict[str, int]]:
+    """Return (facts_blocks, today_status_groups, open_status_groups)."""
     """Return (facts_blocks, today_status_groups) — grup terpisah agar caller
     tidak parsing balik dari teks (Fix G5 gap-scan)."""
     from services.ticket_store import OPEN_STATUSES, count_by_project
@@ -105,14 +110,37 @@ async def _gather_ticket_stats(project_id: str, hours_today: float) -> tuple[Lis
     return blocks, groups, open_groups
 
 
-async def _gather_activity(project_id: Optional[str], ws_id: Optional[str], hours: float) -> List[str]:
+async def _gather_activity(
+    project_id: Optional[str],
+    ws_id: Optional[str],
+    hours: float,
+    allowlist: Optional[List[str]] = None,
+) -> List[str]:
+    """Fakta aktivitas project.
+
+    SCOPE-FIX-1 (Opsi C): `allowlist` = service yang benar-benar milik project
+    (services.service_store.project_service_allowlist). Bila tidak dikirim, ia
+    DIRESOLVE DI SINI — supaya tidak ada caller yang bisa "lupa" men-scope.
+    Semua sumber yang secara struktural hanya workspace-scoped DIINTERSEKSI dengan
+    allowlist ini, dan fail-closed (kosong) bila allowlist tidak ada — bukan
+    fallback global.
+    """
     blocks: List[str] = []
+    if allowlist is None:
+        try:
+            from services.service_store import project_service_allowlist
+
+            allowlist = await project_service_allowlist(project_id or "")
+        except Exception as e:
+            logger.warning(f"[project_agent] allowlist gagal (fail closed): {e}")
+            allowlist = []
+    allowed = {str(s) for s in (allowlist or []) if s}
     try:
         from services.ticket_store import recent_tickets_by_project
 
         tickets = await recent_tickets_by_project(project_id, since_hours=hours, limit=8) if project_id else []
         lines = [
-            f"- `{t.get('workspaceKey', '')}{''}`#{t.get('ticketNumber')} {t.get('title', '')} "
+            f"- `{t.get('workspaceKey', '')}`#{t.get('ticketNumber')} {t.get('title', '')} "
             f"(status={t.get('status')}, sev={t.get('severity')}, source={t.get('source')})"
             for t in tickets
         ]
@@ -123,32 +151,75 @@ async def _gather_activity(project_id: Optional[str], ws_id: Optional[str], hour
         logger.warning(f"[project_agent] recent tickets gagal: {e}")
         blocks.append(f"[RECENT TICKETS last {int(hours)}h] unavailable")
 
+    # ── Alerts: dua tingkat, keduanya tidak boleh menyontol project lain ──────
+    # 1) ticket_alerts membawa projectId eksplisit → scoping di level query.
+    #    Preseden: services/ticket_alert_store.py::list_alerts_for_project +
+    #    api/routes_project_overview.py::_query_alerts (§docstring: watchdog_alerts
+    #    = broadcast log TANPA project_id → bocor lintas project).
+    # 2) watchdog_alerts tidak punya project_id sama sekali (dikonfirmasi di DB),
+    #    jadi TETAP dibaca workspace-scoped lalu DIINTERSEKSI dengan allowlist.
+    #    Intersect ini wajib: block ini adalah satu-satunya jalur alert 'terbaru'
+    #    (ticket_alerts ber-window hari, bukan jam) dan dulu inilah sumber kebocoran.
+    #    Allowlist kosong = TIDAK ADA alert yang boleh ditampilkan (fail closed).
+    try:
+        from services.ticket_alert_store import list_alerts_for_project
+
+        talerts = await list_alerts_for_project(project_id, limit=10) if project_id else []
+        lines = [
+            f"- [{a.get('occurredAt', '')}] {a.get('serviceName')}: "
+            f"{a.get('name') or ''} (severity={a.get('severity')}, source={a.get('source')})"
+            for a in talerts
+            if str(a.get("serviceName") or "") in allowed
+        ]
+        blocks.append(
+            f"[PROJECT ALERTS (ticketed) last {int(hours)}h]\n"
+            + ("\n".join(lines) if lines else "- none in window")
+        )
+    except Exception as e:
+        logger.warning(f"[project_agent] ticket alerts gagal: {e}")
+        blocks.append(f"[PROJECT ALERTS (ticketed) last {int(hours)}h] unavailable")
+
     try:
         from services.request_log import list_recent_watchdog_alerts
 
-        alerts = await list_recent_watchdog_alerts(ws_id, since_hours=hours, limit=10)
+        raw = await list_recent_watchdog_alerts(ws_id, since_hours=hours, limit=10) if allowed else []
+        alerts = [a for a in raw if str(a.get("service_name") or "") in allowed]
         lines = [
             f"- [{a.get('sent_at', '')}] {a.get('service_name')}: {(a.get('message') or '')[:120]}"
             for a in alerts
         ]
         blocks.append(
-            f"[WATCHDOG ALERTS last {int(hours)}h]\n" + ("\n".join(lines) if lines else "- none in window")
+            f"[PROJECT ALERTS last {int(hours)}h]\n"
+            + ("\n".join(lines) if lines else "- none for this project's services")
         )
     except Exception as e:
         logger.warning(f"[project_agent] watchdog alerts gagal: {e}")
-        blocks.append(f"[WATCHDOG ALERTS last {int(hours)}h] unavailable")
+        blocks.append(f"[PROJECT ALERTS last {int(hours)}h] unavailable")
 
+    # ── Episodes: `incident_episodes` TIDAK punya project_id (dikonfirmasi di DB).
+    # Scope via ticket_id ∈ tiket project ATAU observ_id ∈ stack project —
+    # disalini dari preseden api/routes_project_overview.py::_query_episodes.
+    # FAIL CLOSED: tanpa discriminator project → [] (TANPA `else {}` global).
     try:
-        from datetime import timedelta
-
         from services.mongodb_client import get_db as _gdb
+        from services.observability_store import observ_ids_for_project
+        from services.ticket_store import ticket_ids_for_project
 
-        query = (
-            {"workspace_id": str(ws_id)}
-            if ws_id
-            else {}
-        )
-        docs = await _gdb()["incident_episodes"].find(query).sort("timestamp", -1).limit(5).to_list(5)
+        if not (project_id and ws_id):
+            docs: List[Dict[str, Any]] = []
+        else:
+            conds: List[Dict[str, Any]] = []
+            tids = await ticket_ids_for_project(project_id)
+            if tids:
+                conds.append({"ticket_id": {"$in": tids}})
+            observ_ids = await observ_ids_for_project(project_id, ws_id)
+            if observ_ids:
+                conds.append({"observ_id": {"$in": observ_ids}})
+            if not conds:
+                docs = []   # fail closed — project tanpa tiket & tanpa stack
+            else:
+                q = {"workspace_id": str(ws_id), "$or": conds}
+                docs = await _gdb()["incident_episodes"].find(q).sort("timestamp", -1).limit(5).to_list(5)
         lines = [
             f"- {d.get('episode_id')}: svc={d.get('service_name')} root={d.get('root_cause')} "
             f"conf={d.get('confidence')} at={d.get('timestamp', '')}"
@@ -159,6 +230,79 @@ async def _gather_activity(project_id: Optional[str], ws_id: Optional[str], hour
         logger.warning(f"[project_agent] episodes gagal: {e}")
         blocks.append("[RECENT ANALYSES (Second Brain)] unavailable")
     return blocks
+
+
+async def _gather_project_identity(project_id: Optional[str]) -> List[str]:
+    """SCOPE-FIX-1 (H4): identitas project HARUS masuk facts secara deterministik.
+    Dulu `find_project_by_id` hanya dibaca untuk `key` (bekas cabang want_tickets),
+    jadi 'apa nama project ini?' dijawab 'not available in the provided facts'."""
+    if not project_id:
+        return ["[PROJECT] no project context"]
+    try:
+        from services.workspace_store import find_project_by_id
+
+        doc = await find_project_by_id(project_id) or {}
+        name = str(doc.get("name") or "").strip()
+        key = str(doc.get("key") or "").strip()
+        if not doc:
+            return [f"[PROJECT] id={project_id} name=UNAVAILABLE key=UNAVAILABLE"]
+        return [
+            "[PROJECT] (AUTHORITATIVE identity — use this to answer what the "
+            "project is called)\n"
+            f"- name: {name or 'UNAVAILABLE'}\n"
+            f"- key: {key or 'UNAVAILABLE'}\n"
+            f"- id: {project_id}"
+        ]
+    except Exception as e:
+        logger.warning(f"[project_agent] project identity gagal: {e}")
+        return ["[PROJECT] unavailable (database error)"]
+
+
+async def _gather_services(project_id: Optional[str], allowlist: List[str]) -> List[str]:
+    """SCOPE-FIX-1 (H3): daftar service project = inventory deterministik dari
+    allowlist — TANPA window waktu, TANPA slice limit. Ini yang membuat jawaban
+    'service apa saja yang ada di project ini' stabil antar turn (bug 16 vs 11)."""
+    if not project_id:
+        return ["[PROJECT SERVICES] no project context"]
+    if not allowlist:
+        return [
+            "[PROJECT SERVICES]\n- none registered for this project "
+            "(no service refs and no ticket service names)"
+        ]
+    listed = allowlist[:_SERVICE_LIST_CAP]
+    more = len(allowlist) - len(listed)
+    lines = [f"- {s}" for s in listed]
+    if more > 0:
+        lines.append(f"- (+{more} more — ask to list all)")
+    return [
+        "[PROJECT SERVICES] (AUTHORITATIVE inventory — services belonging to THIS "
+        f"project; {len(allowlist)} total)\n" + "\n".join(lines)
+    ]
+
+
+
+def _harvest_alert_services(activity_blocks: List[str], allowed: set) -> List[str]:
+    """Service name dari baris alert sebagai bahan chip — HANYA yang ada di allowlist.
+
+    SCOPE-FIX-1: dulu inline di project_agent() dan mengambil nama dari baris alert
+    workspace-wide, sehingga chip "investigate <service>" menawarkan service milik
+    project lain. Dijadikan fungsi murni agar guard-nya bisa dites langsung; ia
+    bertahan sebagai defense-in-depth walau facts upstream sudah discoped.
+    """
+    out: List[str] = []
+    for line in "\n".join(activity_blocks[:3]).splitlines():
+        low = line.lower()
+        if not low.startswith("- ") or "] " not in line or "alert" not in low:
+            continue
+        # JANGAN split(":")[0] — colon ada di dalam ISO timestamp.
+        svc = line.split("] ", 1)[-1].split(":", 1)[0].strip().strip("`").strip()
+        if not svc or any(ch in svc for ch in "[],"):
+            continue
+        if allowed and svc not in allowed:      # <- guard chip
+            continue
+        if svc not in out:
+            out.append(svc)
+    return out
 
 
 async def _gather_errors(ws_id: Optional[str], project_id: Optional[str], hours: float) -> List[str]:
@@ -359,6 +503,32 @@ async def project_agent(state: AgentState) -> dict:
     alert_services: List[str] = []
     error_services: List[str] = []
 
+    # SCOPE-FIX-1 (Opsi C): allowlist "service milik project ini" = project refs ∪
+    # distinct serviceName tiket milik project. Dibaca SEKALI, dipakai untuk:
+    # intersect alert, validasi chip, dan blok [PROJECT SERVICES].
+    # Kegagalan baca => allowlist kosong => facts FAIL CLOSED (bukan global).
+    allowlist: List[str] = []
+    allowlist_ok = True
+    try:
+        from services.service_store import project_service_allowlist
+
+        allowlist = await project_service_allowlist(project_id)
+    except Exception as e:
+        allowlist_ok = False
+        logger.warning(f"[project_agent] project allowlist gagal: {e}")
+
+    # Identitas project SELALU di facts (H4) — dulu `name` dibuang sehingga
+    # 'apa nama project ini?' dijawab 'not available in the provided facts'.
+    facts_blocks.extend(await _gather_project_identity(project_id))
+
+    # Inventaris service SELALU di facts dan TIDAK bergantung window (H3: 16 vs 11).
+    facts_blocks.extend(await _gather_services(project_id, allowlist))
+    if not allowlist_ok:
+        facts_blocks.append(
+            "[PROJECT SERVICES] unavailable (database error) — do NOT substitute "
+            "services from another project or from the workspace library"
+        )
+
     # ── 4. Deteksi bahasa chat: isi percakapan dulu, preferensi user fallback ──
     from services.user_store import get_user_locale
 
@@ -391,23 +561,24 @@ async def project_agent(state: AgentState) -> dict:
                         f"(status={t.get('status')}, sev={t.get('severity')}, "
                         f"service={t.get('serviceName') or '-'}, source={t.get('source')})"
                     )
+                shown = len(lines)
+                if open_count and open_count > shown:
+                    lines.append(
+                        f"- (list truncated: {shown} of {open_count} open tickets shown — this is "
+                        "the TICKET list only; the SERVICE inventory is complete in [PROJECT SERVICES])"
+                    )
                 facts_blocks.append("[OPEN TICKETS (detail)]\n" + "\n".join(lines))
         except Exception as e:
             logger.warning(f"[project_agent] open ticket detail gagal: {e}")
             facts_blocks.append("[OPEN TICKETS (detail)] unavailable")
 
     if want_activity or want_errors:
-        activity = await _gather_activity(project_id, ws_id, hours)
-        facts_blocks.extend(activity[:2])  # tickets+alerts; episodes hanya bila relevan
-        for line in "\n".join(activity).splitlines():
-            low = line.lower()
-            if "] " in line and ("alert" in low or "watchdog" in low):
-                # format: "- [sent_at] service_name: message ..."
-                # JANGAN split(":")[0] — colon ada di dalam ISO timestamp → svc jadi "[2026-09-03T19"
-                after_ts = line.split("] ", 1)[-1]
-                svc = after_ts.split(":", 1)[0].strip().strip("`").strip()
-                if svc and not any(ch in svc for ch in "[],") and svc not in alert_services:
-                    alert_services.append(svc)
+        activity = await _gather_activity(project_id, ws_id, hours, allowlist)
+        # SCOPE-FIX-1: ketiga blok (tiket + alert ter-tiket + alert project) masuk
+        # facts; episode tetap dihitung tapi hanya bila ada diskriminator project.
+        facts_blocks.extend(activity[:3])
+        # Chip HANYA boleh menawarkan service milik project ini (allowlist).
+        alert_services = _harvest_alert_services(activity, set(allowlist))
 
     if want_errors:
         facts_blocks.extend(await _gather_errors(ws_id, project_id, hours))
@@ -439,6 +610,43 @@ async def project_agent(state: AgentState) -> dict:
             "di lane project (pertanyaan infrastruktur akan diroute ke lane k8s). "
             "Ticket counts are NOT infrastructure metrics."
         )
+
+    # ── CHAT3 P2.1: conversation_state continuity — web-only ────────────────
+    # Read topic_context + investigation_context dari turn sebelumnya, inject
+    # ke facts agar LLM punya konteks topik lanjutan.
+    _conv_topic = {}  # type: Dict[str, Any]
+    _conv_inv = {}  # type: Dict[str, Any]
+    _chat_session = (state.get("sender") or {}).get("session_id")
+    if _chat_session:
+        try:
+            from services.chat_store import get_conversation_state
+            _conv_raw = await get_conversation_state(str(_chat_session))
+            _conv_topic = (_conv_raw.get("topic_context") or {})
+            _conv_inv = (_conv_raw.get("investigation_context") or {})
+        except Exception:
+            pass  # non-fatal
+
+    if _conv_topic or _conv_inv:
+        _ctx_lines = []
+        if _conv_topic.get("active_service"):
+            _ctx_lines.append(f"- active_service: {_conv_topic['active_service']}")
+        if _conv_topic.get("current_topic"):
+            _ctx_lines.append(f"- previous_topic: {_conv_topic['current_topic']}")
+        if _conv_topic.get("ticket_id"):
+            _ctx_lines.append(f"- ticket_id: {_conv_topic['ticket_id']}")
+        if _conv_inv.get("last_findings"):
+            _findings = _conv_inv['last_findings']
+            if len(_findings) > 400:
+                _findings = _findings[:400] + " ...[truncated]"
+            _ctx_lines.append(f"- last_findings: {_findings}")
+        if _conv_inv.get("last_root_cause"):
+            _ctx_lines.append(f"- last_root_cause: {_conv_inv['last_root_cause']}")
+        if _ctx_lines:
+            facts_blocks.append(
+                "[CONVERSATION CONTEXT]\n"
+                "(from previous turn — use to maintain topic continuity and anaphora)\n"
+                + "\n".join(_ctx_lines)
+            )
 
     suggestions = _build_suggestions(
         want_tickets=want_tickets, want_errors=want_errors, want_knowledge=want_knowledge,
@@ -499,6 +707,36 @@ async def project_agent(state: AgentState) -> dict:
             f"\n\n💡 {('Investigate deeper the error on' if locale == 'en' else 'Mau saya investigasi lebih dalam error pada')} "
             f"`{error_services[0]}`?"
         )
+
+    # CHAT3 P2.1: conversation_state write-back — web-only
+    # Tulis topic_context agar turn berikutnya punya konteks topik.
+    # project_agent tidak menghasilkan correlation/triage → tidak tulis investigation_context.
+    if state.get("suppress_telegram") and _chat_session:
+        try:
+            from services.chat_store import update_conversation_state
+            _write_svc = state.get("service_name") or state.get("resolved_service_name") or ""
+            if not _write_svc and alert_services:
+                _write_svc = alert_services[0]
+            # Validate against allowlist (P2.1 review Minor-4)
+            if _write_svc and allowlist and _write_svc not in allowlist:
+                _write_svc = ""
+            _topic_ctx = {
+                "active_service": _write_svc,
+                "current_topic": (intent_raw or "")[:200],
+                "ticket_id": (state.get("ticket_context") or {}).get("ticketNumber") or "",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await update_conversation_state(
+                str(_chat_session),
+                topic_context=_topic_ctx,
+                current_intent=(intent_raw or "")[:200],
+            )
+            logger.info(
+                f"[project_agent] conversation_state written session={_chat_session} "
+                f"active_svc={_write_svc!r}"
+            )
+        except Exception as e:
+            logger.warning(f"[project_agent] conversation_state write failed (non-fatal): {e}")
 
     return {
         "formatted_message": (formatted + medium_note).strip(),

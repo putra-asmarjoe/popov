@@ -149,6 +149,100 @@ async def get_messages(session_id: str, limit: int = 200) -> List[Dict[str, Any]
     return [doc async for doc in cursor]
 
 
+async def get_conversation_state(session_id: str) -> dict:
+    """CHAT3 §5.3 (P2, D-P2.11) — baca `conversation_state` dari doc chat_sessions.
+
+    Contract: SELALU return dict ({} bila tidak ada/invalid/DB error) — TIDAK
+    pernah raise. Caller (chat_agent / response_agent) menganggap ini non-fatal.
+    `_public_session` sengaja TIDAK diperluas (FE P2 tidak butuh — pill datang
+    via message meta; D-P2.11 debt).
+    """
+    try:
+        oid = ObjectId(session_id)
+    except Exception:
+        return {}
+    try:
+        doc = await get_db()[SESSIONS_COLLECTION].find_one(
+            {"_id": oid}, {"conversation_state": 1}
+        )
+        cs = (doc or {}).get("conversation_state")
+        return dict(cs) if isinstance(cs, dict) else {}
+    except Exception as e:
+        logger.warning(f"[ChatStore] get_conversation_state failed: {e}")
+        return {}
+
+async def update_conversation_state(
+    session_id: str,
+    *,
+    topic_context: Optional[Dict[str, Any]] = None,
+    investigation_context: Optional[Dict[str, Any]] = None,
+    current_intent: Optional[str] = None,
+    reset_investigation: bool = False,
+    conversation_summary: Optional[str] = None,  # CHAT3 P3B (D-P3.2)
+    turn_count: Optional[int] = None,  # CHAT3 P3B (D-P3.2)
+    session_tool_count: Optional[int] = None,  # CHAT3 P4 (C3)
+) -> bool:
+    """CHAT3 §5.3 (P2, D-P2.11) — tulis sub-block `conversation_state` ($set).
+
+    Doc shape (satu objek, tiga bagian + P3B summary — Rev 5 + D-P3.2):
+        conversation_state {
+          updated_at,
+          current_intent,
+          topic_context         {active_service, ticket_id, current_topic, updated_at},
+          investigation_context {last_findings, last_root_cause, updated_at},
+          conversation_summary  str (EN-canonical, cap 800),
+          turn_count            int (default 0, increment tiap turn chat_agent),
+          session_tool_count    int (default 0, cumulative tool calls chat_agent P4),
+        }
+
+    - HANYA sub-block yang diberikan yang ditimpa (dotted-path $set — sub-block
+      producer lain tidak hilang; investigation_context ditulis response_agent,
+      topic_context/current_intent ditulis chat_agent end-of-turn).
+    - reset_investigation=True = TOPIC SHIFT first-class (CHAT3 §5.3):
+      investigation_context DI-RESET ({} bila caller tidak memberi yang baru) —
+      stale last_findings TIDAK boleh lolos ke topic baru (bug paling berbahaya,
+      test §5.6.5).
+    - Return True bila update terkirim; False bila session_id invalid/DB gagal
+      (non-fatal — caller log, delivery tidak pernah tergantung ini).
+    """
+    try:
+        oid = ObjectId(session_id)
+    except Exception:
+        return False
+    now = _now_iso()
+    set_fields: Dict[str, Any] = {"conversation_state.updated_at": now}
+    if topic_context is not None:
+        set_fields["conversation_state.topic_context"] = topic_context
+    if investigation_context is not None:
+        set_fields["conversation_state.investigation_context"] = investigation_context
+    if reset_investigation:
+        # Topic shift: re-anchor investigation_context (reset atau replace).
+        set_fields["conversation_state.investigation_context"] = investigation_context or {}
+    if current_intent is not None:
+        set_fields["conversation_state.current_intent"] = current_intent
+    if conversation_summary is not None:
+        # CHAT3 P3B (D-P3.2): rolling summary — top-level sibling (bukan sub-doc).
+        set_fields["conversation_state.conversation_summary"] = conversation_summary
+    if turn_count is not None:
+        # CHAT3 P3B (D-P3.2): increment TIAP turn (termasuk non-summary turn)
+        # agar gating % N tetap benar; int() guard — non-int diabaikan.
+        try:
+            set_fields["conversation_state.turn_count"] = int(turn_count)
+        except (TypeError, ValueError):
+            pass
+    if session_tool_count is not None:
+        # CHAT3 P4 (C3): cumulative session tool budget — int() guard.
+        try:
+            set_fields["conversation_state.session_tool_count"] = int(session_tool_count)
+        except (TypeError, ValueError):
+            pass
+    try:
+        await get_db()[SESSIONS_COLLECTION].update_one({"_id": oid}, {"$set": set_fields})
+        return True
+    except Exception as e:
+        logger.warning(f"[ChatStore] update_conversation_state failed: {e}")
+        return False
+
 async def update_session_title(session_id: str, title: str) -> Optional[Dict[str, Any]]:
     """Update session title (owner only)."""
     try:

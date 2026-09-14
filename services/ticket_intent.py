@@ -148,6 +148,9 @@ _PROGRESS_NOTE_PATTERNS = (
     "catat bahwa",
     # chip label (EN/ID)
     "add progress note", "catatan progress",
+    # mixed-language ID verb + EN noun (live: "tambahkan note : joe already check...")
+    "tambahkan note", "tambah note", "tambahkan notes", "tambah notes",
+    "buat note", "tulis note",
 )
 
 
@@ -200,6 +203,17 @@ def _extract_progress_note(intent: str) -> Optional[str]:
     )
     if m and m.group(1).strip():
         return m.group(1).strip()
+    # ID pattern 3 (mixed-language): "tambahkan/tambah/buat/tulis note[s] <sep> <text>" —
+    # EN noun "note" dgn verb ID. Dipisah dari pattern 2 agar "catatan"
+    # tetap wajib di sana (hindari regresi extract lama). Optional "progress"
+    # agar "tambahkan note progress: ..." juga match.
+    m = re.search(
+        r'(?:tambahkan|tambah|buat|tulis)\s+notes?\s+(?:progress\s+)?'
+        r'(?:bahwa|tentang|:|;|-|_|,)?\s*(.+)',
+        text, re.IGNORECASE
+    )
+    if m and m.group(1).strip():
+        return m.group(1).strip()
     return None
 
 
@@ -235,6 +249,7 @@ async def parse_ticket_intent(
     intent: str,
     ticket: Dict[str, Any],
     workspace_members: List[Dict[str, Any]],
+    sender: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """LLM parse intent bebas → {action, params}. Return None bila gagal / tak valid.
 
@@ -285,6 +300,8 @@ async def parse_ticket_intent(
             ticket_tags=ticket.get("tags") or [],
             ticket_assignees=assignees,
             member_list=member_lines,
+            current_user_name=sender.get("name", "") if sender else "",
+            current_user_email=sender.get("email", "") if sender else "",
             intent=intent,
         )
 

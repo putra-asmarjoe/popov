@@ -256,7 +256,14 @@ async def update_item(item_id: str, owner_id: str, updates: Dict[str, Any]) -> O
 # ── Fase D pattern: resolusi DB config untuk agent (Fix #38) ─────────────────
 
 async def all_service_ids() -> List[str]:
-    """Semua service_id unik dari library user — kandidat routing supervisor."""
+    """Semua service_id unik dari library user — kandidat routing supervisor.
+
+    SCOPE-FIX-1 BOUNDARY: sengaja workspace/library-wide (analogi deployment K8s,
+    Fix #38) dan hanya boleh dipakai sebagai KANDIDAT ROUTING. Jangan pernah
+    mengumpankan ini ke FAKTA project — itu sumber kebocoran lintas project.
+    Fakta project memakai services.service_store.project_service_allowlist.
+    Guard: tests/test_project_scope_leak.py::test_workspace_library_must_never_enter_project_facts
+    """
     ids: List[str] = []
     async for row in get_db()[LIBRARY_COLLECTION].aggregate([
         {"$group": {"_id": "$serviceId"}},
@@ -294,6 +301,32 @@ async def service_ids_for_project(project_id: str) -> List[str]:
         return []
     refs = await list_refs_for_project(project_id)
     return sorted({r["serviceId"] for r in refs if r.get("serviceId")})
+
+
+async def project_service_allowlist(project_id: str) -> List[str]:
+    """SCOPE-FIX-1 (Opsi C, ratified): SATU sumber kebenaran untuk "service milik
+    project ini" yang dipakai LAN FAKTA (project_agent), bukan routing.
+
+    allowlist = project_service_refs(project) ∪ distinct serviceName tiket milik
+    project itu sendiri (aggregasi penuh, bukan slice ber-limit).
+
+    Why the union: `project_service_refs` is the canonical link but is empty for
+    real projects (live PROXMOX had 70 tickets naming 13 services and 0 refs).
+    A refs-only allowlist would answer "no services" — technically scoped, but
+    wrong data. Ticket-derived names are already project-scoped by `projectId`,
+    so the union adds no cross-project exposure.
+
+    Hard boundary: this is NEVER the supervisor routing candidate list. That one
+    (`all_service_ids` / workspace registry) may stay workspace-wide on purpose;
+    facts about a project may not. See tests/test_project_scope_leak.py.
+    """
+    if not project_id:
+        return []
+    from services.ticket_store import distinct_service_names_for_project
+
+    linked = await service_ids_for_project(project_id)
+    from_tickets = await distinct_service_names_for_project(project_id)
+    return sorted({str(s).strip() for s in list(linked) + list(from_tickets) if str(s).strip()})
 
 
 async def delete_item(item_id: str, owner_id: str) -> bool:

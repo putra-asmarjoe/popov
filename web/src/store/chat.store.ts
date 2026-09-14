@@ -20,6 +20,19 @@ function apiBase(): string {
   return (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api/v1"
 }
 
+/** Wire mode yang divalidasi backend (api/chat.py: low|medium|thinking). */
+export type ChatMode = "low" | "medium" | "thinking"
+
+/** D-P1.1: profil `default_chat_depth` (int 1-5) → wire mode.
+ *  1-2→low · 3→medium · 4-5→thinking · unset→medium (default web, CHAT3 §4.1).
+ *  Telegram tidak terpengaruh (listener tidak pernah kirim mode → low, K6). */
+export function chatModeFromDepth(depth: number | null | undefined): ChatMode {
+  if (depth == null) return "medium"
+  if (depth <= 2) return "low"
+  if (depth === 3) return "medium"
+  return "thinking"
+}
+
 interface ChatStore {
   sessions: ChatSession[]
   activeSession: ChatSession | null
@@ -33,6 +46,12 @@ interface ChatStore {
   ticketContext: TicketContext | null
   // bertambah setiap kali stream selesai → pemicu refetch history
   finalizeTick: number
+  // CHAT3 §4A: mode wire per request — derived dari profil (D-P1.1), bukan toggle chatbox.
+  chatMode: ChatMode
+  // CHAT3 §4A.2/4A.3: urutan node graph yang sudah dieksekusi per sesi (dari SSE event
+  // "agent" — api/chat.py:435) → ThinkingSteps. Mode-DECOUPLED: muncul dari event
+  // node pertama, auto-dismiss saat stream selesai (di-clear di finalize/stopStream).
+  thinkingSteps: Record<string, string[]>
   // Trace panel state — ID pesan + traces-nya
   activeTraceMessageId: string | null
   activeTraceMessages: AgentTrace[]
@@ -48,6 +67,8 @@ interface ChatStore {
   openTrace: (messageId: string, traces: AgentTrace[], requestId?: string | null) => void
   closeTrace: () => void
 
+  /** Sinkronkan mode dari profil (dipanggil pemilik data profil, mis. halaman Settings). */
+  setChatMode: (mode: ChatMode) => void
   sendMessage: (sessionId: string, text: string, mode?: string, chipKey?: string) => Promise<void>
   /** Ikut stream yang SUDAH berjalan di server (mis. setelah refresh) — Fix #114 */
   attachStream: (sessionId: string) => void
@@ -65,6 +86,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   streaming: {},
   ticketContext: null,
   finalizeTick: 0,
+  chatMode: chatModeFromDepth(null),
+  thinkingSteps: {},
   activeTraceMessageId: null,
   activeTraceMessages: [],
   activeTraceRequestId: null,
@@ -103,6 +126,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({ activeTraceMessageId: null, activeTraceMessages: [], activeTraceRequestId: null })
   },
 
+  setChatMode(mode) {
+    set({ chatMode: mode })
+  },
+
   async sendMessage(sessionId, text, mode, chipKey) {
     const { streaming, appendMessage } = get()
     if (streaming[sessionId]?.isStreaming) return
@@ -121,12 +148,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     // Konteks tiket di-handle backend via session.ticketId (Fix #49) — user
     // tidak perlu melihat teks yang bukan dia ketik.
     // Chat by Project: mode depth opsional (low/medium/thinking).
+    // CHAT3 §4.1: tanpa toggle chatbox — mode eksplisit (ProjectChatPage) menang,
+    // selain itu pakai chatMode dari profil (D-P1.1); unset → medium.
+    const wireMode = mode ?? get().chatMode
     // USER_PROFILE_PLAN Phase 2: chipKey opsional (identifier chip asal pesan)
     // → dicatat counter chips_clicked di backend (bukan bagian dari teks).
     try {
       await api.post(`/chat/sessions/${sessionId}/send`, {
         message: text,
-        ...(mode ? { mode } : {}),
+        ...(wireMode ? { mode: wireMode } : {}),
         ...(chipKey ? { chip_key: chipKey } : {}),
       })
     } catch (error) {
@@ -150,6 +180,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (!token) return
     set((s) => ({
       streaming: { ...s.streaming, [sessionId]: { isStreaming: true, streamingText: "", activeAgent: null } },
+      // Stream baru → activity list kosong (ThinkingSteps mulai dari event node pertama)
+      thinkingSteps: { ...s.thinkingSteps, [sessionId]: [] },
     }))
 
     es = new EventSource(
@@ -183,6 +215,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       lastFinalizedAt = Date.now()
       set((s) => ({
         streaming: { ...s.streaming, [sessionId]: emptyStream() },
+        // CHAT3 §4A.2: auto-dismiss activity saat done
+        thinkingSteps: { ...s.thinkingSteps, [sessionId]: [] },
         finalizeTick: s.finalizeTick + 1,
       }))
     }
@@ -209,11 +243,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         } else if (event.type === "agent") {
           set((st) => {
             const cur = st.streaming[sessionId] ?? emptyStream()
+            // CHAT3 §4A.2: catat urutan node utk ThinkingSteps (dedupe berurutan —
+            // node yang sama bisa selesai lebih dari sekali pada autonomous loop)
+            const prevSteps = st.thinkingSteps[sessionId] ?? []
+            const node = typeof event.data === "string" ? event.data : ""
+            const steps =
+              node && prevSteps[prevSteps.length - 1] !== node
+                ? [...prevSteps, node]
+                : prevSteps
             return {
               streaming: {
                 ...st.streaming,
-                [sessionId]: { ...cur, activeAgent: event.data ?? null },
+                [sessionId]: { ...cur, activeAgent: node || null },
               },
+              thinkingSteps: { ...st.thinkingSteps, [sessionId]: steps },
             }
           })
         } else if (event.type === "error") {
@@ -255,6 +298,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     lastFinalizedAt = Date.now()
     set((s) => ({
       streaming: { ...s.streaming, [sessionId]: emptyStream() },
+      thinkingSteps: { ...s.thinkingSteps, [sessionId]: [] },
       finalizeTick: s.finalizeTick + 1,
     }))
   },

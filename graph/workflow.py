@@ -16,6 +16,7 @@ from agents.knowledge_agent import knowledge_agent
 from agents.ticket_agent import ticket_agent
 from agents.project_agent import project_agent
 from agents.k8s_agent import k8s_agent  # STACK2 F2 — node #16
+from agents.chat_agent import chat_agent  # CHAT3 P2 — node #17 (conversational lane)
 import logging
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,8 @@ def _route(state: AgentState) -> Union[str, List[str]]:
         "project_agent":   "project_agent",
         "metrics_agent":   "metrics_agent",   # STACK2 F1: direct to metrics (pod_health/promql_range)
         "k8s_agent":       "k8s_agent",       # STACK2 F2: direct to k8s (k8s_events)
+        "chat_agent":      "chat_agent",      # CHAT3 P2 (D-P2.6): conversational lane — tanpa entry ini,
+                                              # next_agent "chat_agent" diam-diam ter-END (TASK-005 lesson)
         "end":             END,
     }
     return route_map.get(next_a, END)
@@ -202,6 +205,7 @@ def build_graph() -> StateGraph:
     workflow.add_node("knowledge_agent",   knowledge_agent)  # FE-7
     workflow.add_node("ticket_agent",      ticket_agent)     # Ticket Agent (lane pengelolaan tiket)
     workflow.add_node("project_agent",     project_agent)    # Chat by Project (lane Q&A project, fase 1 read-only)
+    workflow.add_node("chat_agent",        chat_agent)       # CHAT3 P2 — conversational lane (fallback position, K1/K7)
 
     # Entry point
     workflow.set_entry_point("supervisor")
@@ -274,6 +278,9 @@ def build_graph() -> StateGraph:
 
     # follow_up_agent → routing kondisional (response_agent atau fallback fan-out)
     workflow.add_conditional_edges("follow_up_agent", _route)
+
+    # chat_agent → END via existing route_map end handling (next_agent "end" — D-P2.6)
+    workflow.add_conditional_edges("chat_agent", _route)
 
     # response_agent → END
     workflow.add_edge("response_agent", END)

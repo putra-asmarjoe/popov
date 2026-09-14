@@ -1,18 +1,23 @@
 import { useEffect, useState } from "react"
+import { useNavigate } from "react-router-dom"
+import { ArrowRight, ArrowUpRight } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { chipKeyOf, type Suggestion, type SuggestionChip } from "@/lib/chat-meta"
+import { chipKeyOf, chipKind, type Suggestion, type SuggestionChip } from "@/lib/chat-meta"
 
 function isChip(s: Suggestion): s is SuggestionChip {
   return typeof s === "object" && s !== null && "label" in s
 }
 
 /**
- * ChatSuggestions — chips follow-up.
- * Dua tipe (Gap 5):
- *  - investigation (🔍): klik → auto-send action identifier ("investigate:<node>") via onSend
- *  - general (💡): klik → isi input (onPick) — user bisa edit dulu (existing behavior)
- * USER_PROFILE_PLAN Phase 2: chipKey ikut dikirim (key stabil / action) → counter
- * chips_clicked di backend. DRY: dipakai chat tiket (ChatPanel) & chat project (ProjectChatPage).
+ * ChatSuggestions — chips follow-up, kontrak dua tipe (CHAT3 §4A.7, Rev 7):
+ *  - ACTION (aksen + ikon panah maju): giliran percakapan yang aman — teks chip
+ *    masuk chat sebagai pesan user via relay onPick/onSend existing (K1 tetap).
+ *  - OFFER (muted + ↗): keluar dari percakapan → navigasi ke `target` (react-router).
+ * Semantic carrier = field `type` dari backend; ikon/warna hanya styling FE.
+ * Legacy: type "investigation" | "general" → action; type hilang → action
+ * (safe default); plain string → action dgn perilaku lama (isi input, onPick) —
+ * additive, tidak merusak producer string lama.
+ * chipKey tetap dikirim → counter chips_clicked (USER_PROFILE_PLAN Phase 2).
  */
 export function ChatSuggestions({
   suggestions,
@@ -29,6 +34,7 @@ export function ChatSuggestions({
   contentClassName?: string
   showDelayMs?: number
 }) {
+  const navigate = useNavigate()
   const sig = suggestions
     .map((s) => (isChip(s) ? s.label : s))
     .join("\u0000")
@@ -51,28 +57,39 @@ export function ChatSuggestions({
     <div className={cn("pt-2 pb-1", className)}>
       <div className={cn("flex flex-wrap gap-1.5", contentClassName)}>
         {suggestions.map((sug) => {
-          const chip = isChip(sug)
-          const label = chip ? sug.label : sug
-          const isInvestigation = chip && sug.type === "investigation"
+          const chip = isChip(sug) ? sug : null
+          const label = isChip(sug) ? sug.label : sug
+          const key = chip ? chipKeyOf(chip) : undefined
+          const isOffer = chipKind(sug) === "offer"
           return (
             <button
               key={label}
               type="button"
               onClick={() => {
-                if (isInvestigation && sug.action && onSend) {
-                  onSend(sug.action, chipKeyOf(sug))
+                if (isOffer) {
+                  // OFFER: navigasi keluar dari percakapan; tanpa target → fallback aman ke onPick
+                  if (chip?.target) navigate(chip.target)
+                  else onPick(label, key)
+                  return
+                }
+                // ACTION: relay teks via jalur existing
+                if (chip?.action && onSend) {
+                  onSend(chip.action, key) // legacy investigation chip → auto-send identifier
+                } else if (chip?.type === "action" && onSend) {
+                  onSend(label, key) // chip bertipe action → teks chip jadi pesan user (§4A.7)
                 } else {
-                  onPick(label, chipKeyOf(sug))
+                  onPick(label, key) // plain string / legacy general / tanpa onSend → isi input
                 }
               }}
               className={cn(
-                "rounded-full border px-2.5 py-1 text-left text-xs transition-colors",
-                isInvestigation
-                  ? "bg-primary/10 border-primary/30 hover:bg-primary/20"
-                  : "bg-muted/50 hover:bg-muted border-border/60 text-foreground/90"
+                "inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-left text-xs transition-colors",
+                isOffer
+                  ? "bg-muted/50 hover:bg-muted border-border/60 text-foreground/90"
+                  : "bg-primary/10 border-primary/30 text-primary hover:bg-primary/20",
               )}
             >
-              {isInvestigation ? "🔍" : "💡"} {label}
+              {isOffer ? <ArrowUpRight className="size-3 shrink-0" /> : <ArrowRight className="size-3 shrink-0" />}
+              {label}
             </button>
           )
         })}

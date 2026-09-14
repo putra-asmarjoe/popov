@@ -514,6 +514,44 @@ async def _user_context_for_state(user_id: str, workspace_id: str) -> str:
         return ""
 
 
+_CLOSE_INTENT_RE = None
+
+def _has_close_intent(intent: str) -> bool:
+    """True bila pesan juga meminta penutupan tiket (aksi kedua setelah note).
+    Live: "tambahkan note : ... pod healthy, than close ticket" — note + close
+    satu pesan. Hanya frasa tail-clause eksplisit yang match — bare "close"/
+    "tutup" di mana saja TIDAK match (mis. "close valve inspected" adalah
+    isi catatan sah, bukan instruksi close)."""
+    import re
+    global _CLOSE_INTENT_RE
+    if _CLOSE_INTENT_RE is None:
+        _CLOSE_INTENT_RE = re.compile(
+            r'\bthan\s+close\b'
+            r'|\bthen\s+close\b'
+            r'|\blalu\s+tutup\b'
+            r'|\bterus\s+tutup\b'
+            r'|\bclose\s+(the\s+|this\s+)?ticket\b'
+            r'|\btutup\s+tiket(\s+ini)?\b',
+            re.IGNORECASE,
+        )
+    return bool(_CLOSE_INTENT_RE.search(intent or ""))
+
+_CLOSE_CLAUSE_RE = None
+
+def _strip_close_clause(note: str) -> str:
+    """Buang klausa penutup di EKOR note ("..., than close ticket").
+    Tanpa ini instruksi close ikut tersimpan sbg isi progressLog. Hanya ekor
+    yg di-strip — "close" di tengah note dibiarkan (isi catatan sah)."""
+    import re
+    global _CLOSE_CLAUSE_RE
+    if _CLOSE_CLAUSE_RE is None:
+        _CLOSE_CLAUSE_RE = re.compile(
+            r'[\s,;\-\—:]*\b(and\s+)?(than|then)\s+close(\s+(the|this)\s+ticket|\s+ticket)?\s*[.!]?\s*$'
+            r'|[,;\-\—:]?\s*\b(lalu|terus)\s+tutup(\s+tiket)?\s*[.!]?\s*$',
+            re.IGNORECASE,
+        )
+    return _CLOSE_CLAUSE_RE.sub("", note or "").strip(" ,;:-\—")
+
 async def ticket_agent(state: dict) -> dict:
     agents_visited = state.get("agents_visited", []) + ["ticket_agent"]
     intent = state.get("intent", "")
@@ -532,11 +570,28 @@ async def ticket_agent(state: dict) -> dict:
     # Sinyal eksplisit aksi tulis ("add"/"tambah" + "note"/"catatan") wins.
     if _is_progress_note_command(intent):
         note_text = _extract_progress_note(intent)
+        _close_second = _has_close_intent(intent)
+        if _close_second and note_text:
+            note_text = _strip_close_clause(note_text) or note_text
         if note_text:
             reply = await _execute_action(
                 state, agents_visited, user, ticket, project, ws,
                 "add_progress", {"note": note_text}, locale,
             )
+            if reply.get("ticket_result", {}).get("ok") and _close_second:
+                # Live: "tambahkan note : ... pod healthy, than close ticket" —
+                # note sukses ditulis → lanjutkan close sbg aksi kedua.
+                close_reply = await _execute_action(
+                    state, agents_visited, user, ticket, project, ws,
+                    "close", {}, locale,
+                )
+                combined = (reply.get("formatted_message") or "") + "\n\n" + (close_reply.get("formatted_message") or "")
+                return await _reply(
+                    state, agents_visited, combined,
+                    {"ok": close_reply.get("ticket_result", {}).get("ok", False),
+                     "action": "add_progress_then_close",
+                     "ticket_id": str(ticket["_id"])},
+                )
             return reply
         # pattern detected tapi note kosong → jatuh ke branch berikutnya (clarify/LLM)
 
@@ -666,7 +721,8 @@ async def ticket_agent(state: dict) -> dict:
         return reply
 
     members = await _member_list(ws)
-    parsed = await parse_ticket_intent(intent, public_ticket(ticket), members)
+    sender = state.get("sender") or {}
+    parsed = await parse_ticket_intent(intent, public_ticket(ticket), members, sender=sender)
     if not parsed:
         # Ambigu / di luar konteks tiket → klarifikasi natural (LLM) + routing-rescue.
         summary_ctx = await _build_ticket_summary_deterministic(ticket, project, locale)

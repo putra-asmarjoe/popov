@@ -65,6 +65,15 @@ async def ensure_indexes() -> None:
             await collection.create_index([("routing_strategy", 1)])
         except Exception:
             pass
+        # P5.1 telemetry: indexes untuk query gate routing
+        try:
+            await collection.create_index([("matched_gate", 1)])
+        except Exception:
+            pass
+        try:
+            await collection.create_index([("gate_type", 1)])
+        except Exception:
+            pass
         # follow-up chat lookup by session (sender.session_id)
         try:
             await collection.create_index("sender.session_id")
@@ -203,6 +212,18 @@ async def update_request_log(
         update["agent_sequence"] = [t.get("agent") for t in agent_traces if isinstance(t, dict)]
     if reply:
         update["reply"] = reply
+
+    # P5.1 telemetry: persist routing gate fields + final lane + tools used
+    update["matched_gate"] = state.get("matched_gate") or None
+    update["gate_type"] = state.get("gate_type") or None
+    update["chat_agent_used"] = (
+        bool(state["chat_agent_used"]) if state.get("chat_agent_used") is not None else None
+    )
+    update["final_lane"] = state.get("next_agent") or None
+    update["tools_used"] = state.get("tools_used") or None
+    update["synthesis_used"] = (
+        bool(state["synthesis_used"]) if state.get("synthesis_used") is not None else None
+    )
 
     try:
         db = get_db()

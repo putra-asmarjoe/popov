@@ -13,7 +13,6 @@ import { useChatMessages, useChatSessions, useChatStream } from "@/hooks/useChat
 import { useChatStore } from "@/store/chat.store"
 import { useProjects } from "@/hooks/useWorkspaces"
 import { useWorkspaceStore } from "@/store/workspace.store"
-import { cn } from "@/lib/utils"
 import { lastAssistantMeta } from "@/lib/chat-meta"
 
 /**
@@ -22,17 +21,15 @@ import { lastAssistantMeta } from "@/lib/chat-meta"
  * Chips dari meta jawaban assistant terakhir (persist server, refresh-safe):
  * - suggestions → isi input dengan saran follow-up (via ChatSuggestions)
  * - ticket_refs → navigate ke detail tiket (/w/:ws/:proj?ticket=KEY-N)
+ * CHAT3 §4.1 (Rev 4, owner lock §7.10): TANPA toggle depth di chatbox — mode wire
+ * diambil dari chat.store (chatMode, derived dari profil default_chat_depth, D-P1.1).
  */
-
-const CHAT_MODES = ["low", "medium", "thinking"] as const
-type ChatMode = (typeof CHAT_MODES)[number]
 
 export function ProjectChatPage() {
   const { t } = useTranslation("pchat")
   const { sendMessage } = useChatStream()
   const { wsSlug = "", sessionId = "" } = useParams()
   const [text, setText] = useState("")
-  const [mode, setMode] = useState<ChatMode>("low")
   // USER_PROFILE_PLAN Phase 2: chipKey asal draft (counter chips_clicked) — reset
   // bila user mengubah isi draft manual (bukan pick chip).
   const [pendingChipKey, setPendingChipKey] = useState<string | undefined>(undefined)
@@ -75,7 +72,10 @@ export function ProjectChatPage() {
   // Fix: Sembunyikan suggestions saat user baru kirim pesan (setelah ": " message count).
   // Reset saat meta berubah (response baru tiba).
   const [hideSuggestions, setHideSuggestions] = useState(false)
-  const metaSig = meta?.messageId ?? meta?.summary ?? ""
+  // Fix chip-missing (2026-09-13): signature dulu baca `messageId`/`summary` —
+  // field itu TIDAK ada di meta assistant server → reset tak pernah fire.
+  // Pakai request_id (api/chat.py:508) — unik per turn.
+  const metaSig = String(meta?.request_id ?? "")
   const prevMetaSigRef = useRef(metaSig)
   if (prevMetaSigRef.current !== metaSig) {
     // Meta berubah = response baru tiba → tampilkan chips
@@ -126,7 +126,7 @@ export function ProjectChatPage() {
             }}
             onSendSuggestion={(t, ck) => {
               setHideSuggestions(true)
-              void sendMessage(sessionId, t, mode, ck)
+              void sendMessage(sessionId, t, undefined, ck)
             }}
           />
         ) : (
@@ -134,30 +134,11 @@ export function ProjectChatPage() {
             <div className="mx-auto w-full max-w-3xl">{t("no_session")}</div>
           </div>
         )}
-        {/* Mode selector + input */}
+        {/* Input (mode wire dari chat.store — tanpa toggle chatbox, CHAT3 §4.1) */}
         <div className="border-t px-4 py-2.5">
           <div className="mx-auto w-full max-w-3xl space-y-2">
-            <div className="flex items-center gap-1">
-              {CHAT_MODES.map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setMode(m)}
-                  title={t(`mode_hint.${m}`)}
-                  className={cn(
-                    "rounded-full border px-2.5 py-1 text-[11px] capitalize",
-                    mode === m
-                      ? "border-primary bg-primary font-medium text-primary-foreground"
-                      : "text-muted-foreground hover:bg-muted",
-                  )}
-                >
-                  {m === "thinking" ? `🧠 ${m}` : m}
-                </button>
-              ))}
-            </div>
             <ProjectChatInput
               sessionId={sessionId}
-              mode={mode}
               chipKey={pendingChipKey}
               onTextChange={(v) => {
                 setText(v)
@@ -183,17 +164,16 @@ export function ProjectChatPage() {
   )
 }
 
-/** Input chat project: textarea autosize + kirim (dgn mode depth) / stop stream. */
+/** Input chat project: textarea autosize + kirim / stop stream.
+ *  Mode wire TIDAK lewat sini — chat.store memakai chatMode dari profil (D-P1.1). */
 function ProjectChatInput({
   sessionId,
-  mode,
   onTextChange,
   onSendMessage,
   draft,
   chipKey,
 }: {
   sessionId: string
-  mode: ChatMode
   onTextChange: (v: string) => void
   onSendMessage?: () => void
   draft: string
@@ -220,7 +200,7 @@ function ProjectChatInput({
     if (value.length < 2 || !sessionId || isStreaming) return
     onTextChange("")
     onSendMessage?.()
-    void sendMessage(sessionId, value, mode, chipKey)
+    void sendMessage(sessionId, value, undefined, chipKey)
   }
 
   return (

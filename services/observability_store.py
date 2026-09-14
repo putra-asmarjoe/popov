@@ -120,6 +120,28 @@ async def get_target(observ_id: str) -> Optional[dict]:
         return None
 
 
+async def observ_ids_for_project(
+    project_id: Optional[str], workspace_id: Optional[str]
+) -> List[str]:
+    """SCOPE-FIX-1: `observ_id` stack yang TERIKAT ke project ini.
+
+    Preseden: api/routes_project_overview.py::_project_observ_ids (identik).
+    Dipakai untuk men-scope `incident_episodes` (collection itu tidak punya
+    field project_id — hanya workspace_id + observ_id + ticket_id).
+    Scoped pada KEDUA workspace_id dan project_ids → tidak cross-tenant.
+    """
+    if not (project_id and workspace_id):
+        return []
+    return await _collection().distinct(
+        "observ_id",
+        {
+            "workspace_id": str(workspace_id),
+            "project_ids": str(project_id),
+            "enabled": {"$ne": False},
+        },
+    ) or []
+
+
 async def list_targets(workspace_id: Optional[str] = None, enabled_only: bool = True) -> List[dict]:
     q: Dict[str, Any] = {}
     if workspace_id:

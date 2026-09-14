@@ -23,7 +23,7 @@ spec:
       containers:
         - name: popov-agent
           # Replace <YOUR_DOCKERHUB_USERNAME> with your Docker Hub username
-          image: <YOUR_DOCKERHUB_USERNAME>/popov-agent:latest
+          image: putraasmarjoe/popov-agent:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8000

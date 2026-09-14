@@ -27,7 +27,7 @@ spec:
         - name: dockerhub-secret
       containers:
         - name: watchdog-worker
-          image: <YOUR_DOCKERHUB_USERNAME>/popov-agent:latest
+          image: putraasmarjoe/popov-agent:latest
           imagePullPolicy: Always
           command: ["python", "watchdog_worker.py"]
           envFrom:

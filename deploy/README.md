@@ -34,6 +34,90 @@ Singleton constraints (do NOT increase replicas):
 
 MongoDB is **not** included in this folder — you must provide a reachable
 MongoDB instance (managed service or your own deployment) before starting.
+Don't have one yet? See **[Optional — Run Your Own MongoDB](#optional--run-your-own-mongodb-choose-one-option)** below.
+
+---
+
+## Optional — Run Your Own MongoDB (choose ONE option)
+
+If you **already have** a MongoDB instance (managed service, self-hosted,
+another server), skip this section entirely — just point `MONGODB_URI`
+in `deploy/secret.yaml` at it.
+
+If you do **not** have MongoDB anywhere, pick ONE of the two options below.
+
+### Option 1 — In-cluster (kubectl, recommended for this guide)
+
+Everything needed ships in this folder. One command:
+
+```bash
+kubectl apply -f deploy/mongodb-optional.yaml
+```
+
+This creates a MongoDB 8 pod (1 replica, Recreate strategy) backed by a
+10Gi PersistentVolumeClaim, exposed in-cluster as
+`mongodb-service:27017` — **which is exactly the default `MONGODB_URI`
+already set in `deploy/secret.yaml`**, so no config change is needed.
+
+Verify it is ready:
+
+```bash
+kubectl get pods -l app=mongodb                                   # wait Running 1/1
+kubectl exec deploy/mongodb -- mongosh --eval "db.runCommand({ping:1})"   # expect ok: 1
+```
+
+> ⚠️ The PVC uses the cluster's default StorageClass. On homelab clusters
+> prefer a local-SSD class — MongoDB, like SQLite WAL, is not reliable on
+> network filesystems (NFS/SMB).
+>
+> `kubectl delete -f deploy/mongodb-optional.yaml` also deletes the PVC and
+> all data — back up first (`mongodump`) if you ever need to remove it.
+
+### Option 2 — Outside the cluster (Docker Compose on any host)
+
+Prefer your MongoDB on a separate Docker host (e.g. your NAS box) instead of
+inside the cluster? Create a `docker-compose.yml` on that host with the
+following content — the `mongodb` service is intentionally **commented out**:
+
+```yaml
+services:
+  # ─────────────────────────────────────────────────────────────────────
+  # MongoDB — uncomment the block below ONLY if you do not have a
+  # MongoDB instance yet. After uncommenting, run:
+  #
+  #     docker compose up -d
+  #
+  # Data is persisted to ./data/mongo on the host, and the container
+  # restarts automatically on failure or host reboot.
+  #
+  # Then set MONGODB_URI in deploy/secret.yaml to:
+  #     mongodb://<HOST_IP>:27017
+  # (use the host's LAN IP or the machine running this compose file —
+  #  NOT "localhost", because the Popov pods run inside the cluster)
+  # ─────────────────────────────────────────────────────────────────────
+  # mongodb:
+  #   image: mongo:8
+  #   ports:
+  #     - "27017:27017"   # expose so the Popov cluster pods can reach it
+  #   volumes:
+  #     - ./data/mongo:/data/db
+  #   restart: unless-stopped
+```
+
+Steps:
+
+1. Uncomment the `mongodb:` block (remove the leading `# ` on each line).
+2. `docker compose up -d`
+3. Confirm it is healthy: `docker compose ps` (status `running`), then
+   `docker compose exec mongodb mongosh --eval "db.runCommand({ping:1})"`.
+4. Set `MONGODB_URI` in `deploy/secret.yaml` to
+   `mongodb://<HOST_IP>:27017` and continue with **Step 2** of this guide.
+
+> ⚠️ The published port `27017` must be reachable from the Kubernetes
+> cluster. If your cluster runs on other machines, make sure the host
+> firewall allows it. This setup is meant for evaluation / small
+> self-hosted deployments — for production, prefer a managed MongoDB or a
+> properly backed-up instance.
 
 ---
 
@@ -43,6 +127,7 @@ MongoDB instance (managed service or your own deployment) before starting.
 - Docker installed locally
 - A Docker Hub account (or any OCI registry)
 - A MongoDB instance reachable from the cluster (e.g. `mongodb://mongodb-service:27017`)
+  — no MongoDB yet? See [Optional — Run Your Own MongoDB](#optional--run-your-own-mongodb-choose-one-option)
 - LLM provider API keys (OpenAI / OpenRouter / Google)
 
 Check connectivity first:

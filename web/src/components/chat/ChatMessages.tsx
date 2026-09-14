@@ -2,6 +2,7 @@ import { lazy, useEffect, useMemo, useRef } from "react"
 import { useTranslation } from "react-i18next"
 import { Link } from "react-router-dom"
 import { StreamingDots } from "@/components/chat/StreamingDots"
+import { ThinkingSteps } from "@/components/chat/ThinkingSteps"
 import { ChatSuggestions } from "@/components/chat/ChatSuggestions"
 import type { Suggestion } from "@/lib/chat-meta"
 import { useChatStore } from "@/store/chat.store"
@@ -84,6 +85,32 @@ export function ChatMessages({
       }
     }
   }, [])
+
+  // Auto-scroll saat streaming: user kirim pesan set stickToBottom=false,
+  // jadi harus di-enable lagi ketika agent mulai/finish reply agar
+  // ResizeObserver + text follower di bawah bisa scroll mengikuti jawaban.
+  const prevIsStreaming = useRef(isStreaming)
+  useEffect(() => {
+    if (isStreaming && !prevIsStreaming.current) {
+      // Streaming dimulai — kembali ikuti bawah & scroll ke bawah
+      stickToBottom.current = true
+      scrollToBottom.current()
+    } else if (!isStreaming && prevIsStreaming.current) {
+      // Streaming selesai (finalize) — reset agar resize berikutnya
+      // (pesan final, chips, suggestions) ikut scroll
+      stickToBottom.current = true
+      scrollToBottom.current()
+    }
+    prevIsStreaming.current = isStreaming
+  }, [isStreaming])
+
+  // Scroll mengikuti streamingText yang bertambah, selama user tidak
+  // sengaja scroll ke atas (stickToBottom masih true)
+  useEffect(() => {
+    if (isStreaming && streamingText && stickToBottom.current) {
+      scrollToBottom.current()
+    }
+  }, [streamingText, isStreaming])
 
   // Auto-scroll langsung via ResizeObserver saat tinggi konten berubah
   useEffect(() => {
@@ -172,6 +199,9 @@ export function ChatMessages({
 
         {isStreaming && (
           <>
+            {/* CHAT3 §4A.1: Activity inline DI ATAS response — mode-decoupled (§4A.2),
+                tampil sejak event node pertama, auto-dismiss saat done */}
+            <ThinkingSteps sessionId={sessionId} />
             {streamingText ? (
               <div className="flex gap-2.5">
                 <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted">

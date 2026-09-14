@@ -148,6 +148,24 @@ async def _deliver(state, text: str, reply_markup: Optional[dict] = None):
 # (editable, hot-reload via POST /prompts/reload).
 
 
+def _context_pill_for(state: dict) -> dict:
+    """CHAT3 P1 (§4A.5) — context pill utk FE ContextPill (metadata channel saja).
+
+    Bentuk fix sesuai spec: {"type": "context", "service", "ticket_id",
+    "resolved_ref": None}. resolved_ref diisi Phase 2 (anaphora).
+    CATATAN: AgentState TIDAK punya field "ticket_id" — nilai selalu None di P1
+    (spec §4A.5 literal); konteks tiket sebenarnya ada di ticket_context/
+    ticket_result (FINDING — lihat HANDOFF CHAT3-P1-BE).
+    Pemakaian: conditional-spread web-only (suppress_telegram) — pola sama dgn
+    chat_suggestions; jalur Telegram TIDAK PERNAH menerima dict ini.
+    """
+    return {
+        "type": "context",
+        "service": state.get("service_name"),
+        "ticket_id": state.get("ticket_id"),
+        "resolved_ref": None,
+    }
+
 _BTN_TEXTS = {
     "en": {
         "health": "🏥 Check Health Dependency",
@@ -395,6 +413,7 @@ async def response_agent(state: AgentState) -> dict:
             "next_agent": "end",
             "agents_visited": agents_visited,
             **({"chat_suggestions": _csuggestions} if _csuggestions else {}),
+            **({"context_pill": _context_pill_for(state)} if state.get("suppress_telegram") else {}),
         }
 
     # F2-T6: K8s standalone mode — k8s_agent → response_agent
@@ -427,6 +446,7 @@ async def response_agent(state: AgentState) -> dict:
             "next_agent": "end",
             "agents_visited": agents_visited,
             **({"chat_suggestions": _csuggestions_k8s} if _csuggestions_k8s else {}),
+            **({"context_pill": _context_pill_for(state)} if state.get("suppress_telegram") else {}),
         }
 
     # 0. Handling Follow-up Question (Phase 1)
@@ -697,6 +717,31 @@ async def response_agent(state: AgentState) -> dict:
     except Exception as e:
         logger.warning(f"[TelegramAgent] chat suggestions gagal: {e}")
 
+    # ── CHAT3 §5.3 (P2, D-P2.9): investigation_context write-back — web-only ──
+    # Persist investigation_context ke chat_sessions (in-request, SATU titik —
+    # investigasi selesai di sini; tidak ada post-node). DETERMINISTIK (D-P2.3:
+    # build_investigation_context tanpa LLM, cap 1600 char). NON-FATAL (K4):
+    # delivery path TIDAK berubah bila write gagal — cukup log.
+    # Gate web-only: session_id chat (sender.session_id — id sesi web; state
+    # top-level session_id = diagnostic DS-, selalu None di jalur web) +
+    # suppress_telegram. Telegram TIDAK PERNAH lewat sini.
+    try:
+        _web_only = bool(state.get("suppress_telegram"))
+        _chat_session = (state.get("sender") or {}).get("session_id") or state.get("session_id")
+        if _web_only and _chat_session:
+            from services.chat_store import update_conversation_state
+            from services.conversation_state import build_investigation_context
+
+            _inv_ctx = build_investigation_context(state)
+            if _inv_ctx:
+                await update_conversation_state(str(_chat_session), investigation_context=_inv_ctx)
+                logger.info(
+                    f"[ResponseAgent] investigation_context written to conversation_state "
+                    f"session={_chat_session} root={_inv_ctx.get('last_root_cause')}"
+                )
+    except Exception as e:
+        logger.warning(f"[ResponseAgent] conversation_state write failed (non-fatal): {e}")
+
     return {
         "formatted_message": formatted,
         "telegram_sent": success,
@@ -705,6 +750,7 @@ async def response_agent(state: AgentState) -> dict:
         "agents_visited": agents_visited,
         "session_id": f"DS-{episode_id}" if state.get("episode_id") else None,
         **({"chat_suggestions": chat_suggestions} if chat_suggestions else {}),
+        **({"context_pill": _context_pill_for(state)} if state.get("suppress_telegram") else {}),
     }
 
 

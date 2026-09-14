@@ -10,6 +10,12 @@ Current ticket context:
 Workspace members (for assign action):
 {{member_list}}
 
+Current user (the person sending this message):
+- Name: {{current_user_name}}
+- Email: {{current_user_email}}
+
+IMPORTANT: If the user says "me", "myself", "aku", "saya", or refers to themselves, resolve to the current user shown above. For "assign me" → assign to current user's name or email.
+
 Supported actions (MUST be one of):
 - close        → close/solve/resolve the ticket. params: {}
 - reopen       → reopen a resolved/closed ticket. params: {}

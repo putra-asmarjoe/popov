@@ -100,6 +100,11 @@ DATA_COUNT_RE = re.compile(r"(\d+)\s*(?:data|record|row)", re.IGNORECASE)
 COLLECTION_RE = re.compile(r"(?:collection|table|tabel)\s+([\w\-.]+)", re.IGNORECASE)
 COLLECTION_SUFFIX_RE = re.compile(r"([\w\-.]+)\s+(?:collection|table|tabel)", re.IGNORECASE)
 
+# K8s namespace eksplisit: "namespace starrocks" / "ns kube-system" (EN/ID —
+# kata "namespace"/"ns" sama di kedua bahasa). Dipakai k8s_events gate dan
+# k8s_inventory gate. Preseden: intent text > state k8s_namespace > "default".
+K8S_NS_RE = re.compile(r"\b(?:namespace|ns)\s+([\w\-.]+)", re.IGNORECASE)
+
 # Chat by Project — pertanyaan level project (tanpa menyebut service spesifik).
 # Aktif HANYA bila state punya project_id & BUKAN sesi terikat tiket.
 PROJECT_QUERY_KW = [
@@ -120,6 +125,21 @@ _PROJECT_KNOWLEDGE_PROJECT_MENTION = (
     "this project", "project ini", "pada project", "di project", "project kami",
     "dalam project", "the project", "our project",
 )
+
+def _t(ret: dict, gate: str, gate_type: str) -> dict:
+    """P5.1 telemetry: add matched_gate / gate_type / chat_agent_used."""
+    ret["matched_gate"] = gate
+    ret["gate_type"] = gate_type
+    ret["chat_agent_used"] = (ret.get("next_agent") == "chat_agent")
+    return ret
+
+def _is_chip_triggered(state: dict) -> bool:
+    """True bila routing berasal dari chip action (bukan user free-text)."""
+    return bool(
+        state.get("chip_action")
+        or state.get("offer_action")
+        or str(state.get("routing_strategy", "")).startswith("chip")
+    )
 
 def _deployment_lane_route(
     state: dict, intent: str, matched_service: Optional[str], agents_visited: list,
@@ -152,6 +172,9 @@ def _deployment_lane_route(
             "routing_strategy": "deployment_ranking",
             "routing_flag": "deployment_ranking",
             "error": None,
+            "matched_gate": "deployment_ranking",
+            "gate_type": "legacy_intent",
+            "chat_agent_used": False,
         }
     if _is_deployment_overview_intent(intent):
         logger.info(
@@ -167,6 +190,9 @@ def _deployment_lane_route(
             "routing_strategy": "deployment_overview",
             "routing_flag": "deployment_overview",
             "error": None,
+            "matched_gate": "deployment_overview",
+            "gate_type": "legacy_intent",
+            "chat_agent_used": False,
         }
     return None
 
@@ -201,6 +227,9 @@ def _ticket_chat_project_route(state: dict, agents_visited: list) -> Optional[di
         "routing_strategy": "project_query",
         "routing_flag": "ticket_chat_project",
         "error": None,
+        "matched_gate": "project_query",
+        "gate_type": "legacy_intent",
+        "chat_agent_used": False,
     }
 
 
@@ -567,6 +596,26 @@ async def _list_project_refs(project_id: str) -> list[dict]:
         return []
 
 
+_OFFER_CANCELLED_TEXT = {
+    "id": "Oke, tawaran dibatalkan.",
+    "en": "OK, offer cancelled.",
+}
+
+_OFFER_AWAITING_TEXT = {
+    "id": "Oke! {question}\nSilakan ketik {hint}-nya.",
+    "en": "OK! {question}\nPlease type the {hint}.",
+}
+
+_SERVICE_NOT_FOUND_TEXT = {
+    "id": "Tidak bisa mengenali service dari intent: '{intent}'.",
+    "en": "Cannot recognize a service from: '{intent}'.",
+}
+
+_SERVICE_LIST_HINT_TEXT = {
+    "id": "Service tidak dikenali untuk project ini. Service terdaftar: {linked} (belum ada — link service lewat halaman project).",
+    "en": "Service not recognized for this project. Registered services: {linked} (none yet — link services via the project page).",
+}
+
 _REDIRECT_TEXTS = {
     "id": {
         "llm_note": "\n\nℹ️ Pemahaman konteks terbatas saat ini (model bahasa tidak tersedia) — coba parafrase, atau ulangi nanti.",
@@ -595,6 +644,41 @@ _REDIRECT_TEXTS = {
 }
 
 
+# CHAT3 P3C (D-P3.3): front-gate classifier — INVESTIGATION vs CONVERSATIONAL.
+# Deterministik (zero-LLM), non-fatal, no DB. Module-level (testable).
+_INVESTIGATION_KW = (
+    "error", "crash", "down", "restart", "unhealthy",
+    "timeout", "500", "502", "503", "panic", "oom",
+    "disk full", "cpu high", "memory leak", "deploy",
+    "incident", "outage", "alert", "critical", "severe",
+)
+
+# P5.2: prefixes that frame a message as a question (conversational, not incident).
+_QUESTION_PREFIXES = (
+    "kenapa", "mengapa", "why", "apa penyebab", "what caused", "how come",
+)
+
+
+def _classify_mode(st: dict, it: str) -> str:
+    """Classify message mode. Returns 'investigation' or 'conversational'.
+
+    Hard overrides: ticket_context, project_id, k8s_intent, has_alerts,
+    error/severity keywords → investigation. Otherwise conversational.
+    Non-fatal: exception → fail-open to investigation.
+    """
+    try:
+        if st.get("ticket_context") or st.get("project_id"):
+            return "investigation"
+        if st.get("k8s_intent") or st.get("has_alerts"):
+            return "investigation"
+        it_l = (it or "").lower()
+        if any(kw in it_l for kw in _INVESTIGATION_KW):
+            return "investigation"
+        return "conversational"
+    except Exception:
+        return "investigation"
+
+
 def _ticket_redirect(state: dict, agents_visited: list, llm_note: bool = False) -> dict:
     """Guard out-of-konteks: chat tiket + pesan tanpa lane/service → arahkan kembali ke tiket.
     Deterministik (tanpa LLM) — dijamin tidak menjawab chit-chat/umum. Return reply normal.
@@ -619,7 +703,61 @@ def _ticket_redirect(state: dict, agents_visited: list, llm_note: bool = False) 
         "routing_strategy": None,
         "routing_flag": None,
         "error": None,
+        "matched_gate": "lane_redirect",
+        "gate_type": "fallback",
+        "chat_agent_used": False,
     }
+
+
+def _lane_or_redirect(state: dict, agents_visited: list, *, llm_note: bool = False) -> dict:
+    """CHAT3 D-P2.13: terminal dead-end sesi tiket → lane percakapan ATAU redirect lama.
+
+    Dipanggil HANYA dari dua terminal tempat rantai arbitrasi tiket sudah habis:
+    (1) fall-through `_route_arbitrated_lane` (lane "other"/tak dikenal — dipakai
+    dua pemanggil: `_arbitrate_or_redirect` tanpa service DAN rantai strategy_4 di
+    `supervisor_agent`, keduanya sudah lewat arbiter) dan (2) terminal arbiter None
+    di `_arbitrate_or_redirect` (LLM down / confidence di bawah ambang). Produk ini
+    cuma punya 2 surface chat (chat tiket, chat project) — tanpa fall-through ini
+    lane Phase 2 tidak terjangkau sesi tiket sama sekali (dead code). Keputusan
+    owner: "option A: ticket fall-through only".
+
+    K1 (deterministic-first) tetap terpenuhi: pada titik ini SEMUA gate
+    deterministik sudah kalah DAN lane arbiter sudah menolak setiap lane
+    instruksional (ticket_question/ticket_action/data_request/follow_up/
+    incident-with-service/knowledge-project-with-project) — jadi kondisi §5.1
+    "no deterministic gate matched" memang benar-benar terjadi, bukan diasumsikan.
+    K6: `chat_depth` dinormalisasi di sini (helper menerima state mentah, bukan
+    variabel lokal `supervisor_agent`) → default "low" → `_ticket_redirect(...)`
+    apa adanya. Telegram hari ini tidak mengirim mode DAN tidak pernah mengisi
+    ticket_context (services/telegram_listener.py:117-146), jadi jalur ini tidak
+    terjangkau Telegram; guard depth tetap dipasang untuk kedua alasan itu.
+
+    `llm_note` hanya berlaku di cabang low (catatan "model bahasa tidak tersedia"
+    pada redirect); di depth medium/thinking tidak ada redirect yang perlu diberi
+    catatan — yang ada jawaban lane.
+    """
+    depth = (state.get("chat_depth") or "low").lower()
+    if depth in ("medium", "thinking"):
+        logger.info(
+            f"[Supervisor] ticket dead-end → chat_agent (conversational lane, "
+            f"depth={depth}): '{(state.get('intent') or '')[:60]}'"
+        )
+        # Shape = branch lane P2 di `supervisor_agent` (kunci "conversational_lane")
+        # plus provenance "lane_ticket_fallback" supaya telemetri bisa membedakan
+        # lane sesi-tiket dari lane no-match biasa.
+        return {
+            "service_name": "",
+            "collection_name": "",
+            "next_agent": "chat_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": "lane_ticket_fallback",
+            "routing_flag": "conversational_lane",
+            "error": None,
+            "matched_gate": "lane_ticket_fallback",
+            "gate_type": "fallback",
+            "chat_agent_used": True,
+        }
+    return _ticket_redirect(state, agents_visited, llm_note=llm_note)
 
 
 # ── Lapis 5 (CHATOPTIMIZE2, Fix #197): LLM lane arbiter ──────────────────────
@@ -691,6 +829,9 @@ def _route_arbitrated_lane(state: dict, agents_visited: list, lane: str,
         "routing_strategy": "llm_lane_arbiter",
         "routing_flag": None,
         "error": None,
+        "matched_gate": "strategy4_arbiter",
+        "gate_type": "service_match",
+        "chat_agent_used": False,
     }
     if lane == "ticket_question":
         return {**common, "service_name": svc, "collection_name": col,
@@ -712,7 +853,8 @@ def _route_arbitrated_lane(state: dict, agents_visited: list, lane: str,
         if _proj_id:
             return {**common, "service_name": "", "collection_name": "", "next_agent": "project_agent"}
         return _ticket_redirect(state, agents_visited)
-    return _ticket_redirect(state, agents_visited)
+    # D-P2.13: lane "other"/tak dikenal di sesi tiket = dead-end → depth-gated lane.
+    return _lane_or_redirect(state, agents_visited)
 
 
 def _is_deployment_chip(intent_low: str) -> bool:
@@ -739,6 +881,9 @@ def _route_deployment_chip(state: dict, agents_visited: list, svc: str, service_
         "service_name": svc,
         "collection_name": service_map.get(svc) or (f"logs_{svc}" if svc else ""),
         "next_agent": "triage_agent",
+        "matched_gate": "deployment_chip",
+        "gate_type": "hard_command",
+        "chat_agent_used": False,
     }
 
 
@@ -780,7 +925,8 @@ async def _arbitrate_or_redirect(state: dict, agents_visited: list,
         if lane:
             return _route_arbitrated_lane(state, agents_visited, lane, matched_service, service_map)
         # Fix #239: arbiter None (= LLM down/low-confidence) → redirect + catatan jujur
-        return _ticket_redirect(state, agents_visited, llm_note=True)
+        # D-P2.13: pada depth medium/thinking dead-end ini justru tujuan lane P2.
+        return _lane_or_redirect(state, agents_visited, llm_note=True)
     return _ticket_redirect(state, agents_visited)
 
 
@@ -806,7 +952,7 @@ async def supervisor_agent(state: AgentState) -> dict:
         if node in ("mongo_agent", "metrics_agent", "trace_agent", "health_agent"):
             logger.info(f"[Supervisor] investigate chip → direct route {node}")
             svc = state.get("service_name") or ""
-            return {
+            return _t({
                 "next_agent": node,
                 "routing_flag": "direct_fanout",
                 "intent": intent_raw,
@@ -815,7 +961,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                 "agents_visited": agents_visited,
                 "routing_strategy": None,
                 "error": None,
-            }
+            }, "investigate_chip", "hard_command")
 
     # ── Offer Session: user menanggapi tawaran agent sebelumnya ──────────────
     # (Tahap 1-3). Keyed sender.session_id (web chat). Proses SEBELUM routing lain
@@ -829,12 +975,12 @@ async def supervisor_agent(state: AgentState) -> dict:
             if _ans == "no":
                 await cancel_offer(_active["offer_id"])
                 logger.info(f"[Offer] declined {_active['offer_id']}")
-                return {
+                return _t({
                     "next_agent": "response_agent",
-                    "formatted_message": "Oke, tawaran dibatalkan.",
+                    "formatted_message": _OFFER_CANCELLED_TEXT.get((state.get("reply_language") or "en").lower(), _OFFER_CANCELLED_TEXT["en"]),
                     "agents_visited": agents_visited,
                     "routing_strategy": None, "routing_flag": None, "error": None,
-                }
+                }, "offer_decline", "hard_command")
             if _active.get("status") == "awaiting_param":
                 # user mengetik nilai param yang ditunggu (mis. isi catatan progress)
                 _field = _active.get("awaiting_field")
@@ -843,27 +989,28 @@ async def supervisor_agent(state: AgentState) -> dict:
                     _params["note"] = intent_raw.strip()
                 await accept_offer(_active["offer_id"])
                 logger.info(f"[Offer] param filled ({_field}) → execute {_active['offer_id']}")
-                return {
+                return _t({
                     "next_agent": "ticket_agent",
                     "pending_offer": {"action": _active["params"].get("action"), "params": _params},
                     "agents_visited": agents_visited,
                     "routing_strategy": None, "routing_flag": None, "error": None,
-                }
+                }, "offer_session_param", "hard_command")
             if _ans == "yes":
                 await accept_offer(_active["offer_id"])
                 logger.info(f"[Offer] accepted {_active['offer_id']} type={_active.get('type')}")
                 if _active.get("needs_param"):
                     await set_awaiting(_active["offer_id"], _active["needs_param"])
                     _hint = "catatan progress" if _active["needs_param"] == "note" else _active["needs_param"]
-                    return {
+                    return _t({
                         "next_agent": "response_agent",
-                        "formatted_message": (f"Oke! {_active.get('question')}\n"
-                                              f"Silakan ketik {_hint}-nya."),
+                        "formatted_message": _OFFER_AWAITING_TEXT.get(
+                            (state.get("reply_language") or "en").lower(), _OFFER_AWAITING_TEXT["en"]
+                        ).format(question=_active.get('question'), hint=_hint),
                         "agents_visited": agents_visited,
                         "routing_strategy": None, "routing_flag": None, "error": None,
-                    }
+                    }, "offer_session_awaiting", "hard_command")
                 if _active.get("type") == "ticket_action":
-                    return {
+                    return _t({
                         "next_agent": "ticket_agent",
                         "pending_offer": {
                             "action": _active["params"].get("action"),
@@ -871,11 +1018,11 @@ async def supervisor_agent(state: AgentState) -> dict:
                         },
                         "agents_visited": agents_visited,
                         "routing_strategy": None, "routing_flag": None, "error": None,
-                    }
+                    }, "offer_session_ticket", "hard_command")
                 if _active.get("type") == "investigate":
                     _svc = _active["params"].get("service_name")
                     _it = _active["params"].get("intent") or f"cek error pada {_svc}"
-                    return {
+                    return _t({
                         "service_name": _svc or "",
                         "collection_name": f"logs_{_svc}" if _svc else "",
                         "intent": _it,
@@ -885,7 +1032,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                         "force_full_fanout": True,
                         "routing_strategy": "triage", "routing_flag": None, "error": None,
                         "agents_visited": agents_visited,
-                    }
+                    }, "offer_investigate", "hard_command")
             # Fix: implicit note accept (1-turn) — offer aktif add_progress
             # (needs_param=note) + jawaban bukan ya/tidak + terlihat seperti isi
             # catatan → langsung eksekusi, tanpa paksa "ya" dulu.
@@ -903,7 +1050,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                     f"[Offer] implicit note accept {_active['offer_id']}: "
                     f"'{intent_raw[:50]}'"
                 )
-                return {
+                return _t({
                     "next_agent": "ticket_agent",
                     "pending_offer": {
                         "action": _note_params.get("action"),
@@ -911,7 +1058,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                     },
                     "agents_visited": agents_visited,
                     "routing_strategy": None, "routing_flag": None, "error": None,
-                }
+                }, "offer_implicit_note", "hard_command")
             # else: active tapi bukan ya/tidak → lanjut routing normal (offer tetap aktif)
 
     # Fix #189 (Opsi B): jawaban "ya"/"tidak"/"oke" LIEAR — tidak ada offer aktif.
@@ -934,12 +1081,12 @@ async def supervisor_agent(state: AgentState) -> dict:
                 "Oke! No active offer right now. What would you like me to check? "
                 "e.g. *check error rate metrics*, *view trace*, *check DB health*, or *summarize this ticket*."
             )
-            return {
+            return _t({
                 "next_agent": "response_agent",
                 "formatted_message": _guidance,
                 "agents_visited": agents_visited,
                 "routing_strategy": None, "routing_flag": None, "error": None,
-            }
+            }, "stray_ack", "hard_command")
 
     # Fix #45: service collection map MURNI dari DB (agent_docs via list_all_services).
     # JSON legacy `service_collection_map.json` TIDAK lagi dibaca (sumber = grounding docs DB).
@@ -1004,8 +1151,11 @@ async def supervisor_agent(state: AgentState) -> dict:
             break
 
     # Strategy 2: Word overlap matching (e.g. "payment gateway prod" -> "payment_gateway_prod")
+    # FIX: use ORIGINAL intent (before underscore normalization) so individual words
+    # are extracted correctly. "otel collector" → {"otel","collector"} not {"otel_collector"}.
+    _ID_PREPOSITIONS = {"di", "ke", "dari", "pada", "untuk", "dengan", "yang", "dan", "atau", "ini", "itu"}
     if not matched_service:
-        intent_words = set(re.findall(r"\w+", norm_intent))
+        intent_words = set(re.findall(r"\w+", intent.lower())) - _ID_PREPOSITIONS
         best_overlap = 0
         best_key = None
         for service_key in service_map:
@@ -1099,7 +1249,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                     ):
                         logger.info("[Supervisor] Strategy 5 project-query guard → project_agent "
                                     f"(ignore llm_service={llm_service})")
-                        return {
+                        return _t({
                             "service_name": "",
                             "collection_name": "",
                             "next_agent": "project_agent",
@@ -1107,7 +1257,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                             "routing_strategy": "project_query",
                             "routing_flag": "llm_guard_project_query",
                             "error": None,
-                        }
+                        }, "strategy5_project_guard", "service_match")
                     matched_service = llm_service
                     routing_strategy = "llm_fallback"
                     routing_flag = "low_confidence_routing"
@@ -1124,7 +1274,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                         and chat_depth != "thinking"
                     ):
                         logger.info("[Supervisor] Strategy 5 intent_type=project → project_agent")
-                        return {
+                        return _t({
                             "service_name": "",
                             "collection_name": "",
                             "next_agent": "project_agent",
@@ -1132,7 +1282,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                             "routing_strategy": "llm_fallback",
                             "routing_flag": "low_confidence_routing",
                             "error": None,
-                        }
+                        }, "strategy5_project_type", "service_match")
 
     # Fix (audit chip multi-lang): gate project-wide UNTUK chat tiket dipanggil di
     # alur UTAMA (bukan cuma dead-end) — "Show open tickets" / "Knowledge ... in this
@@ -1163,7 +1313,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             f"(trace_id_in_intent={has_trace_id}, preset_trace_ids={len(preset_trace_ids)}, "
             f"keyword={has_span_keyword}, recent_error={has_recent_span_error}, central_log={has_central_log})"
         )
-        return {
+        return _t({
             "service_name": matched_service or "",
             "collection_name": service_map.get(matched_service, "") if matched_service else "",
             "is_follow_up": False,
@@ -1173,7 +1323,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_strategy": routing_strategy,
             "routing_flag": routing_flag,
             "error": None,
-        }
+        }, "span_traceId", "hard_command")
 
     # 1b. Deep investigate tiket (quick-check / kata "investigate") → pipeline
     #     insiden PENUH (triage → planner → fan-out → correlation), bukan ringkasan.
@@ -1193,7 +1343,7 @@ async def supervisor_agent(state: AgentState) -> dict:
         and any(kw in intent for kw in _investigate_ticket_kw)
     ):
         logger.info(f"Deep investigate ticket intent detected: '{intent}' → triage (service='{matched_service}')")
-        return {
+        return _t({
             "service_name": matched_service,
             "collection_name": service_map.get(matched_service) or f"logs_{matched_service}",
             "next_agent": "triage_agent",
@@ -1201,24 +1351,35 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_strategy": "ticket_investigate",
             "routing_flag": routing_flag,
             "error": None,
-        }
+        }, "deep_investigate_ticket", "hard_command")
 
     # 1c-bis (Fix #264): Pod health bypass ticket routing — pre-check SEBELUM
     # is_ticket_intent. Live: "check pod status kuponku-users-apps" di chat tiket
     # kena Gate tiket ("status" ada di _TICKET_KEYWORDS) → ticket_agent →
     # "Please specify the pod name" (generic). Padahal user minta data pod.
-    # Guard ketat: (a) ticket_context ADA, (b) matched_service ter-resolve,
-    # (c) intent match pod-health keywords DENGAN incident guard yang sama dgn Gate A
-    # ("kenapa pod X failing" tetap ke lane tiket/insiden). Behavior tanpa tiket
-    # tidak berubah (Gate A yang menangani). Reversible: hapus blok ini.
-    if state.get("ticket_context") and matched_service and _is_pod_health_intent(intent):
+    # 1c-bis (Fix #264): Pod health bypass ticket routing — pre-check SEBELUM
+    # is_ticket_intent (lihat komentar asli Fix #264 di atas: guard ketat
+    # ticket_context + matched_service + incident guard; behavior tanpa tiket
+    # tidak berubah). Ditambah guard aksi-tiket-wins: pesan dgn aksi tiket
+    # eksplisit (note/close) JANGAN dibajak lane pod.
+    # Live: "tambahkan note : joe already check and pod healthy, than close ticket"
+    # match "pod healthy" → dulu ke metrics_agent, padahal user minta add_progress+close.
+    # "status" sengaja TIDAK masuk guard ("check pod status X" murni tetap lane pod).
+    from services.ticket_intent import _is_progress_note_command as _is_note_cmd
+    _has_ticket_action = _is_note_cmd(intent) or bool(
+        __import__("re").search(r'\b(close|tutup)\b', intent)
+        or "tutup tiket" in intent or "close ticket" in intent
+    )
+    if _has_ticket_action and state.get("ticket_context"):
+        logger.info(f"[Supervisor] ticket-action wins over pod-health: '{intent[:60]}'")
+    elif state.get("ticket_context") and matched_service and _is_pod_health_intent(intent):
         from services.promql_translator import parse_window_from_text
         pod_window = parse_window_from_text(intent_raw, default="24h")
         logger.info(
             f"[Supervisor] pod-health bypass ticket gate → metrics_agent: "
             f"'{intent[:60]}' (window={pod_window})"
         )
-        return {
+        return _t({
             "service_name": matched_service,
             "collection_name": service_map.get(matched_service, "") or f"logs_{matched_service}",
             "metrics_mode": "pod_health",
@@ -1228,7 +1389,38 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_strategy": "pod_health_ticket",
             "routing_flag": "pod_health_direct",
             "error": None,
-        }
+        }, "pod_health_ticket_bypass", "legacy_intent")
+
+    # ── CHAT5: Ticket session conversation-first ─────────────────────────
+    # Early-return: ticket session + medium/thinking → chat_agent.
+    # Subsumes is_ticket_intent for free-text conversation (superset condition).
+    # Hard commands (investigate, pod-health bypass, offer_session) already returned above.
+    # Chip-triggered routes bypass via _is_chip_triggered.
+    # Excludes: data requests (deterministic path must not be overridden).
+    # Diletakkan SEBELUM is_ticket_intent agar free-text conversation
+    # ("berikan catatan sudah dicek") tidak tertelan gate ticket_intent,
+    # TAPI hard commands ("close ticket") dan investigation tetap bypass CHAT5.
+    if (
+        state.get("ticket_context")
+        and chat_depth in ("medium", "thinking")
+        and not _is_chip_triggered(state)
+        and not is_data_request(intent)
+        and not is_ticket_intent(intent, state)
+        and not any(kw in intent for kw in _INVESTIGATION_KW)
+    ):
+        logger.info(
+            f"[Supervisor] CHAT5 ticket_conversation_first: '{intent[:60]}' "
+            f"(depth={chat_depth}, svc={matched_service})"
+        )
+        return _t({
+            "service_name": matched_service or "",
+            "collection_name": "",
+            "next_agent": "chat_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": "ticket_conversation_first",
+            "routing_flag": "ticket_conversation_first",
+            "error": None,
+        }, "ticket_conversation_first", "classifier")
 
     # 1c. Deteksi pengelolaan tiket (Ticket Agent) — lane terpisah dari analisis.
     #     Gate murah (rule) mensyaratkan ticket_context ada (chat di detail tiket).
@@ -1264,7 +1456,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             logger.info(f"Ticket-intent gate skipped (connection/knowledge query): '{intent}'")
         else:
             logger.info(f"Ticket intent detected: '{intent}'")
-            return {
+            return _t({
                 "service_name": matched_service or "",
                 "collection_name": service_map.get(matched_service, "") if matched_service else "",
                 "is_follow_up": False,
@@ -1273,7 +1465,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                 "routing_strategy": routing_strategy,
                 "routing_flag": routing_flag,
                 "error": None,
-            }
+            }, "ticket_intent", "hard_command")
 
     # 1c. Knowledge/doc query ("dokumen/knowledge apa pada service X") → inventory deterministik.
     #     Diletakkan SEBELUM follow-up/data/health/insiden agar tidak jatuh ke analisis error.
@@ -1294,7 +1486,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                  "id": f"⚠️ Gagal mengambil knowledge service `{matched_service}`: {str(e)[:200]}"}
                 .get(_k_locale, f"⚠️ Failed to load knowledge for service `{matched_service}`: {str(e)[:200]}")
             )
-        return {
+        return _t({
             "service_name": matched_service,
             "collection_name": service_map.get(matched_service, ""),
             "formatted_message": inventory,
@@ -1303,7 +1495,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_strategy": routing_strategy,
             "routing_flag": routing_flag,
             "error": None,
-        }
+        }, "knowledge_query", "legacy_intent")
 
     # 1c. Connection query ("X terhubung dengan service apa saja") → baca doc connections
     #     knowledge library. Fix #199: sebelumnya pertanyaan ini ditolak sebagai
@@ -1326,7 +1518,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                      "id": f"⚠️ Gagal membaca connection service `{_conn_svc}`: {str(e)[:200]}"}
                     .get(_c_locale, f"⚠️ Failed to load connections for service `{_conn_svc}`: {str(e)[:200]}")
                 )
-            return {
+            return _t({
                 "service_name": matched_service or "",
                 "collection_name": service_map.get(matched_service, "") if matched_service else "",
                 "formatted_message": inventory,
@@ -1335,7 +1527,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                 "routing_strategy": routing_strategy,
                 "routing_flag": routing_flag,
                 "error": None,
-            }
+            }, "connection_query", "legacy_intent")
 
     # 1d. Source query ("source/sumber apa saja yang mengirim signal", "berapa alert dari
     #     sentry") → baca source_registry (workspace-level). Fix #208: sebelumnya jatuh ke
@@ -1355,7 +1547,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                 {"en": "⚠️ Failed to load the sources list.",
                  "id": "⚠️ Gagal mengambil daftar source."}.get(_locale, "⚠️ Failed to load the sources list.")
             )
-        return {
+        return _t({
             "service_name": "",
             "collection_name": "",
             "formatted_message": inventory,
@@ -1364,7 +1556,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_strategy": "source_query",
             "routing_flag": routing_flag,
             "error": None,
-        }
+        }, "source_query", "legacy_intent")
 
     # Fix (audit chip multi-lang): chip insiden pasca-RCA di chat tiket →
     # rute DETERMINISTIK (bukan triage buta / LLM arbiter saat model down):
@@ -1376,7 +1568,7 @@ async def supervisor_agent(state: AgentState) -> dict:
     _low_for_gate = intent.lower()
     if matched_service and any(kw in _low_for_gate for kw in _METRICS_CHECK_KW):
         logger.info(f"[Supervisor] metrics-check chip → triage: '{intent[:60]}'")
-        return {
+        return _t({
             "service_name": matched_service,
             "collection_name": service_map.get(matched_service, "") or f"logs_{matched_service}",
             "next_agent": "triage_agent",
@@ -1384,10 +1576,10 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_strategy": routing_strategy or "metrics_check",
             "routing_flag": routing_flag,
             "error": None,
-        }
+        }, "metrics_check_chip", "hard_command")
     if any(kw in _low_for_gate for kw in _SIMILAR_INCIDENTS_KW) and state.get("project_id"):
         logger.info(f"[Supervisor] similar-incidents chip → project_agent: '{intent[:60]}'")
-        return {
+        return _t({
             "service_name": "",
             "collection_name": "",
             "next_agent": "project_agent",
@@ -1395,7 +1587,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_strategy": "project_query",
             "routing_flag": "similar_episodes",
             "error": None,
-        }
+        }, "similar_incidents_chip", "hard_command")
 
     # ─── K8s Events gate ──────────────────────────────
     # STACK2 Fase 2: k8s-specific keywords → k8s_agent.
@@ -1433,10 +1625,12 @@ async def supervisor_agent(state: AgentState) -> dict:
             elif "describe pod" in intent_lower:
                 _k8s_intent = "pod_status"
 
-            k8s_namespace = (state.get("k8s_namespace") or "default")
+            _ns_m = K8S_NS_RE.search(intent)
+            k8s_namespace = ((_ns_m.group(1) if _ns_m else None)
+                              or state.get("k8s_namespace") or "default")
             logger.info(
                 f"[Supervisor] k8s_events gate: '{intent[:60]}' → k8s_agent (svc={matched_service}, ns={k8s_namespace}, intent={_k8s_intent})")
-            _out: dict = {
+            _out: dict = _t({
                 "service_name": matched_service,
                 "k8s_intent": _k8s_intent,
                 "k8s_namespace": k8s_namespace,
@@ -1445,22 +1639,65 @@ async def supervisor_agent(state: AgentState) -> dict:
                 "routing_strategy": routing_strategy or "k8s_events",
                 "routing_flag": "k8s_events",
                 "error": None,
-            }
+            }, "k8s_events", "legacy_intent")
             if k8s_node_name:
                 _out["k8s_node"] = k8s_node_name
             return _out
+
+    # ── P5.2: conversational question guard ────────────────────────────────
+    # Active only in ticket sessions with medium/thinking depth. Lets
+    # investigation-keyword messages through UNLESS they are question-framed
+    # (e.g. "kenapa error?" = asking about the error, not reporting one).
+    # Inserted AFTER ticket-intent / knowledge / k8s gates, BEFORE Gate A
+    # pod-health. No gate reordering (K7).
+    #
+    # AMANDEMEN P5.2 (rework, CTO 2026-09-13): data command DIKECUALIKAN.
+    # "berikan rawlog terakhir" tidak punya investigation keyword, sehingga guard
+    # lama MEMOTONG gate `is_data_request` (:1820) dan mendemote kontrak deterministik
+    # zero-LLM → jalur inferensi tool P4 `mongo_logs` (probabilistik, butuh LLM up).
+    # Itu inversi yang dilarang design principle: guard harus MELINDUNGI aksi
+    # deterministik, bukan menggantikannya. Preseden: classifier P3C saudaranya sudah
+    # membawa kondisi yang sama (:1710 `and not is_data_request(intent)`) — P5.2
+    # shipped tanpa itu = kelalaian spec, bukan keputusan desain.
+    # D-P5.6 tetap utuh: `is_data_request` adalah predicate SUDAH ADA (:409), tidak
+    # ada keyword list baru.
+    is_investigation_kw = any(kw in intent for kw in _INVESTIGATION_KW)
+    is_question_framed = any(
+        intent.startswith(q) or f" {q} " in intent for q in _QUESTION_PREFIXES
+    )
+
+    if (
+        state.get("ticket_context")
+        and chat_depth in ("medium", "thinking")
+        and not is_data_request(intent)
+        and (not is_investigation_kw or is_question_framed)
+    ):
+        logger.info(f"[Supervisor] conversational question guard: '{intent[:60]}'")
+        return _t({
+            "service_name": matched_service or "",
+            "collection_name": "",
+            "next_agent": "chat_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": routing_strategy,
+            "routing_flag": "conversational_question",
+            "error": None,
+        }, "conversational_question", "classifier")
 
     # ── STACK2 Fase 1: Pod Health gate (Fix #262 lanjutan — multilingual EN/ID) ──
     # Gate A: status/kondisi pod ("is pod X up?", "apakah pod X up?", "pod running",
     # "berapa kali pod restart") → metrics_agent pod_health (zero-LLM).
     # Fix #264: keyword lists + deteksi di-hoist ke modul level (_POD_HEALTH_KW dsb
     # + _is_pod_health_intent) agar pre-check bypass ticket pakai sumber yang sama.
-    if bool(matched_service) and _is_pod_health_intent(intent):
+    # CHAT3 §4.2 (P1): thinking melewati shortcut pod-health (chip pod_restarts
+    # "Pod restart count ..." / natural setara) → jatuh ke pipeline penuh (triage→planner).
+    # Pola sama dgn chat_depth != "thinking" di Strategy 5 (Fix #123). Gate A saja —
+    # bypass tiket 1c-bis (Fix #264) TIDAK di-key (keying-nya = regresi ke ticket gate).
+    if bool(matched_service) and _is_pod_health_intent(intent) and chat_depth != "thinking":
         # O3: parse window dari text, default 24h untuk pod health (spec)
         from services.promql_translator import parse_window_from_text
         pod_window = parse_window_from_text(intent_raw, default="24h")
         logger.info(f"[Supervisor] pod-health gate → metrics_agent: '{intent[:60]}' (window={pod_window})")
-        return {
+        return _t({
             "service_name": matched_service,
             "collection_name": service_map.get(matched_service, "") or f"logs_{matched_service}",
             "metrics_mode": "pod_health",
@@ -1470,7 +1707,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_strategy": routing_strategy or "pod_health",
             "routing_flag": "pod_health_direct",
             "error": None,
-        }
+        }, "pod_health", "legacy_intent")
 
     # ── STACK2 Fase 1: Freeform PromQL gate ────────────────────────────────
     # Gate B: metrics-related keywords + matched_service → translate + set mode=promql_range.
@@ -1504,7 +1741,9 @@ async def supervisor_agent(state: AgentState) -> dict:
     # Gate B: metrics keyword match AND no causal keywords outside metric phrases.
     # "error rate payment6h" → metrics=True, causal=False → freeform.
     # "kenapa error rate naik" → metrics=True, causal=True (kenapa, naik) → triage.
-    if _has_metrics_kw and not _has_causal_kw:
+    # CHAT3 §4.2 (P1): thinking melewati shortcut promql freeform (chip mem_trend/
+    # req_trend "Check memory/request rate ... last N hours") → pipeline penuh.
+    if _has_metrics_kw and not _has_causal_kw and chat_depth != "thinking":
         # O1+R1: call translator async here (supervisor owns LLM call)
         from services.promql_translator import translate_to_promql, parse_window_from_text
         freeform_window = parse_window_from_text(intent_raw, default="1h")
@@ -1529,7 +1768,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             logger.info(f"[Supervisor] promql-freeform rejected (conf={confidence:.2f}, promql={bool(promql)})")
         else:
             logger.info(f"[Supervisor] promql-freeform gate → metrics_agent: '{intent[:60]}' (conf={confidence:.2f}, window={freeform_window})")
-            return {
+            return _t({
                 "service_name": matched_service,
                 "collection_name": service_map.get(matched_service, "") or f"logs_{matched_service}",
                 "metrics_mode": "promql_range",
@@ -1542,9 +1781,30 @@ async def supervisor_agent(state: AgentState) -> dict:
                 "routing_strategy": routing_strategy or "promql_freeform",
                 "routing_flag": "promql_freeform",
                 "error": None,
-            }
+            }, "metrics_freeform", "legacy_intent")
 
-    # 2. Deteksi follow-up question (Phase 1) — diutamakan sebelum health check.
+    # 2. CHAT3 P3C (D-P3.3): front-gate classifier — INVESTIGATION vs CONVERSATIONAL.
+    # Deterministik (zero-LLM), non-fatal. Inserted BEFORE follow-up gate.
+    # Guards: matched_service, is_data_request, ticket_context, project_id,
+    # k8s_intent, has_alerts → skip classifier (normal gates handle them).
+    _mode = _classify_mode(state, intent)
+    if (_mode == "conversational" and chat_depth in ("medium", "thinking")
+            and not matched_service and not is_data_request(intent)):
+        logger.info(
+            f"[Supervisor] CONVERSATIONAL mode: '{intent[:60]}' → chat_agent "
+            f"(depth={chat_depth})"
+        )
+        return _t({
+            "service_name": matched_service or "",
+            "collection_name": service_map.get(matched_service, "") if matched_service else "",
+            "next_agent": "chat_agent",
+            "agents_visited": agents_visited,
+            "routing_strategy": "front_gate_classifier",
+            "routing_flag": "conversational_lane",
+            "error": None,
+        }, "front_gate_classifier", "classifier")
+
+    # 3. Deteksi follow-up question (Phase 1) — diutamakan sebelum health check.
     #    Follow-up = (a) user me-mention/balas jawaban agent sebelumnya, ATAU
     #    (b) intent berdiri sendiri dengan permintaan penjelasan/detail eksplisit.
     #    Selain itu = intent baru → eksekusi normal.
@@ -1566,12 +1826,22 @@ async def supervisor_agent(state: AgentState) -> dict:
                 f"(reply_to_agent={is_reply_to_agent})"
             )
             is_follow_up = False
+    # P2.1 FIX: project session → skip follow-up gate
+    # follow_up_agent expects raw_documents_snapshot (triage/investigation),
+    # which project sessions never set. Project-agent handles its own follow-ups
+    # via keyword classification and facts gathering.
+    if is_follow_up and state.get("project_id") and not state.get("ticket_context"):
+        logger.info(
+            f"[Supervisor] follow-up skipped (project session): '{intent}' "
+            f"(reply_to_agent={is_reply_to_agent}, detail_intent={has_detail_intent})"
+        )
+        is_follow_up = False
     if is_follow_up:
         logger.info(
             f"Follow-up intent detected: '{intent}' "
             f"(reply_to_agent={is_reply_to_agent}, detail_intent={has_detail_intent})"
         )
-        return {
+        return _t({
             "service_name": matched_service or "",
             "collection_name": service_map.get(matched_service, "") if matched_service else "",
             "is_follow_up": True,
@@ -1580,7 +1850,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_strategy": routing_strategy,
             "routing_flag": routing_flag,
             "error": None,
-        }
+        }, "follow_up", "legacy_intent")
 
     # 3. Deteksi permintaan data mentah (mis. "berikan 1 data terakhir ...") →
     #    route ke data_agent (bukan mongo_agent yang khusus analisis error).
@@ -1601,12 +1871,14 @@ async def supervisor_agent(state: AgentState) -> dict:
             and not _is_pod_health_ranking_intent(intent):
         intent_lower_inv = intent.lower()
         _inv_intent = "deployments" if re.search(r"\bdeployments?\b", intent_lower_inv) else "pods"
-        k8s_namespace_inv = state.get("k8s_namespace") or "default"
+        _ns_m_inv = K8S_NS_RE.search(intent)
+        k8s_namespace_inv = ((_ns_m_inv.group(1) if _ns_m_inv else None)
+                              or state.get("k8s_namespace") or "default")
         logger.info(
             f"[Supervisor] k8s inventory gate: '{intent[:60]}' → k8s_agent "
             f"(intent={_inv_intent}, ns={k8s_namespace_inv})"
         )
-        return {
+        return _t({
             "service_name": matched_service or "",
             "collection_name": service_map.get(matched_service, "") if matched_service else "",
             "k8s_intent": _inv_intent,
@@ -1616,7 +1888,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_strategy": "k8s_inventory",
             "routing_flag": "k8s_inventory",
             "error": None,
-        }
+        }, "k8s_inventory", "legacy_intent")
 
     # ── Fix (deployment ranking/overview gate): project-level chat — Q2 "cek pod
     # yang paling banyak replicanya" / Q1 "apakah semua deployment aman?" — SEMUA
@@ -1647,14 +1919,15 @@ async def supervisor_agent(state: AgentState) -> dict:
                     if state.get("ticket_context"):
                         # Lapis 5 (Fix #197): dead-end → arbitrasi lane via LLM
                         return await _arbitrate_or_redirect(state, agents_visited, matched_service, service_map)
-                    return {
-                        "error": f"Tidak bisa mengenali service dari intent: '{intent}'. "
+                    _err_fmt = _SERVICE_NOT_FOUND_TEXT.get((state.get("reply_language") or "en").lower(), _SERVICE_NOT_FOUND_TEXT["en"])
+                    return _t({
+                        "error": f"{_err_fmt.format(intent=intent)} "
                                  f"Service yang tersedia: {list(service_map.keys())}",
                         "next_agent": "end",
                         "agents_visited": agents_visited,
                         "routing_strategy": routing_strategy,
                         "routing_flag": routing_flag,
-                    }
+                    }, "data_request_no_service", "fallback")
                 matched_service = suggest
                 logger.info(f"[Supervisor] data-request fuzzy-suggest → '{suggest}' (auto-route)")
                 routing_flag = routing_flag or "fuzzy_suggest"
@@ -1664,7 +1937,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                 or service_map.get(matched_service)
                 or f"logs_{matched_service}"
             )
-            return {
+            return _t({
                 "service_name": matched_service,
                 "collection_name": explicit_collection,
                 "next_agent": "data_agent",
@@ -1672,7 +1945,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                 "routing_strategy": routing_strategy,
                 "routing_flag": routing_flag,
                 "error": None,
-            }
+            }, "data_request", "legacy_intent")
         else:
             logger.info(f"Data request overridden → project query: '{intent}'")
 
@@ -1691,16 +1964,16 @@ async def supervisor_agent(state: AgentState) -> dict:
         # Fix #43: project-gated — bila dari project dan service tak ter-link → tolak
         if project_id and not matched_service and "mongodb" not in norm_intent and "mysql" not in norm_intent:
             linked = sorted({r.get("serviceId", "") for r in (await _list_project_refs(project_id))} - {""})
-            return {
-                "error": (
-                    f"Service tidak dikenali untuk project ini. "
-                    f"Service terdaftar: {linked if linked else '(belum ada — link service lewat halaman project)'}."
-                ),
+            _svc_locale = (state.get("reply_language") or "en").lower()
+            _svc_fmt = _SERVICE_LIST_HINT_TEXT.get(_svc_locale, _SERVICE_LIST_HINT_TEXT["en"])
+            _linked_display = linked if linked else ("(belum ada)" if _svc_locale == "id" else "(none yet)")
+            return _t({
+                "error": _svc_fmt.format(linked=_linked_display),
                 "next_agent": "end",
                 "agents_visited": agents_visited,
                 "routing_strategy": routing_strategy,
                 "routing_flag": routing_flag,
-            }
+            }, "health_check", "legacy_intent")
         if "mongodb" in norm_intent or "mongo" in norm_intent:
             health_target = "mongodb"
         elif "mysql" in norm_intent:
@@ -1712,7 +1985,7 @@ async def supervisor_agent(state: AgentState) -> dict:
         else:
             health_target = "mongodb"
 
-        return {
+        return _t({
             "service_name": matched_service or "",
             "collection_name": service_map.get(matched_service, "") if matched_service else "",
             "health_target": health_target,
@@ -1721,7 +1994,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_strategy": routing_strategy,
             "routing_flag": routing_flag,
             "error": None,
-        }
+        }, "health_check", "legacy_intent")
 
     # ── Chat by Project: pertanyaan level project (tanpa service eksplisit) ───
     # Fix #123: chat_depth sudah di-inisialisasi di awal function; reassign dihapus.
@@ -1733,7 +2006,7 @@ async def supervisor_agent(state: AgentState) -> dict:
         and any(kw in intent for kw in PROJECT_QUERY_KW)
     ):
         logger.info(f"Project query detected (depth={chat_depth}): '{intent}'")
-        return {
+        return _t({
             "service_name": "",
             "collection_name": "",
             "next_agent": "project_agent",
@@ -1741,7 +2014,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             "routing_strategy": routing_strategy or "project_query",
             "routing_flag": routing_flag,
             "error": None,
-        }
+        }, "project_query", "legacy_intent")
 
     # Jika bukan health check dan service tidak teridentifikasi
     if not matched_service:
@@ -1756,7 +2029,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             and not state.get("ticket_context")
         ):
             logger.info(f"[Supervisor] no-match dalam sesi project → project_agent (fallback ramah): '{intent}'")
-            return {
+            return _t({
                 "service_name": "",
                 "collection_name": "",
                 "next_agent": "project_agent",
@@ -1764,7 +2037,7 @@ async def supervisor_agent(state: AgentState) -> dict:
                 "routing_strategy": routing_strategy or "project_query",
                 "routing_flag": routing_flag or "low_confidence_routing",
                 "error": None,
-            }
+            }, "project_query", "fallback")
         # Fix #50: fuzzy-suggest — typo user dicocokkan ke service terdekat (project-gated)
         suggest = _fuzzy_suggest_service(
             intent, list(service_map.keys()), (state.get("ticket_context") or {}).get("serviceName")
@@ -1774,7 +2047,7 @@ async def supervisor_agent(state: AgentState) -> dict:
             return await _arbitrate_or_redirect(state, agents_visited, matched_service, service_map)
         if suggest:
             logger.info(f"[Supervisor] fuzzy-suggest '{intent}' → '{suggest}' (auto-route)")
-            return {
+            return _t({
                 "service_name": suggest,
                 "collection_name": service_map.get(suggest, f"logs_{suggest}"),
                 "next_agent": "triage_agent",
@@ -1782,15 +2055,33 @@ async def supervisor_agent(state: AgentState) -> dict:
                 "routing_strategy": "fuzzy_suggest",
                 "routing_flag": routing_flag or "low_confidence_routing",
                 "error": None,
-            }
-        return {
-            "error": f"Tidak bisa mengenali service dari intent: '{intent}'. "
+            }, "default_triage", "fallback")
+        # CHAT3 §5.1 (P2, D-P2.5): conversational lane — fallback position AFTER
+        # all deterministic gates (K1: never intercepts incident/ticket/data; K7:
+        # pure insertion, gate order unchanged). Depth medium/thinking only —
+        # Telegram never sends mode → default "low" → lane unreachable (K6).
+        if chat_depth in ("medium", "thinking"):
+            logger.info(
+                f"[Supervisor] no-match → chat_agent (conversational lane, depth={chat_depth}): '{intent[:60]}'"
+            )
+            return _t({
+                "service_name": "",
+                "collection_name": "",
+                "next_agent": "chat_agent",
+                "agents_visited": agents_visited,
+                "routing_strategy": routing_strategy,
+                "routing_flag": "conversational_lane",
+                "error": None,
+            }, "conversational_lane", "fallback")
+        _err_fmt2 = _SERVICE_NOT_FOUND_TEXT.get((state.get("reply_language") or "en").lower(), _SERVICE_NOT_FOUND_TEXT["en"])
+        return _t({
+            "error": f"{_err_fmt2.format(intent=intent)} "
                      f"Service yang tersedia: {list(service_map.keys())}",
             "next_agent": "end",
             "agents_visited": agents_visited,
             "routing_strategy": routing_strategy,
             "routing_flag": routing_flag,
-        }
+        }, "default_triage", "fallback")
 
     collection = service_map.get(matched_service) or f"logs_{matched_service}"
     logger.info(f"Matched service='{matched_service}' → collection='{collection}' (strategy={routing_strategy} flag={routing_flag})")
@@ -1821,7 +2112,7 @@ async def supervisor_agent(state: AgentState) -> dict:
 
     # Fase 4B: incident via triage dulu (silent) → planner selective fan-out
     # Supervisor return triage_agent, triage_agent akan set next_agent=mongo_agent
-    return {
+    return _t({
         "service_name": matched_service,
         "collection_name": collection,
         "next_agent": "triage_agent",
@@ -1829,5 +2120,5 @@ async def supervisor_agent(state: AgentState) -> dict:
         "routing_strategy": routing_strategy,
         "routing_flag": routing_flag,
         "error": None,
-    }
+    }, "default_triage", "fallback")
 

@@ -203,20 +203,141 @@ def extract_api():
 
 
 def extract_db():
-    """Extract MongoDB collections referenced in code."""
-    pats = re.compile(r'get_collection\(\s*["\']([^"\']+)["\']|db\[\s*["\']([^"\']+)["\']\s*\]')
-    found = set()
-    for base in ("services", "agents", "api"):
-        for rel in listdir_files(base):
-            src = read(rel)
-            if src is None:
+    """Extract MongoDB collections referenced in code.
+
+    Pola akses yang di-cover (inventarisasi grep services/ agents/ api/):
+      1. Subscript receiver berakhiran 'db' (db, get_db(), _db(), _gdb()):
+         db["name"], get_db()["name"], dsb. — receiver generik \w*db dengan/
+         tanpa call "()" (regex lama hanya cocok receiver persis 'db' tanpa call).
+      2. db[CONST] — konstanta nama collection, resolusi berurutan:
+         a. definisi di file yang sama (module-level atau function-local),
+         b. konstanta terimport dari module lain yang juga discan
+            ("from services.x import NAME"),
+         c. fallback global bila nilai unik di seluruh file yang discan.
+      3. db[mod.CONST] — konstanta via attribute module
+         ("db[service_store.LIBRARY_COLLECTION]").
+      4. get_collection("name") — forward-compat (belum dipakai kode app).
+    Nama dinamis (variabel lowercase, mis. param fungsi) dilaporkan terpisah
+    sebagai "dynamic" — tidak dianggap nama collection dan tidak dibuang diam-diam.
+    Konstanta yang gagal diresolusi dilaporkan sebagai UNRESOLVED.
+    """
+    DB_SUBSCRIPT = re.compile(
+        r"\b(?P<recv>\w*db)(?:\(\))?\[\s*"
+        r"(?:['\"](?P<lit>[^'\"]+)['\"]|(?P<name>[A-Za-z_][A-Za-z0-9_.]*))\s*\]"
+    )
+    GET_COLLECTION = re.compile(r"get_collection\(\s*['\"]([^'\"]+)['\"]")
+    CONST_DEF = re.compile(r"(?m)^\s*(_?[A-Z][A-Z0-9_]*)\s*=\s*['\"]([^'\"]+)['\"]")
+    CONST_NAME = re.compile(r"^_?[A-Z][A-Z0-9_]*$")
+    IMPORT_LINE = re.compile(
+        r"(?m)^\s*(?:import\s+([\w.]+)(?:\s+as\s+(\w+))?"
+        r"|from\s+([\w.]+)\s+import\s+([\w\s,.*]+?))\s*$"
+    )
+
+    files = listdir_files("services") + listdir_files("agents") + listdir_files("api")
+    srcs = {}
+    for rel in files:
+        src = read(rel)
+        if src is not None:
+            srcs[rel] = src
+
+    def module_file(modpath):
+        cand = modpath.replace(".", "/") + ".py"
+        return cand if os.path.exists(os.path.join(ROOT, cand)) else None
+
+    # nama konstanta -> nilai, per file (nilai >1 berarti ambigu di file itu)
+    consts = {}
+    for rel, src in srcs.items():
+        cm = {}
+        for m in CONST_DEF.finditer(src):
+            cm.setdefault(m.group(1), set()).add(m.group(2))
+        if cm:
+            consts[rel] = cm
+    glob_consts = {}
+    for cm in consts.values():
+        for k, vs in cm.items():
+            glob_consts.setdefault(k, set()).update(vs)
+
+    # import map: alias module (untuk db[mod.CONST]) + konstanta terimport (db[NAME])
+    mod_imports, const_imports = {}, {}
+    for rel, src in srcs.items():
+        im, cim = {}, {}
+        pkg = os.path.dirname(rel).replace("/", ".")
+        for m in IMPORT_LINE.finditer(src):
+            if m.group(1):
+                mod, alias = m.group(1), m.group(2) or m.group(1).split(".")[-1]
+                im[alias] = mod
+            elif m.group(3):
+                frm, names = m.group(3), m.group(4)
+                base = (pkg + "." + frm.lstrip(".")) if frm.startswith(".") else frm
+                for nm in names.split(","):
+                    nm = nm.strip()
+                    if not nm or nm == "*":
+                        continue
+                    if " as " in nm:
+                        orig, alias = [x.strip() for x in nm.split(" as ")]
+                    else:
+                        orig = alias = nm
+                    if CONST_NAME.match(orig):
+                        cim[alias] = (base, orig)
+                    else:
+                        im[alias] = base + "." + orig
+        if im:
+            mod_imports[rel] = im
+        if cim:
+            const_imports[rel] = cim
+
+    found, unresolved, dynamic = set(), {}, {}
+    for rel, src in srcs.items():
+        im = mod_imports.get(rel, {})
+        cim = const_imports.get(rel, {})
+        for m in DB_SUBSCRIPT.finditer(src):
+            if m.group("lit") is not None:
+                found.add(m.group("lit"))
                 continue
-            for m in pats.finditer(src):
-                found.add(m.group(1) or m.group(2))
+            name = m.group("name")
+            if "." in name:
+                # db[mod.CONST] — resolusi via import map file ini
+                alias, _, attr = name.partition(".")
+                f = module_file(im[alias]) if alias in im else None
+                vals = consts.get(f, {}).get(attr) if f else None
+                if vals and len(vals) == 1:
+                    found.add(next(iter(vals)))
+                else:
+                    unresolved.setdefault(name, set()).add(rel)
+            elif CONST_NAME.match(name):
+                # db[CONST] — (a) file sendiri, (b) import, (c) global unik
+                vals = consts.get(rel, {}).get(name)
+                if not vals and name in cim:
+                    f = module_file(cim[name][0])
+                    vals = consts.get(f, {}).get(cim[name][1]) if f else None
+                if not vals and name in glob_consts and len(glob_consts[name]) == 1:
+                    vals = set([next(iter(glob_consts[name]))])
+                if vals and len(vals) == 1:
+                    found.add(next(iter(vals)))
+                else:
+                    tag = name + (" (ambiguous)" if vals else "")
+                    unresolved.setdefault(tag, set()).add(rel)
+            else:
+                # variabel dinamis (param fungsi / state) — bukan nama statis
+                dynamic.setdefault(name, set()).add(rel)
+        for m in GET_COLLECTION.finditer(src):
+            found.add(m.group(1))
+
     out = sorted(found)
-    if not out:
+    if not out and not unresolved and not dynamic:
         return ["DB collections: UNVERIFIED — 0 references extracted"]
-    return ["DB collections referenced (%d): %s" % (len(out), ", ".join(out))]
+    lines = ["DB collections referenced (%d): %s" % (len(out), ", ".join(out))]
+    if dynamic:
+        parts = ["%s @ %s" % (var, ", ".join(sorted(dynamic[var])))
+                 for var in sorted(dynamic)]
+        lines.append("  dynamic collection params (nama via variabel — tidak statis): "
+                     + "; ".join(parts))
+    if unresolved:
+        parts = ["%s @ %s" % (name, ", ".join(sorted(unresolved[name])))
+                 for name in sorted(unresolved)]
+        lines.append("  UNRESOLVED constant (perlu dicek manual): "
+                     + "; ".join(parts))
+    return lines
 
 
 EXTRACTORS = {
@@ -339,11 +460,13 @@ def is_stale():
             pm = re.match(r"\| \S+ \| `([^`]+)` \| `([0-9a-f]{10})` \|", line.strip())
             if pm:
                 rel, h = pm.group(1), pm.group(2)
-                if os.path.isdir(os.path.join(ROOT, rel)):
-                    continue  # directory sources are aggregates, skip
+                is_dir = os.path.isdir(os.path.join(ROOT, rel))
                 cur = file_hash(rel)
                 if cur != h:
-                    reasons.append("source changed: %s (%s -> %s)" % (rel, h, cur))
+                    kind = " (aggregate dir)" if is_dir else ""
+                    reason = "source changed%s: %s (%s -> %s)" % (kind, rel, h, cur)
+                    if reason not in reasons:  # sumber sama dipakai >1 section
+                        reasons.append(reason)
     return (len(reasons) > 0), reasons
 
 

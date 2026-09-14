@@ -68,7 +68,12 @@ export function ChatPanel({
   // Fix: Sembunyikan suggestions saat user baru kirim pesan.
   // Reset saat meta berubah (response baru tiba).
   const [hideSuggestions, setHideSuggestions] = useState(false)
-  const metaSig = rawMeta?.messageId ?? rawMeta?.summary ?? ""
+  // Fix chip-missing (2026-09-13): signature dulu baca `messageId`/`summary` —
+  // field itu TIDAK ada di meta assistant server (request_id/routing_strategy/
+  // suggestions/...) → metaSig selalu "" → reset hideSuggestions tak pernah fire
+  // → chips mati setelah giliran pertama sampai refresh. Pakai request_id
+  // (api/chat.py:508) — unik per turn, selalu ada.
+  const metaSig = String(rawMeta?.request_id ?? "")
   const prevMetaSigRef = useRef(metaSig)
   if (prevMetaSigRef.current !== metaSig) {
     prevMetaSigRef.current = metaSig

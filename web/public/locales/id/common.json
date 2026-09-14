@@ -106,5 +106,39 @@
     "desc_system": "Ikuti OS",
     "trigger_aria": "Tema saat ini: {{theme}}. Ganti tema",
     "contrast_note": "Kontras target ~10:1 · calming untuk mata"
+  },
+  "activity": {
+    "title": "Proses",
+    "supervisor": "Menganalisis permintaan…",
+    "triage": "Menjalankan triage…",
+    "mongo": "Mengambil data MongoDB…",
+    "metrics": "Mengambil metrik Prometheus…",
+    "k8s": "Memeriksa kondisi Kubernetes…",
+    "trace": "Mengambil trace Tempo…",
+    "span": "Menganalisis span…",
+    "correlation": "Sintesis root cause…",
+    "health": "Memeriksa health service…",
+    "data": "Mengambil data permintaan…",
+    "followup": "Memeriksa pertanyaan lanjutan…",
+    "response": "Menyusun laporan…",
+    "knowledge": "Mencari playbook & docs…",
+    "ticket": "Memproses tiket…",
+    "project": "Meringkas project…",
+    "planner": "Merencanakan investigasi…",
+    "chat": "Menyiapkan respons…"
+  },
+  "settings": {
+    "chat_depth": {
+      "low_label": "Cepat",
+      "medium_label": "Standar",
+      "thinking_label": "Mendalam",
+      "low": "Respons cepat. History 6 turn. Untuk pertanyaan singkat.",
+      "medium": "History 10 turn, planner penuh. Untuk investigasi dan diskusi lanjutan.",
+      "thinking": "History 14 turn, lihat aktivitas investigasi real-time. Latency lebih tinggi. Ideal untuk root cause mendalam."
+    }
+  },
+  "pill": {
+    "context": "Konteks:",
+    "resolved": "Diselesaikan: \"{{term}}\" → {{value}}"
   }
 }

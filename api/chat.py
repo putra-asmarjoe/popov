@@ -78,6 +78,7 @@ _NODE_SUMMARY_FIELDS = {
     "follow_up_agent":   ["follow_up_context"],
     "ticket_agent":      ["ticket_result", "ticket_action"],
     "project_agent":     ["project_result"],
+    "chat_agent":        ["formatted_message"],   # CHAT3 P2 (D-P2.6): lane ringkasan utk agent_traces
 }
 
 
@@ -326,11 +327,21 @@ async def _run_pipeline(
         # Sender kaya identitas (session_id + user_id) agar follow-up chat
         # ter-isolasi per sesi — get_latest_request mencocokkan sender.session_id.
         session = await get_session(session_id)
+        _uid = (session or {}).get("userId")
+        _sender_name = "web"
+        if _uid:
+            try:
+                from services.user_store import get_user as _get_user
+                _u = await _get_user(_uid)
+                if _u:
+                    _sender_name = _u.get("name") or _u.get("email") or "web"
+            except Exception:
+                pass
         sender = {
             "channel": "chat",
-            "name": "web",
+            "name": _sender_name,
             "session_id": session_id,
-            "user_id": (session or {}).get("userId") or None,
+            "user_id": _uid,
         }
         await create_request_log(
             channel="chat",
@@ -396,7 +407,7 @@ async def _run_pipeline(
             "preset_trace_ids": preset_trace_ids,
             "ticket_context": ticket_context,
             "chat_depth": chat_depth,  # Chat by Project: low | medium | thinking
-            "conversation_history": await build_conversation_history(session_id),
+            "conversation_history": await build_conversation_history(session_id, chat_depth=chat_depth),  # CHAT3 §4.2: depth-keyed window (D1, authorized)
             "next_agent": "supervisor",
             "error": None,
             # CHATFLOW V2.1 (Tahap 1) — default kosong, diisi correlation_agent
@@ -522,6 +533,11 @@ async def _run_pipeline(
         chat_suggestions = merged.get("chat_suggestions") or []
         if chat_suggestions and not meta.get("suggestions"):
             meta["suggestions"] = chat_suggestions
+        # CHAT3 P1 (§4A.5): context_pill utk FE ContextPill — diisi response_agent
+        # (web-only). Deklarasi field wajib (TASK-005 lesson); copy eksplisit ke meta.
+        _context_pill = merged.get("context_pill")
+        if _context_pill:
+            meta["context_pill"] = _context_pill
         await add_message(session_id, "assistant", answer, meta=meta)
 
         for chunk in _chunks(answer, TOKEN_CHUNK_SIZE):

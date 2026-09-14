@@ -72,14 +72,37 @@ def _is_technical_intent(text: str) -> bool:
                                 "check deployment", "cek deployment"))  # Fix #239: chip deploy
 
 
+# CHAT3 §4.2 (P1) — history window per chat depth. SINGLE SOURCE of truth
+# (CHAT3.md §4.2: "History window values UNIFIED ... single source: conversation.py").
+# low = legacy behavior (6 × 300) — wajib byte-identical dgn sebelum P1
+# (K6: Telegram tidak pernah kirim mode → low → unchanged).
+CHAT_DEPTH_HISTORY_WINDOW = {
+    "low": (6, 300),
+    "medium": (10, 400),
+    "thinking": (14, 500),
+}
+
 async def build_conversation_history(
     session_id: str,
-    limit: int = 6,
-    max_chars: int = 300,
+    limit: Optional[int] = None,
+    max_chars: Optional[int] = None,
+    chat_depth: Optional[str] = None,
 ) -> List[Dict[str, str]]:
-    """Ambil N pesan terakhir sesi chat → [{role: user|assistant, content}]. Non-fatal."""
+    """Ambil N pesan terakhir sesi chat → [{role: user|assistant, content}]. Non-fatal.
+
+    CHAT3 §4.2 (P1): window di-key per chat_depth — low 6×300 (legacy, byte-identical),
+    medium 10×400, thinking 14×500. Precedensi resolusi per-argumen:
+      argumen eksplisit caller > window dari chat_depth > legacy default (6/300).
+    chat_depth tak dikenal (None/garbage) → legacy default → caller lama
+    (api/chat.py:399 tanpa argumen) tetap byte-identical.
+    """
     if not session_id:
         return []
+    _depth_window = CHAT_DEPTH_HISTORY_WINDOW.get((chat_depth or "").lower())
+    if limit is None:
+        limit = _depth_window[0] if _depth_window else 6
+    if max_chars is None:
+        max_chars = _depth_window[1] if _depth_window else 300
     try:
         from services.chat_store import get_messages
 

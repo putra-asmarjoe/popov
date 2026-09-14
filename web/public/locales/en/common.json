@@ -106,5 +106,39 @@
     "desc_system": "Follow OS",
     "trigger_aria": "Current theme: {{theme}}. Change theme",
     "contrast_note": "Target contrast ~10:1 · easy on eyes"
+  },
+  "activity": {
+    "title": "Activity",
+    "supervisor": "Analyzing request…",
+    "triage": "Running triage…",
+    "mongo": "Fetching MongoDB data…",
+    "metrics": "Fetching Prometheus metrics…",
+    "k8s": "Checking Kubernetes state…",
+    "trace": "Fetching Tempo traces…",
+    "span": "Analyzing spans…",
+    "correlation": "Synthesizing root cause…",
+    "health": "Checking service health…",
+    "data": "Fetching request data…",
+    "followup": "Checking follow-up question…",
+    "response": "Composing report…",
+    "knowledge": "Searching playbooks & docs…",
+    "ticket": "Processing ticket…",
+    "project": "Summarizing project…",
+    "planner": "Planning investigation…",
+    "chat": "Preparing response…"
+  },
+  "settings": {
+    "chat_depth": {
+      "low_label": "Low",
+      "medium_label": "Medium",
+      "thinking_label": "Thinking",
+      "low": "Quick answers. History 6 turns. For short questions.",
+      "medium": "History 10 turns, full planner. For investigation and follow-up discussion.",
+      "thinking": "History 14 turns, see investigation activity live. Higher latency. Best for deep root-cause work."
+    }
+  },
+  "pill": {
+    "context": "Context:",
+    "resolved": "Resolved \"{{term}}\" → {{value}}"
   }
 }

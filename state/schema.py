@@ -96,6 +96,11 @@ class AgentState(TypedDict):
     planned_nodes: Optional[List[str]]  # ["mongo_agent","trace_agent"] — diisi planner_node (Gap 3 Fase 1)
     planner_reason: Optional[str]       # Gap 3: alasan keputusan planner (audit log)
     service_type: Optional[str]         # Gap 3 Fase 5: api|worker|database|gateway dari registry (diisi triage)
+    # Fix #189 (TASK-005B) — offer "investigate lebih dalam" diterima user → supervisor
+    # memaksa full fan-out collector (bypass narrow by confidence/service_type di plan()).
+    # WAJIB dideklarasi: LangGraph 0.6.11 (_get_updates) MEMBUANG key di luar schema saat
+    # node return — tanpa error/warning. Bukti: tests/test_wiring_repro_task005.py.
+    force_full_fanout: Optional[bool]   # True dari supervisor (offer session); dibaca investigation_planner.plan()
 
     # Fase 6B — LLM fallback routing
     routing_flag: Optional[str]        # None | "low_confidence_routing"
@@ -108,6 +113,11 @@ class AgentState(TypedDict):
     # Ticket Agent — pengelolaan tiket via chat (lane baru, bukan analisis insiden)
     ticket_action: Optional[str]       # close/reopen/change_status/set_severity/add_label/assign/add_progress
     ticket_result: Optional[dict]      # hasil eksekusi: {ok, action, ticket_id, ticket_number, status}
+    # Fix #189 (TASK-005B) — offer tiket yang DITERIMA user, dibawa supervisor → ticket_agent
+    # untuk eksekusi deterministik tanpa LLM parse (jalur state.get("pending_offer")).
+    # WAJIB dideklarasi: LangGraph 0.6.11 (_get_updates) MEMBUANG key di luar schema saat
+    # node return — tanpa error/warning. Bukti: tests/test_wiring_repro_task005.py.
+    pending_offer: Optional[dict]      # {"action": ..., "params": {...}} — diisi supervisor; dibaca ticket_agent
 
     # FE-7 — Knowledge kontekstual
     workspace_id: Optional[str]        # workspace pemilik konteks (chat/tiket web); None = global
@@ -156,6 +166,15 @@ class AgentState(TypedDict):
     # (services/offer_planner.build_chat_suggestions).
     chat_suggestions: Optional[list]
 
+    # CHAT3 P1 (§4A.5) — context pill metadata utk FE ContextPill (web chat).
+    # Diisi response_agent (web-only, channel metadata — bukan teks/Telegram):
+    # {"type":"context","service":str,"ticket_id":str|None,"resolved_ref":None}.
+    # WAJIB dideklarasi: LangGraph 0.6.11 (_get_updates) MEMBUANG key di luar schema
+    # saat node return — tanpa error/warning (TASK-005 lesson,
+    # tests/test_wiring_repro_task005.py). Dicopy ke SSE meta di api/chat.py
+    # (_run_pipeline, di sebelah copy chat_suggestions→suggestions).
+    context_pill: Optional[dict]
+
     # CHATFLOW V2.1 (Tahap 1) — transparansi & investigasi otonom.
     # Diisi correlation_agent setelah RCA (tanpa LLM tambahan).
     investigation_confidence: float   # 0.0 – 1.0, default 0.0
@@ -163,5 +182,14 @@ class AgentState(TypedDict):
     gap_nodes: list[str]              # nama node graph yang di-skip (utk router Tahap 4)
     suggested_next: list[str]         # aksi investigasi spesifik (maks 3)
     internal_loop_count: int          # jumlah kali autonomous loop berjalan, default 0
+
+    # P5.1 telemetry — routing gate instrumentation (CHAT4 §4.1).
+    # WAJIB dideklarasi: LangGraph 0.6.11 (_get_updates) MEMBUANG key di luar schema saat
+    # node return — tanpa error/warning. Bukti: tests/test_wiring_repro_task005.py.
+    matched_gate: Optional[str]        # P5.1 telemetry — gate yang match di supervisor
+    gate_type: Optional[str]           # P5.1 telemetry — hard_command|legacy_intent|service_match|classifier|fallback
+    chat_agent_used: Optional[bool]    # P5.1 telemetry — True iff next_agent == chat_agent
+    tools_used: Optional[List[str]]    # P5.1/R3 telemetry — nama tool yang dieksekusi per turn (chat_agent)
+    synthesis_used: Optional[bool]     # P5.5/R4 telemetry — True iff synthesis pass composed the final reply (chat_agent)
 
 
