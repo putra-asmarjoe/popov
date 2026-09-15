@@ -517,6 +517,33 @@ ADAPTERS: Dict[str, Callable[[dict, AdapterCtx], Any]] = {
 }
 
 
+async def _ticket_alert_counts(params: dict, ctx: AdapterCtx) -> Tuple[bool, str]:
+    from services.ticket_alert_store import count_alerts_by_name_for_project
+
+    # Tenant-bleed guard (CTO decision): project_id is derived from ctx["state"]
+    # ONLY — the LLM must not pass an arbitrary tenant id via params, like every
+    # other project-scoped adapter. params["project_id"] is intentionally ignored.
+    state = ctx["state"]
+    pid = (state.get("project_id") or "").strip()
+    if not pid:
+        return False, "ticket_alert_counts: no project_id (use in a project session)"
+    days = _int(params, "days", 1)
+    try:
+        counts = await count_alerts_by_name_for_project(pid, days=days)
+    except Exception as e:
+        return False, f"ticket_alert_counts failed: {e}"
+    if not counts:
+        return True, f"ticket_alert_counts({pid}): no alerts in last {days} day(s)"
+    lines = [f"ticket_alert_counts({pid}, {days}d): {len(counts)} alert types"]
+    for c in counts[:15]:
+        lines.append(
+            f"- {(c.get('alert_name') or '?')}: {c.get('ticket_count', 0)} ticket(s), "
+            f"{c.get('alert_count', 0)} alert(s)"
+        )
+    return True, "\n".join(lines)[:1200]
+
+ADAPTERS["ticket_alert_counts"] = _ticket_alert_counts
+
 async def run_adapter(name: str, params: dict, ctx: AdapterCtx) -> Tuple[bool, str]:
     """Dispatch to the named adapter. Never raises — unknown name or
     adapter exception becomes (False, reason). Sync adapters tolerated."""

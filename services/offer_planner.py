@@ -217,6 +217,55 @@ def chat_suggestion(key: str, locale: str = "en", **fmt: str) -> str:
     return tmpl.format(**fmt) if fmt else tmpl
 
 
+# ── CHAT6 P6.3: context-aware chips dari conversation_state ──────────────────
+# Mapping deterministik (tanpa LLM): (current_intent, last_tool_used) → chip
+# keys. Mapping keys = NAMA TOOL EXISTING (services/tool_registry.py) dan NILAI
+# INTENT existing (chat_agent INTENT_VALUES) — BUKAN daftar keyword routing
+# baru (AC7). Semua chip text 100% dari _CHAT_SUGGESTION_TEXTS existing
+# (bilingual, satu sumber teks — tidak ada template baru).
+_PROM_TOOLS = frozenset({"prom_instant", "prom_range"})
+_K8S_POD_TOOLS = frozenset({
+    "pod_health", "k8s_events", "k8s_pods", "k8s_pods_list",
+    "k8s_deployments", "k8s_node", "deploy_replicas",
+})
+
+
+def _context_chip_pairs(
+    context: Optional[Dict[str, Any]], locale: str
+) -> List[tuple]:
+    """CHAT6 P6.3 — mapping context conversation_state → [(chip_key, svc), ...].
+
+    Context fields (semua optional): current_intent, topic_service,
+    last_tool_used, last_findings. Field kosong / kombinasi unknown → []
+    (caller jatuh ke template ticket-based existing — T6.3.4, no regression).
+    last_findings diterima tapi belum dipakai untuk pemilihan template
+    (reserved — devdocs/chat/P63_CONTEXTUAL_CHIPS.md §Field Mapping).
+    Chip tool-based butuh topic_service (template {svc} butuh nilai); tanpa
+    svc → mapping tidak match → fallback.
+    """
+    if not isinstance(context, dict):
+        return []
+    intent = (context.get("current_intent") or "").strip().lower()
+    tool = (context.get("last_tool_used") or "").strip().lower()
+    svc = (context.get("topic_service") or "").strip()
+    if intent == "investigate" and tool in _PROM_TOOLS and svc:
+        # metric trend chips (CHAT6: "Trend HPA 1 jam" class)
+        return [("req_trend", svc), ("mem_trend", svc), ("pod_restarts", svc)]
+    if intent == "investigate" and tool in _K8S_POD_TOOLS and svc:
+        # pod/deployment chips
+        return [("pod_events", svc), ("pod_restarts", svc), ("mem_trend", svc)]
+    if intent == "explain":
+        # knowledge/runbook chips
+        return [("knowledge", "")]
+    if intent == "execute":
+        # confirmation/undo class: catat hasil aksi / cek status
+        return [("progress", ""), ("status", "")]
+    if intent == "follow_up" and svc:
+        # drill-down chips
+        return [("investigate", svc), ("alert", svc)]
+    return []
+
+
 def build_standalone_suggestions(
     *,
     mode: str,
@@ -279,8 +328,16 @@ def build_chat_suggestions(
     intent: str = "",
     asked_intents: Optional[List[str]] = None,
     last_intent_type: str = "",
+    context: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     """Chips follow-up untuk chat (tiket & project) — deterministik, bilingual.
+
+    CHAT6 P6.3: `context` = conversation_state fields {current_intent,
+    topic_service, last_tool_used, last_findings} (semua optional). Bila mapping
+    konteks menghasilkan chip, chip itu ambil slot UTAMA (di depan); slot sisa
+    diisi jalur ticket-based existing. Context kosong / mapping tidak match →
+    perilaku existing persis seperti sebelumnya (byte-identical, T6.3.4).
+    Chip count tetap ≤ max_items (default 3, T6.3.5).
 
     Fix #215: `intent`/`asked_intents` dipakai utk men-skip chip yang topiknya sudah
     ditanyakan user (mis. habis tanya status → tidak ditawari lagi "What is the current status?").
@@ -357,6 +414,19 @@ def build_chat_suggestions(
         out.append(("progress", chat_suggestion("progress", locale)))
         if ticket:
             out.append(("status", chat_suggestion("status", locale)))
+
+    # CHAT6 P6.3: context-aware chips ambil slot UTAMA (di depan out). Disisipkan
+    # SETELAH seluruh out-building (termasuk reset Fix #252) dan SEBELUM filter
+    # redundancy Fix #215 (chip konteks ikut di-skip bila topiknya sudah ditanya).
+    # Render (key, svc) → (key, text) — teks dari template existing yang sama
+    # dengan jalur legacy (bilingual, satu sumber).
+    _ctx_pairs = [
+        (k, chat_suggestion(k, locale, svc=v) if v else chat_suggestion(k, locale))
+        for k, v in _context_chip_pairs(context, locale)
+    ]
+    if _ctx_pairs:
+        _existing_keys = {k for k, _ in out}
+        out = [p for p in _ctx_pairs if p[0] not in _existing_keys] + out
 
     # Fix #215: skip chip yang topiknya sudah ada di intent user (redundancy polish).
     # `asked_intents` (seluruh riwayat user) lebih kuat dari `intent` terakhir saja —

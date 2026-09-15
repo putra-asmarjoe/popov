@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
 import { Navigate, Route, Routes } from "react-router-dom"
+import { useTranslation } from "react-i18next"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { AppShell } from "@/components/layout/AppShell"
 import { LoginPage } from "@/pages/LoginPage"
@@ -14,6 +15,9 @@ import { ProjectChatPage } from "@/pages/ProjectChatPage"
 import { ManagementPage } from "@/pages/management/ManagementPage"
 import { useAuth } from "@/hooks/useAuth"
 import { useWorkspaces } from "@/hooks/useWorkspaces"
+import { useSetupStatus } from "@/hooks/useSetupStatus"
+import { SetupWizard } from "@/pages/SetupWizard"
+import { SetupErrorScreen } from "@/pages/SetupErrorScreen"
 import { useWorkspaceStore } from "@/store/workspace.store"
 import { useParams } from "react-router-dom"
 
@@ -25,11 +29,12 @@ function ChatsRedirect() {
 
 /** Guard: tunggu session check, redirect ke /login bila belum auth. */
 function RequireAuth({ children }: { children: ReactNode }) {
+  const { t } = useTranslation("common")
   const { isAuthenticated, sessionChecked } = useAuth()
   if (!sessionChecked) {
     return (
       <div className="flex h-screen items-center justify-center text-sm text-muted-foreground">
-        Memuat sesi…
+        {t("status.loading")}
       </div>
     )
   }
@@ -44,13 +49,14 @@ function RequireAuth({ children }: { children: ReactNode }) {
  * GET /workspaces menjamin minimal 1 workspace (auto-create).
  */
 function RootRedirect() {
+  const { t } = useTranslation("common")
   const { data: workspaces, isLoading } = useWorkspaces()
   const lastSlugs = useWorkspaceStore((s) => s.lastSlugs)
 
   if (isLoading) {
     return (
       <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-        Memuat workspace…
+        {t("status.loading")}
       </div>
     )
   }
@@ -61,10 +67,44 @@ function RootRedirect() {
   return <Navigate to={`/w/${target.slug}`} replace />
 }
 
+/**
+ * Fix #294: SetupGate — intercept sebelum router. 3-tier logic:
+ * 1. Server unreachable → error screen (fallback)
+ * 2. .env missing/invalid → configure form (fill → write .env → reload)
+ * 3. .env valid, no admin user → wizard starting from admin step
+ * 4. Everything ready → normal app
+ */
+function SetupGate({ children }: { children: ReactNode }) {
+  const { t } = useTranslation("common")
+  const { data: setup, isLoading, isError, refetch } = useSetupStatus()
+
+  if (isLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center text-sm text-muted-foreground">
+        {t("status.loading")}
+      </div>
+    )
+  }
+  if (isError || !setup) {
+    return <SetupErrorScreen kind="unreachable" status={null} onRetry={() => void refetch()} />
+  }
+  // Tier 2: .env missing/invalid — show configure form
+  if (setup.needs_configuration) {
+    return <SetupWizard status={setup} initialStep="configure" />
+  }
+  // Tier 3: .env valid, no admin user — skip configure, start from admin
+  if (setup.needs_setup) {
+    return <SetupWizard status={setup} initialStep="admin" />
+  }
+  // Tier 4: everything ready
+  return <>{children}</>
+}
+
 export default function App() {
   return (
     <TooltipProvider delayDuration={200}>
-      <Routes>
+      <SetupGate>
+        <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route
           element={
@@ -86,7 +126,8 @@ export default function App() {
           <Route path="/management" element={<ManagementPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
-      </Routes>
+        </Routes>
+      </SetupGate>
     </TooltipProvider>
   )
 }

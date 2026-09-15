@@ -58,12 +58,12 @@ async def register(body: RegisterRequest):
     try:
         user = await create_user(body.name, body.email, body.password)
     except DuplicateKeyError:
-        raise HTTPException(status_code=409, detail=msg("id", M.EMAIL_ALREADY_REGISTERED))
+        raise HTTPException(status_code=409, detail=msg("en", M.EMAIL_ALREADY_REGISTERED))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     except Exception as e:
         logger.error(f"Register failed: {e}")
-        raise HTTPException(status_code=500, detail=msg("id", M.FAILED_CREATE_USER))
+        raise HTTPException(status_code=500, detail=msg("en", M.FAILED_CREATE_USER))
     return AuthResponse(token=create_token(user), user=public_user(user))
 
 
@@ -72,7 +72,7 @@ async def login(body: LoginRequest):
     """Login dengan email+password → JWT token."""
     user = await find_by_email(body.email)
     if user is None or not verify_password(body.password, user.get("passwordHash", "")):
-        raise HTTPException(status_code=401, detail=msg("id", M.INVALID_CREDENTIALS))
+        raise HTTPException(status_code=401, detail=msg("en", M.INVALID_CREDENTIALS))
     return AuthResponse(token=create_token(user), user=public_user(user))
 
 
@@ -93,10 +93,10 @@ async def update_preferences(
 ):
     """Simpan preferensi bahasa user (MULTILANG_PLAN Fase 1)."""
     if body.localePreference not in VALID_LOCALES:
-        raise HTTPException(status_code=400, detail=msg("id", M.INVALID_LOCALE))
+        raise HTTPException(status_code=400, detail=msg("en", M.INVALID_LOCALE))
     ok = await update_locale(str(current_user["_id"]), body.localePreference)
     if not ok:
-        raise HTTPException(status_code=404, detail=msg("id", M.USER_NOT_FOUND))
+        raise HTTPException(status_code=404, detail=msg("en", M.USER_NOT_FOUND))
     return {"localePreference": body.localePreference}
 
 

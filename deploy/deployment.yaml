@@ -50,7 +50,10 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /api/v1/health
+              # Fix #294: readiness holds traffic when env is broken
+              # (mongo down / encryption key invalid). Liveness stays /health
+              # static — DO NOT ping Mongo in liveness (restart-loop when Mongo is down).
+              path: /api/v1/setup/status
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10

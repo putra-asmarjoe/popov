@@ -110,6 +110,127 @@ async def _gather_ticket_stats(project_id: str, hours_today: float) -> tuple[Lis
     return blocks, groups, open_groups
 
 
+async def _count_alerts_for_project(
+    project_id: str,
+    alert_name: Optional[str] = None,
+    hours: float = 24.0,
+) -> List[str]:
+    """Count tickets by alert name for a project within time window.
+
+    Deterministic helper — called when intent contains a ticket-count + alert-name
+    pattern.  Returns facts blocks that the LLM synthesizes into a natural answer.
+    English-only facts block (house style), same as the other [BRACKET] blocks.
+    """
+    from datetime import timedelta
+    from services.ticket_alert_store import count_alerts_by_name_for_project
+
+    days = max(1, round(hours / 24.0))
+    try:
+        counts = await count_alerts_by_name_for_project(project_id, days=days)
+    except Exception as e:
+        logger.warning(f"[project_agent] alert count query gagal: {e}")
+        return ["[ALERT COUNTS] unavailable (database error)"]
+
+    if not counts:
+        return [
+            f"[ALERT COUNTS] No alerts found for this project in the last {days} day(s)"
+        ]
+
+    # If a specific alert name was mentioned, try to match it.
+    # Null guard: $group on $name can yield alert_name=None — never call .lower()
+    # on a missing name; render it as "?" instead of crashing the node.
+    lines: List[str] = []
+    matched = False
+    if alert_name:
+        aln_lower = alert_name.lower()
+        for c in counts:
+            name = c.get("alert_name") or "?"
+            if name.lower() == aln_lower:
+                lines.append(
+                    f"- {name}: {c['ticket_count']} ticket(s), "
+                    f"{c['alert_count']} alert(s) in last {days} day(s) window"
+                )
+                matched = True
+                break
+        if not matched:
+            # Fuzzy: check if any alert name is a substring of intent or vice versa
+            for c in counts:
+                name = c.get("alert_name") or "?"
+                if aln_lower in name.lower() or name.lower() in aln_lower:
+                    lines.append(
+                        f"- {name}: {c['ticket_count']} ticket(s), "
+                        f"{c['alert_count']} alert(s) in last {days} day(s) window"
+                    )
+                    matched = True
+                    break
+    if not lines:
+        # No specific match — include all counts for LLM context
+        for c in counts[:10]:
+            name = c.get("alert_name") or "?"
+            lines.append(
+                f"- {name}: {c['ticket_count']} ticket(s), "
+                f"{c['alert_count']} alert(s) in last {days} day(s) window"
+            )
+    header = "[ALERT COUNTS]"
+    if alert_name:
+        header += f" (query: {alert_name})"
+    header += f" window={days}d"
+    return [header + "\n" + "\n".join(lines)]
+
+
+# Regex for detecting alert-count intent patterns (bilingual)
+_ALERT_COUNT_RE = re.compile(
+    r'(?:how\s+(?:much|many)|berapa|count|jumlah).*?(?:ticket|tiket).*?',
+    re.IGNORECASE,
+)
+
+
+def _extract_alert_name_from_intent(intent: str) -> Optional[str]:
+    """Extract an alert name from an alert-count intent.
+
+    Looks for patterns like:
+    - 'ticket about KubeHpaMaxedOut'
+    - 'tiket tentang KubeHpaMaxedOut'
+    - 'ticket for PodCrashLooping'
+    - 'tiket untuk KubeHpaMaxedOut'
+
+    The no-connector fallback only accepts names that LOOK like real alert
+    names (CamelCase / UPPER / hyphenated) — plain lowercase words such as
+    "terbuka" are generic ticket-count phrasing, not alert names.
+    """
+    _TIME_WORDS = {"today", "yesterday", "jam", "menit", "hari", "now", "sekarang",
+                   "ini", "terakhir", "last", "recent"}
+
+    # Try connector + word(s) at end of string (connectors matched case-insensitively)
+    m = re.search(
+        r'(?:about|untuk|tentang|for)\s+([A-Za-z][A-Za-z0-9_\-]+(?:\s+[A-Za-z][A-Za-z0-9_\-]+)*)\s*$',
+        intent,
+        re.IGNORECASE,
+    )
+    if m:
+        candidate = m.group(1).strip()
+        # Strip trailing time words
+        words = candidate.split()
+        while words and words[-1].lower() in _TIME_WORDS:
+            words.pop()
+        if words:
+            return " ".join(words)
+    # Fallback: last word that looks like an alert name (CamelCase, UPPER, or
+    # hyphenated) — plain lowercase words are generic phrasing, not names.
+    m = re.search(
+        r'\b([A-Za-z][a-zA-Z0-9_\-]{2,})\s*$',
+        intent,
+    )
+    if m:
+        candidate = m.group(1)
+        if candidate.lower() not in _TIME_WORDS and (
+            "-" in candidate or "_" in candidate
+            or any(ch.isupper() for ch in candidate)
+        ):
+            return candidate
+    return None
+
+
 async def _gather_activity(
     project_id: Optional[str],
     ws_id: Optional[str],
@@ -595,6 +716,23 @@ async def project_agent(state: AgentState) -> dict:
 
     if want_knowledge:
         facts_blocks.append(await _gather_knowledge(project_id, ws_id, locale=locale))
+
+    # ── Alert-count query: deterministic branch for queries like
+    # "how many tickets about KubeHpaMaxedOut today?" ────────────────────
+    # Gate: regex match AND a real alert name extracted — generic counts
+    # ("berapa tiket terbuka") must not fire a wasted aggregation + duplicate
+    # facts block. Case-preserved intent passed so CamelCase names survive.
+    if _ALERT_COUNT_RE.search(intent_lower):
+        _alert_name = _extract_alert_name_from_intent(intent_raw)
+        if _alert_name:
+            try:
+                alert_facts = await _count_alerts_for_project(
+                    project_id, alert_name=_alert_name, hours=hours,
+                )
+                facts_blocks.extend(alert_facts)
+            except Exception as e:
+                logger.warning(f"[project_agent] alert count branch gagal: {e}")
+                facts_blocks.append(f"[ALERT COUNTS] unavailable (error: {e})")
 
     # ── Fix (hallucination guard): pertanyaan infrastruktur yang bocor ke lane
     # project (mis. routing race) TIDAK boleh dijawab dari hitungan tiket —

@@ -13,7 +13,7 @@ i18n
     lng: detectLocale(),
     fallbackLng: "en",
     defaultNS: "common",
-    ns: ["common"],
+    ns: ["common", "auth", "setup"],
 
     backend: {
       loadPath: "/locales/{{lng}}/{{ns}}.json",

@@ -181,6 +181,7 @@ async def update_conversation_state(
     conversation_summary: Optional[str] = None,  # CHAT3 P3B (D-P3.2)
     turn_count: Optional[int] = None,  # CHAT3 P3B (D-P3.2)
     session_tool_count: Optional[int] = None,  # CHAT3 P4 (C3)
+    last_tool_used: Optional[str] = None,  # CHAT6 P6.3 (chip context)
 ) -> bool:
     """CHAT3 §5.3 (P2, D-P2.11) — tulis sub-block `conversation_state` ($set).
 
@@ -193,6 +194,7 @@ async def update_conversation_state(
           conversation_summary  str (EN-canonical, cap 800),
           turn_count            int (default 0, increment tiap turn chat_agent),
           session_tool_count    int (default 0, cumulative tool calls chat_agent P4),
+          last_tool_used        str (CHAT6 P6.3 — tool read-only terakhir chat_agent),
         }
 
     - HANYA sub-block yang diberikan yang ditimpa (dotted-path $set — sub-block
@@ -236,6 +238,12 @@ async def update_conversation_state(
             set_fields["conversation_state.session_tool_count"] = int(session_tool_count)
         except (TypeError, ValueError):
             pass
+    if last_tool_used is not None:
+        # CHAT6 P6.3: nama tool read-only terakhir yang dieksekusi chat_agent —
+        # konteks chip follow-up (offer_planner context mapping).
+        _ltu = str(last_tool_used).strip()
+        if _ltu:
+            set_fields["conversation_state.last_tool_used"] = _ltu
     try:
         await get_db()[SESSIONS_COLLECTION].update_one({"_id": oid}, {"$set": set_fields})
         return True

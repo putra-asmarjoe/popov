@@ -442,9 +442,14 @@ def _lane_suggestions(
     history: Optional[List[dict]],
     project_id: Optional[str],
     ticket_ctx: Optional[dict],
+    context: Optional[dict] = None,
 ) -> List[str]:
     """2-3 chips via infrastruktur existing (C7 / D-P2.7). Plain strings — FE
-    memperlakukan missing type sebagai ACTION (kontrak §4A.7, additive)."""
+    memperlakukan missing type sebagai ACTION (kontrak §4A.7, additive).
+
+    CHAT6 P6.3: `context` = conversation_state fields untuk offer_planner
+    context mapping (chips kontekstual tool/non-tool turns). Non-fatal: failure
+    → deterministic investigate chip fallback (K4, unchanged)."""
     try:
         from services.offer_planner import build_chat_suggestions
 
@@ -458,6 +463,7 @@ def _lane_suggestions(
             locale=locale,
             intent=message,
             asked_intents=[h.get("content") for h in (history or []) if h.get("role") == "user"],
+            context=context,
         )
         if chips:
             return chips[:3]
@@ -582,6 +588,11 @@ async def chat_agent(state: AgentState) -> dict:
     synthesis_succeeded = False
     synthesis_attempted = False
     _syn_text = ""
+    # CHAT6 P6.3 (W1): last successfully-executed read-only tool this turn
+    # (persisted to conversation_state for chip context) + a service derived
+    # from tool params (ONLY the explicit `service` param — trivially derivable).
+    last_tool_used: Optional[str] = None
+    _tool_service: Optional[str] = None
     if _tools_allowed and reply_text:
         from services.tool_executor import (
             ToolBudget, execute_tool_calls, format_tool_results, parse_tool_calls,
@@ -624,6 +635,23 @@ async def chat_agent(state: AgentState) -> dict:
             new_session_tool_count = _budget.session_count
             pending_confirmations = [r for r in tool_results if r.get("needs_confirmation")]
             _read_results = [r for r in tool_results if not r.get("needs_confirmation")]
+            # CHAT6 P6.3 (W1): last successful read-only tool (for
+            # conversation_state.last_tool_used) + service derivation from the
+            # explicit `service` param (nothing else is trivially derivable —
+            # prom_instant carries promql, not a service id).
+            for _r in _read_results:
+                if _r.get("ok") and _r.get("name"):
+                    last_tool_used = _r["name"]
+                    break
+            for _r in _read_results:
+                # Review fix (Major 2): ONLY a successful tool result may hint
+                # a service — a failed check reveals nothing.
+                if not _r.get("ok"):
+                    continue
+                _psvc = (_r.get("params") or {}).get("service")
+                if _psvc:
+                    _tool_service = str(_psvc)
+                    break
             if _read_results:
                 # P5.5 R1: synthesis pass — re-answer with tool data in hand.
                 # Build synthesis prompt: same context block as call #1, user message,
@@ -669,7 +697,13 @@ async def chat_agent(state: AgentState) -> dict:
                     logger.warning(f"[ChatAgent] synthesis LLM failed → fallback to append: {e}")
                 if not synthesis_succeeded:
                     # K4: fallback to M1(a) deterministic append — never crash the lane.
-                    clean_reply = (clean_reply + "\n\n" + _tool_data_block).strip() \
+                    # P6.1 GAP-B: append the compact user-facing rendering
+                    # (_format_tool_reply: labeled bullets, truncated, bilingual
+                    # intro) — the raw "[TOOL RESULTS]" LLM-context header
+                    # (_tool_data_block, tool_executor.format_tool_results) is
+                    # prompt-internal and must never reach the user-visible reply.
+                    clean_reply = (clean_reply + "\n\n"
+                                   + _format_tool_reply(_read_results, locale)).strip() \
                         if clean_reply else _format_tool_reply(_read_results, locale)
 
     # ── Topic shift (first-class, §5.3) ────────────────────────────────────────
@@ -678,6 +712,15 @@ async def chat_agent(state: AgentState) -> dict:
     new_service = _validate_topic(parsed.get("topic_service"), services)
     topic_shift = bool(new_service and new_service != topic_service)
     effective_service = new_service or topic_service
+    # CHAT6 P6.3 (W1): tool revealed a service (explicit `service` param on a
+    # SUCCESSFUL result) and no topic is set → adopt it so
+    # topic_context.active_service persists it. Review fix (Major 2): the
+    # candidate passes the SAME hallucination guard as LLM-emitted topics —
+    # a service the platform does not know is never adopted.
+    _validated_tool_service = _validate_topic(_tool_service, services) \
+        if _tool_service else None
+    if not effective_service and _validated_tool_service:
+        effective_service = _validated_tool_service
 
     # ── Persist conversation_state (best-effort, non-fatal — K4) ──────────────
     # CHAT3 P3B (D-P3.2): rolling summary — turn_count increment TIAP turn;
@@ -712,6 +755,9 @@ async def chat_agent(state: AgentState) -> dict:
                 # P4 (C3): persist cumulative session tool budget.
                 **({"session_tool_count": new_session_tool_count}
                    if new_session_tool_count is not None else {}),
+                # CHAT6 P6.3 (W1): last read-only tool — chip context.
+                **({"last_tool_used": last_tool_used}
+                   if last_tool_used else {}),
             )
         except Exception as e:
             logger.warning(f"[ChatAgent] update_conversation_state gagal (non-fatal): {e}")
@@ -787,19 +833,78 @@ async def chat_agent(state: AgentState) -> dict:
                 if not _SUGGESTION_RE.match(line)
             ).strip()
     if suppress_telegram:
-        # P5.5: if synthesis produced suggestions, use them instead of _lane_suggestions.
-        if _syn_suggestions:
-            chat_suggestions = chat_suggestions + _syn_suggestions[:2]
+        # CHAT6 P6.3 (W3, review-fixed): unified chip flow with the contract
+        # priority MAPPING PORTION > SUGGESTION > legacy fill for TOOL turns.
+        # The decision keys on the MAPPING PORTION being empty — NOT on the
+        # bundled _lane_suggestions result (which mixes mapping chips with
+        # legacy ticket fillers and would wrongly suppress SUGGESTION).
+        # Non-tool turns: existing _lane_suggestions behavior + context
+        # injection (mapping keys on intent/topic only). Non-fatal throughout:
+        # any failure inside _lane_suggestions keeps the K4 fallback chain.
+        _chip_context = {
+            "current_intent": parsed["intent"],
+            "topic_service": effective_service or None,
+            "last_tool_used": last_tool_used
+                or (conv_state.get("last_tool_used") or None),
+            "last_findings": (investigation.get("last_findings") or "") or None,
+        }
+        _was_tool_turn = bool(tool_results)
+        if _was_tool_turn:
+            from services.offer_planner import _context_chip_pairs
+
+            _mapping_occupied = bool(_context_chip_pairs(_chip_context, locale))
+            if _mapping_occupied:
+                # Mapping chips (primary slots) + legacy fillers for the
+                # remaining slots — one composed result.
+                chat_suggestions = chat_suggestions + _lane_suggestions(
+                    service=effective_service,
+                    last_rca=(investigation.get("last_root_cause") or ""),
+                    locale=locale,
+                    message=message,
+                    history=state.get("conversation_history"),
+                    project_id=state.get("project_id"),
+                    ticket_ctx=state.get("ticket_context"),
+                    context=_chip_context,
+                )
+            elif _syn_suggestions:
+                # P5.5 FALLBACK: mapping portion empty → synthesis chips LEAD;
+                # legacy templates fill only the remaining slots (≤3 cap below).
+                chat_suggestions = chat_suggestions + _syn_suggestions[:2]
+                _legacy_fill = _lane_suggestions(
+                    service=effective_service,
+                    last_rca=(investigation.get("last_root_cause") or ""),
+                    locale=locale,
+                    message=message,
+                    history=state.get("conversation_history"),
+                    project_id=state.get("project_id"),
+                    ticket_ctx=state.get("ticket_context"),
+                )
+                chat_suggestions = list(dict.fromkeys(
+                    chat_suggestions + _legacy_fill))
+            else:
+                # Mapping empty + no synthesis chips → legacy templates only.
+                chat_suggestions = chat_suggestions + _lane_suggestions(
+                    service=effective_service,
+                    last_rca=(investigation.get("last_root_cause") or ""),
+                    locale=locale,
+                    message=message,
+                    history=state.get("conversation_history"),
+                    project_id=state.get("project_id"),
+                    ticket_ctx=state.get("ticket_context"),
+                )
         else:
             chat_suggestions = chat_suggestions + _lane_suggestions(
-            service=effective_service,
-            last_rca=(investigation.get("last_root_cause") or ""),
-            locale=locale,
-            message=message,
-            history=state.get("conversation_history"),
-            project_id=state.get("project_id"),
-            ticket_ctx=state.get("ticket_context"),
-        )
+                service=effective_service,
+                last_rca=(investigation.get("last_root_cause") or ""),
+                locale=locale,
+                message=message,
+                history=state.get("conversation_history"),
+                project_id=state.get("project_id"),
+                ticket_ctx=state.get("ticket_context"),
+                context=_chip_context,
+            )
+        # CHAT6 P6.3 (T6.3.5): chip count never exceeds 3 in any branch.
+        chat_suggestions = chat_suggestions[:3]
 
         if parsed["intent"] == "investigate" and effective_service and session_id:
             # Proactive offer HANYA saat LLM menandai intent investigasi; dedup via

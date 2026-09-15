@@ -159,3 +159,35 @@ async def list_alerts_for_project(project_id: str, limit: int = 10, days: int = 
 
 async def count_alerts(ticket_id: str) -> int:
     return await get_db()[TICKET_ALERTS_COLLECTION].count_documents({"ticketId": str(ticket_id)})
+
+async def count_alerts_by_name_for_project(
+    project_id: str,
+    *,
+    days: int = 1,
+) -> List[Dict[str, Any]]:
+    """Count tickets per alert name for a project within N days.
+    Returns list of {alert_name, ticket_count, alert_count} sorted by ticket_count desc."""
+    from datetime import timedelta
+
+    try:
+        oid = ObjectId(str(project_id))
+    except Exception:
+        return []
+
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cursor = get_db()[TICKET_ALERTS_COLLECTION].aggregate([
+        {"$match": {"projectId": str(oid), "occurredAt": {"$gte": since}}},
+        {"$group": {
+            "_id": "$name",
+            "ticket_ids": {"$addToSet": "$ticketId"},
+            "alert_count": {"$sum": 1},
+        }},
+        {"$project": {
+            "_id": 0,
+            "alert_name": "$_id",
+            "ticket_count": {"$size": "$ticket_ids"},
+            "alert_count": 1,
+        }},
+        {"$sort": {"ticket_count": -1}},
+    ])
+    return [doc async for doc in cursor]

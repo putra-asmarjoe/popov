@@ -23,6 +23,7 @@ from api.api_keys import router as api_keys_router  # API key management
 from api.source_registry import router as source_registry_router  # 1C Source Registry (Fix #207)
 from api.routes_project_overview import router as project_overview_router  # War Room Part A
 from api.profile import router as profile_router  # USER_PROFILE_PLAN Phase 1
+from api.setup_api import router as setup_router  # Fix #294: first launch setup
 from services.mongodb_client import close as close_mongo
 from services.telegram_listener import start_polling
 from services.request_log import ensure_indexes
@@ -42,6 +43,10 @@ logging.getLogger().addHandler(_file_handler)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    # Fix #294: banner kesehatan env (log only — tidak exit, agar wizard FE
+    # tetap bisa memandu lewat /api/v1/setup/status)
+    from startup_checks import run_startup_checks
+    await run_startup_checks()
     await ensure_indexes()
     # USER_PROFILE_PLAN Phase 1: index user_profiles (unique user+workspace)
     try:
@@ -208,6 +213,7 @@ app.include_router(agent_docs_router, prefix="/api/v1")
 app.include_router(api_keys_router, prefix="/api/v1")  # API key management (internal only)
 app.include_router(project_overview_router, prefix="/api/v1")  # War Room Part A
 app.include_router(profile_router, prefix="/api/v1")  # USER_PROFILE_PLAN Phase 1
+app.include_router(setup_router, prefix="/api/v1")  # Fix #294: first launch setup (no auth)
 app.include_router(source_registry_router, prefix="/api/v1")  # 1C Source Registry (Fix #207)
 
 # ── Public API (pub) — External API Keys (pk_pub_*) ──────────────────────────

@@ -126,6 +126,21 @@ _PROJECT_KNOWLEDGE_PROJECT_MENTION = (
     "dalam project", "the project", "our project",
 )
 
+# ── CHAT6 P6.2 (delta Fix #288): Indonesian stopword set for Strategy 2 ─────
+# Tokenizer stopwords stripped from intent tokens BEFORE word-overlap
+# computation (supervisor_agent Strategy 2) so common Indonesian function
+# words never create false-positive overlap with service names — and
+# preposition-only intents ("di pada untuk") never match anything.
+# BUKAN routing keyword list (Fix #264 mengatur daftar FRASA routing; ini
+# stopword tokenizer — lihat D-P5.6 note di devdocs/chat/P62_SERVICE_RESOLUTION.md).
+# frozenset modul-level: testable independently (CHAT6 §P6.2 constraint).
+_ID_PREPOSITIONS = frozenset({
+    "di", "ke", "dari", "pada", "untuk", "dengan",
+    "yang", "dan", "atau", "ini", "itu",
+    # P6.2 delta (CHAT6 required set): two additional common function words
+    "tentang", "oleh",
+})
+
 def _t(ret: dict, gate: str, gate_type: str) -> dict:
     """P5.1 telemetry: add matched_gate / gate_type / chat_agent_used."""
     ret["matched_gate"] = gate
@@ -1153,7 +1168,8 @@ async def supervisor_agent(state: AgentState) -> dict:
     # Strategy 2: Word overlap matching (e.g. "payment gateway prod" -> "payment_gateway_prod")
     # FIX: use ORIGINAL intent (before underscore normalization) so individual words
     # are extracted correctly. "otel collector" → {"otel","collector"} not {"otel_collector"}.
-    _ID_PREPOSITIONS = {"di", "ke", "dari", "pada", "untuk", "dengan", "yang", "dan", "atau", "ini", "itu"}
+    # CHAT6 P6.2: _ID_PREPOSITIONS hoisted to module-level frozenset (13 members,
+    # + "tentang" + "oleh") — no behavior change for the original 11 members.
     if not matched_service:
         intent_words = set(re.findall(r"\w+", intent.lower())) - _ID_PREPOSITIONS
         best_overlap = 0

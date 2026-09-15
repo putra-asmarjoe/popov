@@ -20,7 +20,7 @@ MAX_TOOLS_PER_TURN = 5
 TOOL_TIMEOUT_S = 8.0
 
 # ── Tool definitions ─────────────────────────────────────────────────────────
-# 16 read-only (auto-execute) + 3 write (confirmation-gated, M2) = 19 tools.
+# 17 read-only (auto-execute) + 3 write (confirmation-gated, M2) = 20 tools.
 
 TOOL_DEFINITIONS: List[Dict[str, Any]] = [
     # — Mongo / app logs —
@@ -68,6 +68,9 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
      "params": ["status"], "read_only": False, "needs_namespace": False},
     {"name": "ticket_severity", "description": "Change the current ticket severity (needs confirmation)",
      "params": ["severity"], "read_only": False, "needs_namespace": False},
+    # — Ticket alert aggregation (read-only) —
+    {"name": "ticket_alert_counts", "description": "Count tickets by alert name for the current project session (today or N days)",
+     "params": ["days"], "read_only": True, "needs_namespace": False},
 ]
 
 _BY_NAME = {t["name"]: t for t in TOOL_DEFINITIONS}
