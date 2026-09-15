@@ -1,0 +1,116 @@
+{
+  "wizard": {
+    "title": "Popov",
+    "subtitle": "Penyiapan pertama",
+    "clam_hint": "Menyiapkan Popov-mu…"
+  },
+  "steps": {
+    "configure": "Konfigurasi",
+    "checks": "Server",
+    "admin": "Akun",
+    "llm": "Key AI",
+    "done": "Siap"
+  },
+  "configure": {
+    "heading": "Konfigurasi Popov",
+    "description": "Atur koneksi database dan kunci keamanan. Field kosong akan di-generate otomatis.",
+    "mongodb_uri": {
+      "label": "MongoDB URI",
+      "placeholder": "mongodb://localhost:27017",
+      "required": "MongoDB URI wajib diisi"
+    },
+    "mongodb_db": {
+      "label": "Nama database",
+      "placeholder": "popovagent"
+    },
+    "jwt_secret": {
+      "label": "JWT Secret",
+      "placeholder": "Kosongkan untuk auto-generate",
+      "generate": "Generate secret acak"
+    },
+    "data_encryption_key": {
+      "label": "Kunci Enkripsi Data",
+      "placeholder": "Kosongkan untuk auto-generate (Fernet)",
+      "generate": "Generate Fernet key"
+    },
+    "submit": "Simpan & lanjut",
+    "testing_connection": "Menguji koneksi…",
+    "success": "Konfigurasi tersimpan. Memuat ulang…",
+    "error": "Gagal menyimpan konfigurasi"
+  },
+  "checks": {
+    "heading": "Pemeriksaan server",
+    "description": "Memastikan lingkungan siap sebelum akun dibuat.",
+    "recheck": "Periksa ulang",
+    "continue": "Lanjut",
+    "fix_to_continue": "Perbaiki masalah di atas untuk lanjut",
+    "fix_hint": "Perbaiki masalah di atas di file .env, lalu tekan \"Periksa ulang\".",
+    "mongodb": {
+      "label": "MongoDB",
+      "ok": "Terhubung ke database \"{{db}}\"",
+      "fail": "Tidak bisa terhubung ke MongoDB ({{error}})"
+    },
+    "encryption_key": {
+      "label": "Kunci enkripsi",
+      "ok": "Valid",
+      "missing": "DATA_ENCRYPTION_KEY belum di-set",
+      "invalid": "Sudah di-set, tetapi bukan Fernet key yang valid"
+    },
+    "jwt_secret": {
+      "label": "JWT secret",
+      "ok": "Sudah di-set",
+      "missing": "JWT_SECRET belum di-set",
+      "weak": "Sudah di-set tapi pendek — cukup untuk development, pakai nilai lebih kuat untuk produksi",
+      "default": "Masih nilai default development — set secret asli sebelum produksi"
+    },
+    "first_run": {
+      "label": "Pemakaian pertama",
+      "ok": "Terkonfirmasi — belum ada akun",
+      "fail": "Sudah ada akun — setup sebelumnya sudah selesai"
+    }
+  },
+  "admin": {
+    "heading": "Buat akun admin",
+    "description": "Ini akun pertama — otomatis mendapat akses admin penuh.",
+    "submit": "Buat akun",
+    "processing": "Membuat akun…",
+    "success_toast": "Akun admin berhasil dibuat",
+    "failed_fallback": "Gagal membuat akun"
+  },
+  "llm": {
+    "heading": "Tambahkan key AI (LLM)",
+    "description": "Popov butuh key LLM untuk menjalankan investigasi AI. Bisa ditambah sekarang atau kapan saja nanti.",
+    "warning": "Tanpa key, monitoring dan deteksi tiket tetap jalan — hanya laporan investigasi AI yang tidak berjalan.",
+    "skip": "Lewati dulu",
+    "open_management": "Buka Management → API Keys"
+  },
+  "done": {
+    "heading": "Popov siap",
+    "description": "Penyiapan selesai dan kamu sudah masuk sebagai admin.",
+    "open": "Buka Popov"
+  },
+  "error": {
+    "unreachable_heading": "Backend Popov tidak terjangkau",
+    "env_heading": "Popov perlu konfigurasi",
+    "unreachable_detail": "Tidak bisa menghubungi backend Popov. Pastikan server berjalan.",
+    "env_detail": "Server sudah start, tetapi ada environment variable wajib yang hilang atau tidak valid.",
+    "rechecking": "Memeriksa ulang otomatis…",
+    "retry": "Periksa ulang",
+    "after_fix": "Setelah .env diperbaiki, halaman ini memeriksa ulang secara otomatis.",
+    "docs": "Dokumen deployment",
+    "mongo": {
+      "title": "MongoDB tidak terjangkau",
+      "fix": "Pastikan MongoDB berjalan dan MONGODB_URI di .env menunjuk host yang benar."
+    },
+    "enc_key_missing": {
+      "title": "DATA_ENCRYPTION_KEY belum di-set",
+      "fix": "Tambahkan key ke file .env. Generate dengan perintah di bawah."
+    },
+    "enc_key_invalid": {
+      "title": "DATA_ENCRYPTION_KEY tidak valid",
+      "fix": "Key sudah di-set tetapi bukan Fernet key yang valid. Generate ulang — HANYA jika belum ada data terenkripsi. Mengganti key yang sudah dipakai membuat API key tersimpan jadi tidak bisa dipulihkan."
+    },
+    "command_generate_key": "python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"",
+    "command_mongosh": "mongosh \"mongodb://localhost:27017\""
+  }
+}

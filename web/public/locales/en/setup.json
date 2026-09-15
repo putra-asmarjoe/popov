@@ -1,0 +1,116 @@
+{
+  "wizard": {
+    "title": "Popov",
+    "subtitle": "First-time setup",
+    "clam_hint": "Setting up your Popov…"
+  },
+  "steps": {
+    "configure": "Configure",
+    "checks": "Server",
+    "admin": "Account",
+    "llm": "AI Key",
+    "done": "Ready"
+  },
+  "configure": {
+    "heading": "Configure Popov",
+    "description": "Set up the database connection and security keys. Empty fields are auto-generated.",
+    "mongodb_uri": {
+      "label": "MongoDB URI",
+      "placeholder": "mongodb://localhost:27017",
+      "required": "MongoDB URI is required"
+    },
+    "mongodb_db": {
+      "label": "Database name",
+      "placeholder": "popovagent"
+    },
+    "jwt_secret": {
+      "label": "JWT Secret",
+      "placeholder": "Leave empty to auto-generate",
+      "generate": "Generate random secret"
+    },
+    "data_encryption_key": {
+      "label": "Data Encryption Key",
+      "placeholder": "Leave empty to auto-generate (Fernet)",
+      "generate": "Generate Fernet key"
+    },
+    "submit": "Save & continue",
+    "testing_connection": "Testing connection…",
+    "success": "Configuration saved. Reloading…",
+    "error": "Configuration failed"
+  },
+  "checks": {
+    "heading": "Server checks",
+    "description": "Confirming your environment is ready before creating your account.",
+    "recheck": "Check again",
+    "continue": "Continue",
+    "fix_to_continue": "Fix the issues above to continue",
+    "fix_hint": "Fix the issues above in your .env file, then press \"Check again\".",
+    "mongodb": {
+      "label": "MongoDB",
+      "ok": "Connected to database \"{{db}}\"",
+      "fail": "Cannot reach MongoDB ({{error}})"
+    },
+    "encryption_key": {
+      "label": "Encryption key",
+      "ok": "Valid",
+      "missing": "DATA_ENCRYPTION_KEY is not set",
+      "invalid": "Set, but not a valid Fernet key"
+    },
+    "jwt_secret": {
+      "label": "JWT secret",
+      "ok": "Set",
+      "missing": "JWT_SECRET is not set",
+      "weak": "Set, but short — fine for development, use a stronger value in production",
+      "default": "Still the default development value — set a real secret before production"
+    },
+    "first_run": {
+      "label": "First run",
+      "ok": "Confirmed — no accounts exist yet",
+      "fail": "Accounts already exist — setup is already complete"
+    }
+  },
+  "admin": {
+    "heading": "Create admin account",
+    "description": "This is the first account. It automatically gets full admin access.",
+    "submit": "Create account",
+    "processing": "Creating account…",
+    "success_toast": "Admin account created",
+    "failed_fallback": "Account creation failed"
+  },
+  "llm": {
+    "heading": "Add an AI (LLM) key",
+    "description": "Popov needs an LLM key to run AI investigations. You can add it now or anytime later.",
+    "warning": "Without a key, monitoring and ticket detection still work — only AI investigation reports will not run.",
+    "skip": "Skip for now",
+    "open_management": "Open Management → API Keys"
+  },
+  "done": {
+    "heading": "Popov is ready",
+    "description": "Your setup is complete and you are signed in as admin.",
+    "open": "Open Popov"
+  },
+  "error": {
+    "unreachable_heading": "Popov backend is unreachable",
+    "env_heading": "Popov needs configuration",
+    "unreachable_detail": "Could not reach the Popov backend. Make sure the server is running.",
+    "env_detail": "The server started, but required environment variables are missing or invalid.",
+    "rechecking": "Checking again automatically…",
+    "retry": "Check again",
+    "after_fix": "After fixing your .env file, this page re-checks automatically.",
+    "docs": "Deployment docs",
+    "mongo": {
+      "title": "MongoDB is not reachable",
+      "fix": "Check that MongoDB is running and MONGODB_URI in your .env points to the right host."
+    },
+    "enc_key_missing": {
+      "title": "DATA_ENCRYPTION_KEY is not set",
+      "fix": "Add the key to your .env file. Generate one with the command below."
+    },
+    "enc_key_invalid": {
+      "title": "DATA_ENCRYPTION_KEY is invalid",
+      "fix": "The key is set but is not a valid Fernet key. Regenerate it — but ONLY if you have no encrypted data yet. Changing an existing key makes stored API keys unrecoverable."
+    },
+    "command_generate_key": "python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\"",
+    "command_mongosh": "mongosh \"mongodb://localhost:27017\""
+  }
+}
