@@ -191,7 +191,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Popov - The Intelligence Behind Operations",
     description="LangGraph multi-agent: MongoDB reader + Telegram notifier",
-    version="0.2.1rc291",
+    version="0.2.1rc293",
     lifespan=lifespan,
 )
 
