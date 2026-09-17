@@ -246,3 +246,107 @@ async def get_node_pressure(
     except Exception as e:
         logger.warning(f"get_node_pressure failed: {e}")
         return {}
+
+
+async def _k8s_get_text(
+    path: str,
+    *,
+    api_url: str,
+    token: str,
+    verify_ssl: bool,
+    timeout_s: float = 8.0,
+) -> str:
+    """
+    Variant of _k8s_get() for endpoints returning plain text (pod /log).
+    200 -> body text; 400 -> "" (pod belum punya logs); other -> "[K8s API error N]".
+    Tidak memanggil .json() dan tidak raise_for_status().
+    """
+    url = f"{api_url}{path}"
+    headers = {"Authorization": f"Bearer {token}"}  # tanpa Accept: application/json
+    import httpx
+    try:
+        async with httpx.AsyncClient(verify=verify_ssl, timeout=timeout_s) as client:
+            r = await client.get(url, headers=headers)
+            if r.status_code == 200:
+                return r.text
+            if r.status_code == 400:
+                return ""  # Bad Request: container belum start / previous log tidak ada
+            return f"[K8s API error {r.status_code}]"
+    except Exception as e:
+        return f"[Error fetching pod logs: {str(e)[:100]}]"
+
+
+async def resolve_pod_names(
+    *,
+    api_url: str,
+    token: str,
+    namespace: str,
+    service_name: str,
+    verify_ssl: bool = False,
+) -> List[str]:
+    """
+    Resolve service/deployment name -> running pod names.
+    Strategies in order, first non-empty wins:
+      1. labelSelector app={service_name}
+      2. labelSelector app.kubernetes.io/name={service_name}
+      3. labelSelector app.kubernetes.io/component={last_segment}
+         ("kube-prometheus-stack-kubelet" -> component=kubelet)
+      4. Prefix match over flat pod list dari list_pods()
+    """
+    selectors = [
+        f"app={service_name}",
+        f"app.kubernetes.io/name={service_name}",
+        f"app.kubernetes.io/component={service_name.split('-')[-1]}",
+    ]
+    for selector in selectors:
+        path = f"/api/v1/namespaces/{namespace}/pods?labelSelector={selector}"
+        try:
+            result = await _k8s_get(path, api_url=api_url, token=token,
+                                    verify_ssl=verify_ssl)
+        except Exception:
+            continue  # selector salah / tidak match -> coba strategy berikutnya
+        items = result.get("items", []) if isinstance(result, dict) else []
+        running = [
+            p["metadata"]["name"]
+            for p in items
+            if isinstance(p, dict)
+            and p.get("status", {}).get("phase") == "Running"
+        ]
+        if running:
+            return running
+
+    # Strategy 4: prefix match dari flat list list_pods()
+    try:
+        all_pods = await list_pods(api_url=api_url, token=token,
+                                   namespace=namespace, verify_ssl=verify_ssl)
+    except Exception:
+        return []
+    prefix = service_name[:20].lower()
+    return [
+        p["name"]
+        for p in all_pods
+        if p.get("name", "").lower().startswith(prefix)
+        and p.get("phase") == "Running"
+    ]
+
+
+async def get_pod_logs(
+    *,
+    api_url: str,
+    token: str,
+    namespace: str,
+    pod_name: str,
+    container: Optional[str] = None,
+    tail_lines: int = 100,
+    previous: bool = False,
+    verify_ssl: bool = False,
+) -> str:
+    """Fetch stdout/stderr logs untuk satu pod. "" jika kosong, "[...]" jika error."""
+    params = [f"tailLines={tail_lines}"]
+    if container:
+        params.append(f"container={container}")
+    if previous:
+        params.append("previous=true")
+    path = f"/api/v1/namespaces/{namespace}/pods/{pod_name}/log?{'&'.join(params)}"
+    return await _k8s_get_text(path, api_url=api_url, token=token,
+                               verify_ssl=verify_ssl)

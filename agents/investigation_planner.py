@@ -201,6 +201,25 @@ def plan(state: dict) -> dict:
     except Exception as e:  # non-blocking — lane tambahan bersifat best-effort
         logger.warning(f"[Planner] pod-restart lane check failed (non-fatal): {e}")
 
+    # Pod-log lane (Fix #296)
+    try:
+        from agents.supervisor import _POD_LOG_KW
+    except ImportError:
+        _POD_LOG_KW = ("pod log", "container log", "logs for", "log pod",
+                       "log dari", "log service")
+    try:
+        _intent_low = (state.get("intent") or "").lower()
+        if any(kw in _intent_low for kw in _POD_LOG_KW) and NODES["k8s"] not in nodes:
+            nodes.append(NODES["k8s"])
+            reason += " + k8s_agent (pod log request)"
+        # Skip mongo untuk service tanpa DB config (flag dari triage, Fix #296)
+        if state.get("service_has_db_config") is False:  # None/absent = default aman
+            if "mongo_agent" in nodes:
+                nodes.remove("mongo_agent")
+            reason += " - mongo_agent (service has no DB config)"
+    except Exception as e:
+        logger.warning(f"[Planner] pod-log lane check failed (non-fatal): {e}")
+
     # Fase 4A: span fan-in jika watchdog traceId dan hipotesis butuh trace
     needs_trace = hyp in ("regression_post_deploy", "downstream_timeout", "traffic_spike", "unknown")
     if needs_trace and state.get("preset_trace_ids"):

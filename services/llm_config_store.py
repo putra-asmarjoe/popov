@@ -114,21 +114,38 @@ async def get_llm_config() -> Optional[dict]:
     if not doc:
         _cache_empty = True
         return None
+    # Collect all provider IDs: built-in + custom-* from DB doc
+    doc_keys = doc.get("keys") or {}
+    doc_models = doc.get("models") or {}
+    doc_base = doc.get("base_urls") or {}
+    all_provider_ids = set(PROVIDERS) | set(doc_keys.keys()) | set(doc_models.keys()) | set(doc_base.keys())
+    # Filter to only include custom-* IDs (built-in handled by PROVIDERS loop)
+    custom_ids = {pid for pid in all_provider_ids if pid not in PROVIDERS}
+
     keys = {}
     for p in PROVIDERS:
-        keys[p] = _decrypt(doc.get("keys", {}).get(p))
-    models_raw = doc.get("models") or {}
+        keys[p] = _decrypt(doc_keys.get(p))
+    for p in custom_ids:
+        keys[p] = _decrypt(doc_keys.get(p))
+    models_raw = doc_models
     models = {p: (models_raw.get(p) or "").strip() for p in PROVIDERS}
+    for p in custom_ids:
+        models[p] = (models_raw.get(p) or "").strip()
     provider = doc.get("provider") or "openai"
     cfg = {
         "provider": provider,
         "model": models.get(provider) or (doc.get("model") or ""),  # efektif utk provider aktif
         "models": models,  # model PER provider (Fix #56)
-        "base_urls": {p: (doc.get("base_urls") or {}).get(p) or DEFAULT_BASE_URLS[p] for p in PROVIDERS},
+        "base_urls": {p: (doc_base.get(p) or DEFAULT_BASE_URLS.get(p, "")) for p in PROVIDERS},
         "keys": keys,
+        "names": doc.get("names") or {},
         "embedding": doc.get("embedding") or {"mode": "local"},
         "updated_at": doc.get("updated_at"),
+        "tool_calling": doc.get("tool_calling") or {},
     }
+    # Add custom provider base_urls
+    for p in custom_ids:
+        cfg["base_urls"][p] = doc_base.get(p) or ""
     _cache = cfg
     return cfg
 
@@ -140,6 +157,7 @@ async def set_llm_config(
     keys: Optional[Dict[str, str]] = None,
     embedding: Optional[Dict[str, Any]] = None,
     models: Optional[Dict[str, str]] = None,
+    names: Optional[Dict[str, str]] = None,
 ) -> dict:
     """Simpan config; keys dienkripsi. Keys kosong = pertahankan yang lama. Return public.
     Fix #56: model PER provider (`models`) — provider A boleh model beda dari provider B.
@@ -147,12 +165,10 @@ async def set_llm_config(
     existing = await get_llm_config()
 
     # ── models per provider: preserve existing → apply models → apply model(aktif) ──
-    merged_models: Dict[str, str] = {}
-    if existing and existing.get("models"):
-        merged_models = dict(existing["models"])
+    merged_models: Dict[str, str] = dict(existing.get("models") or {}) if existing else {}
     if models:
-        for p in PROVIDERS:
-            v = (models.get(p) or "").strip()
+        for p, v in models.items():
+            v = (v or "").strip()
             if v:
                 merged_models[p] = v
     if model is not None and str(model).strip():
@@ -160,32 +176,54 @@ async def set_llm_config(
     for p in PROVIDERS:
         merged_models.setdefault(p, "")
 
+    # ── names per provider: preserve existing → apply names ──
+    merged_names: Dict[str, str] = dict(existing.get("names") or {}) if existing else {}
+    if names:
+        for p, v in names.items():
+            v = (v or "").strip()
+            if v:
+                merged_names[p] = v
+
     enc_keys: Dict[str, Optional[str]] = {}
+    # Preserve existing ENCRYPTED keys — baca RAW dari DB, JANGAN dari
+    # get_llm_config() (yang mendecrypt). Menulis ulang plaintext = korupsi
+    # Fernet → save berikutnya key menjadi None (data loss). Fix regression.
+    raw_doc = await (await _collection()).find_one({"_id": DOC_ID}) or {}
+    raw_keys = raw_doc.get("keys") or {}
+    for p in raw_keys:
+        enc_keys[p] = raw_keys[p]
+    if keys:
+        for p, v in keys.items():
+            new_val = (v or "").strip()
+            if new_val:
+                enc_keys[p] = _encrypt(new_val)
+            elif p in raw_keys:
+                enc_keys[p] = raw_keys[p]
     for p in PROVIDERS:
-        new_val = ((keys or {}).get(p) or "").strip()
-        if new_val:
-            enc_keys[p] = _encrypt(new_val)
-        elif existing:
-            enc_keys[p] = _encrypt(existing["keys"].get(p) or "")
-        else:
+        if p not in enc_keys:
             enc_keys[p] = None
 
-    merged_base = {p: DEFAULT_BASE_URLS[p] for p in PROVIDERS}
+    merged_base = {p: DEFAULT_BASE_URLS.get(p, "") for p in PROVIDERS}
     # preserve base_url existing utk provider yang TIDAK dikirim (jangan reset ke default)
     if existing:
         for p in PROVIDERS:
             if existing["base_urls"].get(p):
                 merged_base[p] = existing["base_urls"][p]
+        # Preserve existing custom base_urls
+        for p, url in (existing.get("base_urls") or {}).items():
+            if p not in PROVIDERS and url:
+                merged_base[p] = url
     if base_urls:
-        for p in PROVIDERS:
-            v = (base_urls.get(p) or "").strip().rstrip("/")
+        for p, v in base_urls.items():
+            v = (v or "").strip().rstrip("/")
             if v:
                 merged_base[p] = v
 
     emb = dict(embedding or {})
     mode = (emb.get("mode") or "local").lower()
     if mode == "provider":
-        emb["provider"] = (emb.get("provider") or "").lower() if (emb.get("provider") or "").lower() in PROVIDERS else None
+        prov_lower = (emb.get("provider") or "").lower()
+        emb["provider"] = prov_lower if prov_lower in PROVIDERS or prov_lower.startswith("custom-") else None
     else:
         emb = {"mode": "local"}
 
@@ -196,6 +234,7 @@ async def set_llm_config(
         "models": merged_models,
         "base_urls": merged_base,
         "keys": enc_keys,
+        "names": merged_names,
         "embedding": emb,
         "updated_at": _now_iso(),
     }
@@ -215,21 +254,27 @@ async def public_config() -> dict:
             "baseUrls": dict(DEFAULT_BASE_URLS),
             "keys": {p: "unset" for p in PROVIDERS},
             "keysMasked": {p: "" for p in PROVIDERS},
+            "names": {},
             "embedding": {"mode": "local", "provider": None, "model": ""},
             "updatedAt": None,
             "restart_required": False,
+            "toolCalling": {},
         }
     keys = cfg.get("keys") or {}
+    # Include custom providers from config (non-built-in)
+    all_keys = list(PROVIDERS) + [p for p in keys if p not in PROVIDERS]
     return {
         "provider": cfg["provider"],
         "model": cfg["model"],
         "models": cfg.get("models") or {p: "" for p in PROVIDERS},
         "baseUrls": cfg["base_urls"],
-        "keys": {p: ("set" if keys.get(p) else "unset") for p in PROVIDERS},
-        "keysMasked": {p: _mask_key(keys.get(p)) for p in PROVIDERS},
+        "keys": {p: ("set" if keys.get(p) else "unset") for p in all_keys},
+        "keysMasked": {p: _mask_key(keys.get(p)) for p in all_keys},
+        "names": cfg.get("names") or {},
         "embedding": cfg.get("embedding") or {"mode": "local"},
         "updatedAt": cfg.get("updated_at"),
         "restart_required": False,
+        "toolCalling": cfg.get("tool_calling") or {},
     }
 
 
@@ -322,6 +367,107 @@ async def test_llm_connection(provider: str, model: str, base_url: str, api_key:
     except Exception as e:
         return {"ok": False, "latency_ms": None, "error": f"{type(e).__name__}: {str(e)[:180]}"}
 
+
+async def test_tool_calling(provider: str, model: str, base_url: str, api_key: str) -> Dict[str, Any]:
+    """Test whether the LLM supports tool calling by checking if it emits
+    TOOL_CALL lines when instructed. Return {ok, supports_tool_calling, latency_ms, error, reply}."""
+    import time
+    import re
+    from langchain_core.messages import SystemMessage, HumanMessage
+    from langchain_openai import ChatOpenAI
+    saved = await _saved_provider_ctx(provider)
+    key = (api_key or "").strip() or saved["api_key"]
+    base = (base_url or "").strip().rstrip("/") or saved["base_url"]
+    if not key:
+        return {"ok": False, "supports_tool_calling": False, "latency_ms": None,
+                "error": "API key belum diisi (form / tersimpan)", "reply": None}
+
+    system_msg = (
+        "You have one tool available. To use it, emit a TOOL_CALL line.\n"
+        "Tool: get_weather(city: str) — Get current weather for a city.\n"
+        "Syntax: TOOL_CALL: get_weather city=<city_name>\n"
+        "IMPORTANT: Always use the tool when asked about weather. Do NOT answer from memory."
+    )
+    user_msg = "What's the weather in Jakarta?"
+
+    try:
+        llm = ChatOpenAI(model=model, api_key=key, base_url=base, temperature=0.0, max_tokens=100)
+        t0 = time.monotonic()
+        resp = await llm.ainvoke([SystemMessage(content=system_msg), HumanMessage(content=user_msg)])
+        latency = int((time.monotonic() - t0) * 1000)
+        reply = str(resp.content or "")
+
+        # Check if response contains TOOL_CALL pattern
+        has_tool_call = bool(re.search(r'TOOL_CALL\s*:', reply, re.IGNORECASE))
+
+        return {
+            "ok": True,
+            "supports_tool_calling": has_tool_call,
+            "latency_ms": latency,
+            "error": None,
+            "reply": reply[:200],
+        }
+    except Exception as e:
+        return {"ok": False, "supports_tool_calling": False, "latency_ms": None,
+                "error": f"{type(e).__name__}: {str(e)[:180]}", "reply": None}
+
+
+async def save_tool_calling_flag(provider: str, supports: bool) -> None:
+    """Persist tool_calling flag for a provider in llm_settings."""
+    from services.mongodb_client import get_db
+    db = get_db()
+    await db.llm_settings.update_one(
+        {},
+        {"$set": {f"tool_calling.{provider}": supports}},
+        upsert=True,
+    )
+    # WAJIB invalidate — tanpa ini API return toolCalling stale, badge di UI
+    # tak pernah update meski DB sudah tertulis (bug "hasil test tak tersimpan").
+    invalidate_cache()
+
+async def delete_provider(provider_id: str) -> dict:
+    """Remove a custom provider from all fields in llm_settings."""
+    from services.mongodb_client import get_db
+    db = get_db()
+    # Remove from models, base_urls, keys, tool_calling
+    await db.llm_settings.update_one(
+        {},
+        {
+            "$unset": {
+                f"models.{provider_id}": "",
+                f"base_urls.{provider_id}": "",
+                f"keys.{provider_id}": "",
+                f"tool_calling.{provider_id}": "",
+                f"names.{provider_id}": "",
+            }
+        },
+    )
+    invalidate_cache()
+    return {"ok": True}
+
+
+async def clear_provider_key(provider_id: str) -> dict:
+    """Clear credentials for a BUILT-IN provider (key → None). Keeps model/base_url
+    so provider bisa di-add ulang. Bila provider ini sedang AKTIF, reassign active
+    ke provider lain yang masih punya key (jangan biarkan active tanpa key)."""
+    from services.mongodb_client import get_db
+    db = get_db()
+    cfg = await get_llm_config()
+    # Reassign active bila yang di-clear sedang aktif
+    if cfg and cfg.get("provider") == provider_id:
+        fallback = next(
+            (p for p, k in (cfg.get("keys") or {}).items()
+             if p != provider_id and k),
+            "openai",
+        )
+        await db.llm_settings.update_one(
+            {},
+            {"$unset": {f"keys.{provider_id}": ""}, "$set": {"provider": fallback}},
+        )
+    else:
+        await db.llm_settings.update_one({}, {"$unset": {f"keys.{provider_id}": ""}})
+    invalidate_cache()
+    return {"ok": True}
 
 async def test_embedding_connection(provider: str, model: str, base_url: str, api_key: str) -> Dict[str, Any]:
     """Probe embedding endpoint ('tes'). Return {ok, dim, latency_ms, error}.

@@ -174,6 +174,22 @@ METRIC_PATTERNS = [
     # Queue patterns
     (r"(?:queue|pending|backlog)\s*(?:size|length|count)", "queue_size",
      lambda svc: 'rabbitmq_queue_messages{{queue=~"{0}.*"}}'.format(svc)),
+    # Fix #299: Bahasa Indonesia patterns (SIM298: "berapa pemakaian memori X" tidak
+    # match → pre-fetch #298 mati untuk frasa ID). Word-order ID: noun-noun terbalik.
+    (r"(?:pemakaian|penggunaan)\s+(?:memori|memory|ram)", "memory_usage",
+     lambda svc: 'container_memory_working_set_bytes{{pod=~"{0}.*"}}'.format(svc)),
+    (r"(?:pemakaian|penggunaan)\s+(?:cpu|prosesor|processor)", "cpu_usage",
+     lambda svc: 'rate(container_cpu_usage_seconds_total{{pod=~"{0}.*"}}[{1}])'.format(svc, "{window}")),
+    (r"tingkat\s+(?:error|kesalahan|gagal)", "error_rate",
+     lambda svc: 'rate(http_requests_total{{service="{0}",code=~"5.."}}[{1}]) / rate(http_requests_total{{service="{0}"}}[{1}])'.format(svc, "{window}")),
+    (r"(?:jumlah|total)\s+(?:error|kesalahan)", "error_count",
+     lambda svc: 'increase(http_requests_total{{service="{0}",code=~"5.."}}[{1}])'.format(svc, "{window}")),
+    (r"tingkat\s+permintaan", "request_rate",
+     lambda svc: 'rate(http_requests_total{{service="{0}"}}[{1}])'.format(svc, "{window}")),
+    (r"(?:latensi|waktu\s+respons)", "latency",
+     lambda svc: 'histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{{service="{0}"}}[{1}]))'.format(svc, "{window}")),
+    (r"(?:pod|container)\s*(?:restart|crash|mati)", "pod_restart",
+     lambda svc: 'rate(kube_pod_container_status_restarts_total{{pod=~"{0}.*"}}[{1}])'.format(svc, "{window}")),
 ]
 
 # Map common metric shorthand to base metric names
@@ -207,6 +223,17 @@ def _pattern_match(description: str, service_name: str, window: str) -> Optional
                 "confidence": 0.85,
             }
     return None
+
+
+def pattern_match_metric(description: str, service_name: str, window: str) -> Optional[dict]:
+    """Fix #298 (Workstream A): PUBLIC deterministic-only seam untuk pre-fetch.
+
+    Mengembalikan hasil _pattern_match apa adanya (atau None) — TANPA
+    fallback LLM translate_to_promql. Pemanggil pre-fetch (chat_agent) WAJIB
+    lewat sini agar front-gate tetap zero-LLM (amendment CTO: pre-fetch tidak
+    boleh memicu _llm_classify_metric).
+    """
+    return _pattern_match(description, service_name, window)
 
 
 async def _llm_classify_metric(description: str) -> Optional[dict]:

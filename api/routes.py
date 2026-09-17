@@ -556,6 +556,69 @@ async def get_llm_usage(
         raise HTTPException(status_code=500, detail=f"LLM usage fetch error: {str(e)}")
 
 
+@router.get("/llm/usage/{request_id}")
+async def get_llm_usage_by_request_id(
+    request_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Agregat pemakaian LLM per chat turn (LLM_USAGE_TRACE P2).
+
+    Mengelompokkan doc llm_usage berdasarkan request_id (diisi P1 via contextvar)
+    → satu baris per model. Kontrak penting: request_id TIDAK dikenal / turn
+    non-LLM (cache, fallback deterministik, gagal sebelum LLM pertama) wajib
+    kembali HTTP 200 dengan total_calls=0 & models=[] — jangan 404 — agar
+    trace panel FE tidak masuk state error.
+    """
+    try:
+        db = get_db()
+        coll = db["llm_usage"]
+        agg = await coll.aggregate([
+            {"$match": {"request_id": request_id}},
+            {"$group": {
+                "_id": "$model",
+                "provider": {"$first": "$provider"},
+                "calls": {"$sum": 1},
+                "ok": {"$sum": {"$cond": [{"$eq": ["$status", "ok"]}, 1, 0]}},
+                "error": {"$sum": {"$cond": [{"$eq": ["$status", "error"]}, 1, 0]}},
+                "timeout": {"$sum": {"$cond": [{"$eq": ["$status", "timeout"]}, 1, 0]}},
+                "prompt_tokens": {"$sum": {"$ifNull": ["$prompt_tokens", 0]}},
+                "completion_tokens": {"$sum": {"$ifNull": ["$completion_tokens", 0]}},
+                "total_tokens": {"$sum": {"$ifNull": ["$total_tokens", 0]}},
+                "total_latency_ms": {"$sum": {"$ifNull": ["$latency_ms", 0]}},
+            }},
+        ]).to_list(1000)
+
+        models = [
+            {
+                "provider": row.get("provider") or "",
+                "model": row.get("_id") or "",
+                "calls": row.get("calls") or 0,
+                "ok": row.get("ok") or 0,
+                "error": row.get("error") or 0,
+                "timeout": row.get("timeout") or 0,
+                "prompt_tokens": row.get("prompt_tokens") or 0,
+                "completion_tokens": row.get("completion_tokens") or 0,
+                "total_tokens": row.get("total_tokens") or 0,
+                "total_latency_ms": row.get("total_latency_ms") or 0,
+            }
+            for row in agg
+        ]
+
+        return {
+            "request_id": request_id,
+            "total_calls": sum(m["calls"] for m in models),
+            "prompt_tokens": sum(m["prompt_tokens"] for m in models),
+            "completion_tokens": sum(m["completion_tokens"] for m in models),
+            "total_tokens": sum(m["total_tokens"] for m in models),
+            "total_latency_ms": sum(m["total_latency_ms"] for m in models),
+            "models": models,
+        }
+    except Exception as e:
+        logger.error(f"llm/usage/{{request_id}} failed: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"LLM usage fetch error: {str(e)}"
+        )
+
 @router.get("/prompts")
 async def list_prompts():
     """Daftar templat prompt LLM (file-driven, editable via prompts/*.md)."""

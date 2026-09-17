@@ -124,6 +124,14 @@ async def delete_service(service_id: str, admin: dict = Depends(require_admin)):
 
 LLM_PROVIDERS = ("openai", "openrouter", "google", "opencode", "claude")
 
+def _is_valid_provider(p: str) -> bool:
+    """Accept built-in providers AND custom-* pattern (bare template or suffixed id)."""
+    return (
+        p in LLM_PROVIDERS
+        or p.startswith("custom-openai")
+        or p.startswith("custom-anthropic")
+    )
+
 
 class LlmUpdateRequest(BaseModel):
     provider: Optional[str] = None
@@ -131,6 +139,7 @@ class LlmUpdateRequest(BaseModel):
     models: Optional[dict] = None      # Fix #56: model PER provider {provider: model}
     baseUrls: Optional[dict] = None       # {provider: url} — default prefilled, bisa diedit
     apiKey: Optional[dict] = None          # {provider: key} — kosong = pertahankan lama
+    names: Optional[dict] = None           # {provider: displayName} — display names
     embedding: Optional[dict] = None       # {mode: local|provider, provider?, model?}
 
 
@@ -164,8 +173,8 @@ async def llm_config(admin: dict = Depends(require_admin)):
 @router.put("/llm")
 async def update_llm(body: LlmUpdateRequest, admin: dict = Depends(require_admin)):
     from services.llm_config_store import public_config, set_llm_config
-    if body.provider is not None and body.provider not in LLM_PROVIDERS:
-        raise HTTPException(422, f"Provider harus salah satu dari {LLM_PROVIDERS}")
+    if body.provider is not None and not _is_valid_provider(body.provider):
+        raise HTTPException(422, f"Provider harus salah satu dari {list(LLM_PROVIDERS)} atau custom-openai-* / custom-anthropic-*")
     if body.model is not None and not re.match(r"^[\w.\-/:]{2,100}$", body.model):
         raise HTTPException(422, "Nama model tidak valid")
 
@@ -173,7 +182,7 @@ async def update_llm(body: LlmUpdateRequest, admin: dict = Depends(require_admin
     per_provider_models = {}
     if body.models:
         for p, m in (body.models or {}).items():
-            if p not in LLM_PROVIDERS:
+            if not _is_valid_provider(p):
                 raise HTTPException(422, f"Provider model tidak dikenal: {p}")
             mv = (m or "").strip()
             if mv and not re.match(r"^[\w.\-/:]{2,100}$", mv):
@@ -184,7 +193,7 @@ async def update_llm(body: LlmUpdateRequest, admin: dict = Depends(require_admin
     base_urls = {}
     if body.baseUrls:
         for p, v in (body.baseUrls or {}).items():
-            if p not in LLM_PROVIDERS:
+            if not _is_valid_provider(p):
                 raise HTTPException(422, f"Provider base_url tidak dikenal: {p}")
             url = _validate_base_url(v or "", f"base URL {p}")
             if url:
@@ -193,7 +202,7 @@ async def update_llm(body: LlmUpdateRequest, admin: dict = Depends(require_admin
     keys = {}
     if body.apiKey:
         for p, v in (body.apiKey or {}).items():
-            if p not in LLM_PROVIDERS:
+            if not _is_valid_provider(p):
                 raise HTTPException(422, f"Provider key tidak dikenal: {p}")
             vv = (v or "").strip()
             if vv and len(vv) < 20:
@@ -208,14 +217,23 @@ async def update_llm(body: LlmUpdateRequest, admin: dict = Depends(require_admin
             raise HTTPException(422, "embedding.mode harus local atau provider")
         if mode == "provider":
             ep = (emb.get("provider") or "").lower()
-            if ep not in LLM_PROVIDERS:
-                raise HTTPException(422, f"embedding provider harus salah satu dari {LLM_PROVIDERS}")
+            if not _is_valid_provider(ep):
+                raise HTTPException(422, f"embedding provider harus salah satu dari {list(LLM_PROVIDERS)} atau custom-openai-* / custom-anthropic-*")
             if not (emb.get("model") or "").strip():
                 raise HTTPException(422, "model embedding wajib diisi saat mode provider")
         else:
             emb = {"mode": "local"}
 
-    if not (body.provider or body.model or per_provider_models or base_urls or keys or emb):
+    names = {}
+    if body.names:
+        for p, v in (body.names or {}).items():
+            if not _is_valid_provider(p):
+                raise HTTPException(422, f"Provider names tidak dikenal: {p}")
+            vv = (v or "").strip()
+            if vv:
+                names[p] = vv
+
+    if not (body.provider or body.model or per_provider_models or base_urls or keys or names or emb):
         raise HTTPException(422, "Tidak ada perubahan")
 
     existing = await public_config()
@@ -226,6 +244,7 @@ async def update_llm(body: LlmUpdateRequest, admin: dict = Depends(require_admin
     await set_llm_config(
         final_provider, final_model, base_urls, keys, final_embedding,
         models=per_provider_models or None,
+        names=names or None,
     )
 
     # Refresh cache factory → berlaku LANGSUNG (tanpa restart)
@@ -239,8 +258,8 @@ async def update_llm(body: LlmUpdateRequest, admin: dict = Depends(require_admin
 async def test_llm_conn(body: LlmTestRequest, admin: dict = Depends(require_admin)):
     """Test koneksi LLM dgn value form (belum tentu disimpan) — {ok, latency_ms, error}."""
     from services.llm_config_store import test_llm_connection
-    if body.provider not in LLM_PROVIDERS:
-        raise HTTPException(422, f"Provider harus salah satu dari {LLM_PROVIDERS}")
+    if not _is_valid_provider(body.provider):
+        raise HTTPException(422, f"Provider harus salah satu dari {list(LLM_PROVIDERS)} atau custom-openai-* / custom-anthropic-*")
     if not (body.model or "").strip():
         raise HTTPException(422, "model wajib diisi")
     return await test_llm_connection(body.provider, body.model, body.baseUrl, body.apiKey)
@@ -250,12 +269,38 @@ async def test_llm_conn(body: LlmTestRequest, admin: dict = Depends(require_admi
 async def test_llm_embedding(body: LlmTestEmbeddingRequest, admin: dict = Depends(require_admin)):
     """Test koneksi embedding dgn value form — {ok, dim, latency_ms, error}."""
     from services.llm_config_store import test_embedding_connection
-    if body.provider not in LLM_PROVIDERS:
-        raise HTTPException(422, f"Provider harus salah satu dari {LLM_PROVIDERS}")
+    if not _is_valid_provider(body.provider):
+        raise HTTPException(422, f"Provider harus salah satu dari {list(LLM_PROVIDERS)} atau custom-openai-* / custom-anthropic-*")
     if not (body.model or "").strip():
         raise HTTPException(422, "model embedding wajib diisi")
     return await test_embedding_connection(body.provider, body.model, body.baseUrl, body.apiKey)
 
+@router.post("/llm/test-tool-calling")
+async def test_tool_calling_endpoint(body: LlmTestRequest, admin: dict = Depends(require_admin)):
+    """Test apakah LLM support tool calling (TOOL_CALL format) — {ok, supports_tool_calling, latency_ms, error, reply}."""
+    from services.llm_config_store import test_tool_calling, save_tool_calling_flag
+    if not _is_valid_provider(body.provider):
+        raise HTTPException(422, f"Provider harus salah satu dari {list(LLM_PROVIDERS)} atau custom-openai-* / custom-anthropic-*")
+    if not (body.model or "").strip():
+        raise HTTPException(422, "model wajib diisi")
+    result = await test_tool_calling(body.provider, body.model, body.baseUrl, body.apiKey)
+    # Auto-persist flag to DB
+    if result.get("ok"):
+        await save_tool_calling_flag(body.provider, result["supports_tool_calling"])
+    return result
+
+@router.delete("/llm/provider/{provider_id}")
+async def delete_llm_provider(provider_id: str, admin: dict = Depends(require_admin)):
+    """Hapus provider. Custom → dihapus seluruhnya. Built-in → clear credentials saja
+    (provider tetap ada, bisa di-add ulang). Bila yang dihapus sedang aktif, active
+    direassign ke provider lain yang masih punya key."""
+    from services.llm_config_store import clear_provider_key, delete_provider
+    if provider_id.startswith("custom-"):
+        return await delete_provider(provider_id)
+    from services.llm_config_store import PROVIDERS
+    if provider_id not in PROVIDERS:
+        raise HTTPException(422, f"Provider tidak dikenal: {provider_id}")
+    return await clear_provider_key(provider_id)
 
 # ── Observability ──────────────────────────────────────────────────────────────
 

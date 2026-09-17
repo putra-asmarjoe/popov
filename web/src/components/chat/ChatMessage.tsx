@@ -38,7 +38,7 @@ export function ChatMessage({ message }: { message: ChatMessageType }) {
         )}
         <div
           className={cn(
-            "min-w-0 rounded-xl px-3 py-2 text-sm leading-relaxed",
+            "min-w-0 max-w-full rounded-xl px-3 py-2 text-sm leading-relaxed",
             isUser ? "bg-primary text-primary-foreground" : "bg-muted",
             !isUser && traces.length > 0 && "cursor-pointer hover:ring-1 hover:ring-primary/40",
           )}
@@ -50,7 +50,7 @@ export function ChatMessage({ message }: { message: ChatMessageType }) {
           {isUser ? (
             <p className="whitespace-pre-wrap">{message.content}</p>
           ) : (
-            <div className="chat-markdown prose-sm break-words [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-code-block [&_pre]:p-2.5 [&_pre]:text-xs [&_pre]:text-code-block-fg [&_pre]:border [&_pre]:border-code-block-border [&_code]:font-mono [&_p]:my-1.5 [&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-4 [&_strong]:font-semibold [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-sm [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold">
+            <div className="chat-markdown prose-sm break-words min-w-0 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-code-block [&_pre]:p-2.5 [&_pre]:text-xs [&_pre]:text-code-block-fg [&_pre]:border [&_pre]:border-code-block-border [&_code]:font-mono [&_p]:my-1.5 [&_ul]:my-1.5 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:my-1.5 [&_ol]:list-decimal [&_ol]:pl-4 [&_strong]:font-semibold [&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-sm [&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold">
               <ReactMarkdown rehypePlugins={[rehypeHighlight]}>{message.content}</ReactMarkdown>
             </div>
           )}

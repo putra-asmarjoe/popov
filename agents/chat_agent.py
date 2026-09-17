@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib as _contextlib
+import difflib
 import logging
 import re
 from datetime import datetime, timezone
@@ -78,8 +79,26 @@ LANE_TIMEOUT_S_P4 = 48.0  # 8s plan + 5 tools × 8s sequential worst case
 # only at these depths. Low (incl. Telegram default) = reply-only, no tools.
 TOOL_DEPTHS = ("medium", "thinking")
 
+# Fix #297: promise-without-call guard — detect LLM prose that promises
+# a check but omits the actual TOOL_CALL line.
+_PROMISE_PHRASES = (
+    "i will check", "let me check", "saya akan cek", "akan saya periksa",
+    "biar saya cek", "i'll check", "let me look", "i'll look",
+)
+
 INTENT_VALUES = ("explain", "investigate", "compare", "recommend", "execute", "clarify", "follow_up")
 DEFAULT_INTENT = "follow_up"  # D-P2.10: missing tag → safe default
+
+# ── Fix #298 (Workstream A): data-first deterministic pre-fetch ──────────────
+# Max 2 pre-fetch calls per turn (metrics + pod-health), counted against the
+# SAME ToolBudget as TOOL_CALL execution (pre-fetch is not an unlimited path).
+_PREFETCH_MAX_CALLS = 2
+# Grounding instruction for the Plan prompt (plan file §A step 2 — exact wording).
+_PREFETCH_INSTRUCTION = (
+    "[PRE-FETCHED DATA]\n"
+    "Tool data for this turn is ALREADY FETCHED below — ground your answer in it; "
+    "do NOT claim you will check; only emit TOOL_CALL for data NOT already present.\n"
+)
 
 _CURRENT_TOPIC_MAX = 120
 
@@ -367,6 +386,89 @@ def _build_tools_block() -> str:
     )
 
 
+async def _build_tool_ctx(state: dict, topic_service: str) -> dict:
+    """Fix #298: satu sumber tool ctx — dipakai pre-fetch, jalur TOOL_CALL,
+    DAN promise guard (sebelumnya duplikat di dua tempat).
+    topic_service hint: current active topic (plan-turn context). Adapters
+    fall back to state.service_name when empty."""
+    ctx: dict = {"state": dict(state, topic_service=topic_service)}
+    try:
+        from services.observability_store import (
+            get_central_log_config_for_state, get_observ_config_for_state,
+            resolve_k8s_targets_for_state,
+        )
+        ctx["observ_cfg"] = await get_observ_config_for_state(state) or {}
+        ctx["k8s_targets"] = await resolve_k8s_targets_for_state(state) or []
+        ctx["log_cfg"] = await get_central_log_config_for_state(dict(state))
+    except Exception as e:
+        logger.warning(f"[ChatAgent] tool ctx resolve gagal (non-fatal): {e}")
+        ctx.setdefault("observ_cfg", {})
+        ctx.setdefault("k8s_targets", [])
+        ctx.setdefault("log_cfg", None)
+    return ctx
+
+
+def _build_prefetch_calls(state: dict, topic_service: str, message: str,
+                          services: Optional[List[str]] = None) -> List[dict]:
+    """Fix #298 (WA): layered DETERMINISTIC pre-gate + call list (max 2).
+
+    Zero-LLM pre-gate: pure chit-chat matches neither layer → no pre-fetch at
+    all (zero added latency, no ctx resolve, no budget consumption).
+
+    Review fix Major 1 (Fix #298): bila pesan user menyebut service
+    TERDAFTAR yang BERBEDA dari target svc (topic/state) → SKIP semua layer
+    pre-fetch — jangan retarget: angka service salah di bawah instruksi
+    "ALREADY FETCHED" mengubah turn no-data jadi jawaban salah yang percaya
+    diri. Biarkan Plan LLM emit TOOL_CALL dengan service yang benar.
+
+    CTO amendment (locked): metrics layer uses the deterministic pattern-match
+    path ONLY (promql_translator.pattern_match_metric) — NEVER
+    translate_to_promql, whose LLM fallback would charge an LLM call per
+    tools-allowed turn (whack-a-mole as a cost problem).
+    """
+    intent = (message or "").strip()
+    if not intent:
+        return []
+    svc = (topic_service or (state.get("service_name") or "")).strip()
+    if not svc:
+        return []  # both layers need a service target (no fabrication)
+    _svc_low = svc.lower()
+    _intent_low = intent.lower()
+    for _s in services or []:
+        _s_low = (_s or "").strip().lower()
+        # Registered service lain ter-mention eksplisit → target ambigu/lintas
+        # service → pre-fetch dilewati turn ini (konservatif, no wrong data).
+        if _s_low and _s_low != _svc_low and _s_low in _intent_low:
+            return []
+    calls: List[dict] = []
+    try:
+        from services.promql_translator import parse_window_from_text, pattern_match_metric
+
+        _window = parse_window_from_text(intent, default="1h")
+        m = pattern_match_metric(intent, svc, _window)
+        if m and m.get("promql") and m.get("confidence", 0) >= 0.5:
+            calls.append({"name": "prom_range",
+                          "params": {"promql": m["promql"], "window": _window}})
+    except Exception as e:  # non-fatal per layer
+        logger.warning(f"[ChatAgent] pre-fetch metrics gate gagal (non-fatal): {e}")
+    try:
+        from agents.supervisor import _is_pod_health_intent  # satu sumber kebenaran
+        from services.promql_translator import parse_window_from_text
+
+        if _is_pod_health_intent(intent):
+            calls.append({"name": "pod_health",
+                          "params": {"service": svc,
+                                     "window": parse_window_from_text(intent, default="24h")}})
+    except Exception as e:
+        logger.warning(f"[ChatAgent] pre-fetch pod-health gate gagal (non-fatal): {e}")
+    return calls[:_PREFETCH_MAX_CALLS]
+
+
+def _norm_tokens(text: str) -> List[str]:
+    """Fix #298 (WC): normalized lowercase token set (word chars only)."""
+    return sorted(set(re.findall(r"[a-z0-9]+", (text or "").lower())))
+
+
 @_contextlib.asynccontextmanager
 async def _p4_envelope():
     """M1(b): lane wall-clock envelope — plan call + sequential tool fan-out.
@@ -398,7 +500,16 @@ def _format_tool_reply(results: list, locale: str) -> str:
             lines.append(f"- `{name}`: {confirm.format(label=label)}")
             continue
         status = "\u2705" if r.get("ok") else "\u26a0\ufe0f"
-        lines.append(f"{status} `{name}`: {(r.get('result') or '')[:600]}")
+        text = r.get("result") or ""
+        if len(text) > 600:
+            # Truncate at the last newline boundary at/before 600 chars so
+            # whole series/lines survive; hard-slice only if there is no
+            # newline (a single giant line). Ellipsis marks the cut (K4 honest
+            # truncation, never a mid-word/mid-series chop).
+            cut = text.rfind("\n", 0, 600)
+            text = text[:cut] if cut > 0 else text[:600]
+            text = f"{text}\n…"
+        lines.append(f"{status} `{name}`: {text}")
     return "\n".join(lines).strip()
 
 
@@ -507,6 +618,14 @@ async def chat_agent(state: AgentState) -> dict:
     # CHAT3 P3B (D-P3.2): summary + turn counter read (non-fatal get di atas).
     conv_summary = conv_state.get("conversation_summary") \
         if isinstance(conv_state.get("conversation_summary"), str) else ""
+    # Fix #298 (WC): previous-turn signal — dibaca SEBELUM write-back akhir turn.
+    # Frasa user turn sebelumnya sudah terpersist sebagai
+    # topic_context.current_topic (cap 120); keberadaan data tool turn lalu
+    # via flag `previous_turn_had_data` yang dipersist chat_agent turn lalu.
+    prev_intent_text = (topic_context.get("current_topic") or "").strip()
+    _prev_had_data_raw = conv_state.get("previous_turn_had_data")
+    prev_turn_had_data: Optional[bool] = \
+        bool(_prev_had_data_raw) if _prev_had_data_raw is not None else None
 
     services = await _service_names(state)
     ticket_facts = _ticket_facts(state)
@@ -538,6 +657,47 @@ async def chat_agent(state: AgentState) -> dict:
     #    render_prompt leaves unknown vars untouched so old-file deploys stay
     #    valid — but we pass it explicitly here. ────────────────────────────
     _tools_allowed = (state.get("chat_depth") or "low") in TOOL_DEPTHS
+
+    # ── Fix #298 (WA): data-first deterministic pre-fetch (SEBELUM Plan LLM) ──
+    # Invert flow: fetch data deterministically BEFORE trusting the LLM. Max 2
+    # calls, counted against the SAME ToolBudget (record_call on all attempts).
+    # K4 guard: low depth = reply-only, no pre-fetch. Fully non-fatal: any
+    # exception → log + continue with empty prefetch.
+    _prefetched_results: list = []
+    _prefetched_tools: Optional[List[str]] = None
+    prefetched_block = ""
+    _tool_ctx: Optional[dict] = None
+    _budget = None  # shared budget: pre-fetch + TOOL_CALL path
+    _prev_tool_count = 0
+    try:
+        _prev_tool_count = int(conv_state.get("session_tool_count") or 0)
+    except (TypeError, ValueError):
+        _prev_tool_count = 0
+    if _tools_allowed:
+        try:
+            from services.tool_executor import ToolBudget, execute_tool_calls, format_tool_results
+            from services.tool_registry import MAX_TOOLS_PER_TURN
+
+            _prefetch_calls = _build_prefetch_calls(
+                state, topic_service, message, services)
+            if _prefetch_calls:
+                _tool_ctx = await _build_tool_ctx(state, topic_service)
+                _budget = ToolBudget(max_per_turn=MAX_TOOLS_PER_TURN,
+                                     session_count=_prev_tool_count)
+                _prefetched_results, _budget = await execute_tool_calls(
+                    _prefetch_calls, _tool_ctx, _budget)
+                # Render HANYA hasil ok (grounding instruction menuntut data
+                # nyata; hasil gagal dibiarkan — promise guard #297 tetap
+                # jaring pengaman). format_tool_results cap 600 char/tool.
+                _prefetched_ok = [r for r in _prefetched_results
+                                  if r.get("ok") and not r.get("needs_confirmation") and r.get("name")]
+                if _prefetched_ok:
+                    _prefetched_tools = [r["name"] for r in _prefetched_ok]
+                    prefetched_block = _PREFETCH_INSTRUCTION + format_tool_results(_prefetched_ok)
+        except Exception as e:
+            logger.warning(f"[ChatAgent] Fix #298: pre-fetch gagal (non-fatal): {e}")
+            _prefetched_results = []
+
     user_prompt = render_prompt(
         "chat_agent_user",
         message=message or "-",
@@ -551,6 +711,7 @@ async def chat_agent(state: AgentState) -> dict:
         service_list=", ".join(services) if services else "(unknown)",
         reply_language=reply_language,
         tools_block=_build_tools_block() if _tools_allowed else "",
+        prefetched_block=prefetched_block,
     )
 
     # ── Single LLM call (§5.4: satu panggilan, ≤8s, tanpa fan-out) ────────────
@@ -588,6 +749,8 @@ async def chat_agent(state: AgentState) -> dict:
     synthesis_succeeded = False
     synthesis_attempted = False
     _syn_text = ""
+    promise_without_call_fallback: Optional[bool] = None
+    promise_fetched = False  # Fix #298 (WC): guard successfully fetched data
     # CHAT6 P6.3 (W1): last successfully-executed read-only tool this turn
     # (persisted to conversation_state for chip context) + a service derived
     # from tool params (ONLY the explicit `service` param — trivially derivable).
@@ -600,32 +763,66 @@ async def chat_agent(state: AgentState) -> dict:
         from services.tool_registry import MAX_TOOLS_PER_TURN
 
         _parsed_calls = parse_tool_calls(reply_text)
+
+        # Fix #297: promise-without-call guard
+        # If LLM promised to check but didn't emit TOOL_CALL, try deterministic
+        # fallback instead of returning the promise as-is.
+        if not _parsed_calls and any(p in (reply_text or "").lower() for p in _PROMISE_PHRASES):
+            from services.promql_translator import translate_to_promql, parse_window_from_text
+            _svc = state.get("service_name") or topic_service or ""
+            _intent = state.get("intent") or message or ""
+            if _svc and _intent:
+                try:
+                    _window = parse_window_from_text(_intent, default="1h")
+                    _translation = await translate_to_promql(
+                        description=_intent, service_name=_svc, window=_window,
+                    )
+                    _promql = _translation.get("promql")
+                    _conf = _translation.get("confidence", 0)
+                    if _promql and _conf >= 0.5:
+                        # Execute via same tool adapter path
+                        from services.tool_adapters import _prom_range
+                        # Fix #298: ctx via _build_tool_ctx (unified source);
+                        # reuse the pre-fetch ctx when already resolved.
+                        _fc = _tool_ctx or await _build_tool_ctx(state, topic_service)
+                        _ok, _result = await _prom_range(
+                            {"promql": _promql, "window": _window}, _fc,
+                        )
+                        if _ok:
+                            clean_reply = (
+                                f"Here's the data for {_svc}:\n\n{_result}"
+                                if locale == "en" else
+                                f"Berikut data untuk {_svc}:\n\n{_result}"
+                            )
+                            promise_without_call_fallback = True
+                            promise_fetched = True
+                            logger.info("[ChatAgent] Fix #297: promise-without-call → deterministic fallback OK")
+                except Exception as e:
+                    logger.warning(f"[ChatAgent] Fix #297: promise fallback failed: {e}")
+
+            # If fallback didn't succeed, replace promise with honest reply
+            if not promise_without_call_fallback:
+                clean_reply = (
+                    "I wasn't able to retrieve that data automatically. "
+                    "Try using a specific format like: 'memory usage <service> last 6h' "
+                    "or check the Metrics tab directly."
+                    if locale == "en" else
+                    "Saya belum bisa mengambil data tersebut secara otomatis. "
+                    "Coba gunakan format: 'memory usage <service> last 6h' "
+                    "atau buka tab Metrics langsung."
+                )
+                promise_without_call_fallback = True
+                logger.info("[ChatAgent] Fix #297: promise-without-call → honest degraded reply")
+
         if _parsed_calls:
             _parsed_calls = _parsed_calls[:MAX_TOOLS_PER_TURN]  # C3: hard slice
-            try:
-                _prev_tool_count = int(conv_state.get("session_tool_count") or 0)
-            except (TypeError, ValueError):
-                _prev_tool_count = 0
-            _budget = ToolBudget(max_per_turn=MAX_TOOLS_PER_TURN,
-                                 session_count=_prev_tool_count)
-            _tool_ctx: dict = {
-                # topic_service hint: current active topic (plan-turn context).
-                # Adapters fall back to state.service_name when empty.
-                "state": dict(state, topic_service=topic_service),
-            }
-            try:
-                from services.observability_store import (
-                    get_central_log_config_for_state, get_observ_config_for_state,
-                    resolve_k8s_targets_for_state,
-                )
-                _tool_ctx["observ_cfg"] = await get_observ_config_for_state(state) or {}
-                _tool_ctx["k8s_targets"] = await resolve_k8s_targets_for_state(state) or []
-                _tool_ctx["log_cfg"] = await get_central_log_config_for_state(dict(state))
-            except Exception as e:
-                logger.warning(f"[ChatAgent] tool ctx resolve gagal (non-fatal): {e}")
-                _tool_ctx.setdefault("observ_cfg", {})
-                _tool_ctx.setdefault("k8s_targets", [])
-                _tool_ctx.setdefault("log_cfg", None)
+            # Fix #298: budget & ctx SHARED with the pre-fetch path (built above
+            # when pre-fetch ran; build fresh otherwise — one helper, no dup).
+            if _budget is None:
+                _budget = ToolBudget(max_per_turn=MAX_TOOLS_PER_TURN,
+                                     session_count=_prev_tool_count)
+            if _tool_ctx is None:
+                _tool_ctx = await _build_tool_ctx(state, topic_service)
             try:
                 async with _p4_envelope():
                     tool_results, _budget = await execute_tool_calls(
@@ -706,6 +903,11 @@ async def chat_agent(state: AgentState) -> dict:
                                    + _format_tool_reply(_read_results, locale)).strip() \
                         if clean_reply else _format_tool_reply(_read_results, locale)
 
+    # Fix #298 (WA): pre-fetch consumed budget even when the LLM emitted no
+    # TOOL_CALL — persist the cumulative session count so the cap holds.
+    if _budget is not None and new_session_tool_count is None:
+        new_session_tool_count = _budget.session_count
+
     # ── Topic shift (first-class, §5.3) ────────────────────────────────────────
     # TOPIC_SERVICE tervalidasi ≠ topik aktif → overwrite topic_context +
     # RE-ANCHOR investigation_context (reset) — stale findings tidak lolos.
@@ -721,6 +923,25 @@ async def chat_agent(state: AgentState) -> dict:
         if _tool_service else None
     if not effective_service and _validated_tool_service:
         effective_service = _validated_tool_service
+
+    # ── Fix #298 (WC): whack-a-mole rephrase signal (no LLM) ──────────────────
+    # Turn ini menghasilkan data tool? (pre-fetch ok / TOOL_CALL ok / guard
+    # #297 berhasil fetch) → dipersist utk deteksi rephrase turn berikutnya.
+    _turn_had_data = bool(_prefetched_tools) or promise_fetched or any(
+        r.get("ok") for r in tool_results if not r.get("needs_confirmation"))
+    # User mengulang intent serupa setelah turn TANPA data = signature mis-route.
+    # Komparasi: token-set normalized lowercase turn ini vs turn lalu
+    # (topic_context.current_topic), difflib.SequenceMatcher ratio >= 0.6 —
+    # threshold alarm-grade (bukan high-precision): cukup murah tanpa LLM,
+    # menangkap paraphrase ("cek memory svc" vs "berapa pemakaian memori svc")
+    # tapi mengabaikan follow-up topik lain. Flag None bila tak terkomputasi
+    # (turn pertama / turn lalu bukan chat lane).
+    rephrased_after_no_data: Optional[bool] = None
+    if prev_intent_text and prev_turn_had_data is not None:
+        _cur_toks, _prev_toks = _norm_tokens(message), _norm_tokens(prev_intent_text)
+        if _cur_toks and _prev_toks:
+            _sim = difflib.SequenceMatcher(None, _cur_toks, _prev_toks).ratio()
+            rephrased_after_no_data = bool(_sim >= 0.6 and not prev_turn_had_data)
 
     # ── Persist conversation_state (best-effort, non-fatal — K4) ──────────────
     # CHAT3 P3B (D-P3.2): rolling summary — turn_count increment TIAP turn;
@@ -758,6 +979,9 @@ async def chat_agent(state: AgentState) -> dict:
                 # CHAT6 P6.3 (W1): last read-only tool — chip context.
                 **({"last_tool_used": last_tool_used}
                    if last_tool_used else {}),
+                # Fix #298 (WC): data-presence flag utk deteksi rephrase
+                # turn berikutnya (pola additive kwarg session_tool_count).
+                previous_turn_had_data=_turn_had_data,
             )
         except Exception as e:
             logger.warning(f"[ChatAgent] update_conversation_state gagal (non-fatal): {e}")
@@ -963,5 +1187,10 @@ async def chat_agent(state: AgentState) -> dict:
         **({"context_pill": context_pill} if suppress_telegram and context_pill else {}),
         **({"tools_used": _executed_tool_names} if _executed_tool_names else {}),
         **({"synthesis_used": _synthesis_used} if _synthesis_used is not None else {}),
+        **({"promise_without_call_fallback": promise_without_call_fallback} if promise_without_call_fallback is not None else {}),
+        # Fix #298 (WA): tools yang pre-fetch sebelum Plan LLM (telemetry).
+        **({"prefetched_tools": _prefetched_tools} if _prefetched_tools else {}),
+        # Fix #298 (WC): True bila intent serupa diulang setelah turn tanpa data.
+        **({"rephrased_after_no_data": rephrased_after_no_data} if rephrased_after_no_data is not None else {}),
     }
     return result

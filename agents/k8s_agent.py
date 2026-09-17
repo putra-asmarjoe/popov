@@ -80,6 +80,54 @@ _K8S_L = {
 }
 
 
+async def _collect_pod_logs(
+    *,
+    api_url: str,
+    token: str,
+    namespace: str,
+    service_name: str,
+    verify_ssl: bool,
+) -> dict:
+    """Resolve pods lalu fetch logs (maks 2 pod, + previous jika crash)."""
+    from services.k8s_client import resolve_pod_names, get_pod_logs
+
+    pod_names = await resolve_pod_names(
+        api_url=api_url, token=token, namespace=namespace,
+        service_name=service_name, verify_ssl=verify_ssl,
+    )
+    if not pod_names:
+        return {
+            "pod_logs_available": False,
+            "pod_logs_note": (
+                f"No running pods found for '{service_name}' in namespace '{namespace}'. "
+                f"Tried label selectors (app, app.kubernetes.io/name, component) "
+                f"and prefix match."
+            ),
+            "pod_logs": {},
+        }
+
+    logs: Dict[str, str] = {}
+    for pod_name in pod_names[:2]:  # batasi context bloat
+        log_text = await get_pod_logs(
+            api_url=api_url, token=token, namespace=namespace,
+            pod_name=pod_name, tail_lines=100, verify_ssl=verify_ssl,
+        )
+        logs[pod_name] = log_text if log_text else "[No log output]"
+
+        prev_log = await get_pod_logs(
+            api_url=api_url, token=token, namespace=namespace,
+            pod_name=pod_name, tail_lines=50, previous=True, verify_ssl=verify_ssl,
+        )
+        if prev_log and not prev_log.startswith("["):
+            logs[f"{pod_name}__previous_crash"] = prev_log
+
+    return {
+        "pod_logs_available": True,
+        "pod_logs": logs,
+        "pods_resolved": pod_names,
+        "pod_logs_note": f"Fetched logs from {len(logs)} pod(s) in namespace '{namespace}'.",
+    }
+
 async def k8s_agent(state: AgentState) -> dict:
     """
     K8s events collector — no LLM, pure data collection.
@@ -107,6 +155,46 @@ async def k8s_agent(state: AgentState) -> dict:
             state, intent, agents_visited, locale, list_deployments,
             health_probe,
         )
+
+    # Pod logs lane (Fix #296)
+    if intent == "pod_logs":
+        targets = await resolve_k8s_targets_for_state(state)
+        if not targets:
+            return {
+                "k8s_summary": t["no_stack"],
+                "k8s_available": False,
+                "agents_visited": agents_visited,
+            }
+        service = state.get("service_name") or ""
+        all_logs: Dict[str, str] = {}
+        sections: list = []
+        any_ok = False
+        for tgt in targets:
+            ns = state.get("k8s_namespace") or tgt["namespace"] or "default"
+            common = dict(api_url=tgt["api_url"], token=tgt["token"],
+                          verify_ssl=tgt.get("verify_ssl", False))
+            if not await health_probe(**common):
+                sections.append(f"**{tgt['name']}** — {t['unreachable']}")
+                continue
+            result = await _collect_pod_logs(
+                service_name=service, namespace=ns, **common
+            )
+            if result.get("pod_logs_available"):
+                any_ok = True
+                all_logs.update(result.get("pod_logs", {}))
+            sections.append(f"**{tgt['name']}** — {result.get('pod_logs_note', '')}")
+
+        summary = "\n".join(sections) if sections else t["no_stack"]
+        return {
+            "k8s_summary": summary,
+            "k8s_available": any_ok,
+            "k8s_raw": {"pod_logs": all_logs} if all_logs else {},
+            "pod_logs": all_logs,
+            "pod_logs_available": any_ok,
+            "pods_resolved": list(all_logs.keys()),
+            "pod_logs_note": summary,
+            "agents_visited": agents_visited,
+        }
 
     # Fix #268: inventory lane (pods / deployments) — query SEMUA cluster K8s yang
     # ter-resolve utk konteks (project-linked > ws-wide). Project boleh punya >1

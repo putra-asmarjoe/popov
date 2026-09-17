@@ -4,6 +4,7 @@ import { GitBranch, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { AgentGraphSVG } from "@/components/chat/AgentGraphSVG"
 import { AgentNodeDetail } from "@/components/chat/AgentNodeDetail"
+import { LlmUsageSection } from "@/components/chat/LlmUsageSection"
 import type { AgentTrace } from "@/types/chat"
 import { useChatStore } from "@/store/chat.store"
 
@@ -48,6 +49,9 @@ export function AgentTracePanel({ traces, requestId }: { traces: AgentTrace[]; r
         <div className="space-y-4">
           {/* Graph: node cards + koneksi */}
           <AgentGraphSVG traces={traces} selectedAgent={selected} onSelect={setSelected} />
+
+          {/* Fix #302: penggunaan LLM untuk turn ini (di atas detail node) */}
+          <LlmUsageSection requestId={requestId ?? null} />
 
           {/* Detail node terpilih */}
           <div className="border-t pt-3">

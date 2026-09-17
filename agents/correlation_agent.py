@@ -258,6 +258,10 @@ async def correlation_agent(state: AgentState) -> dict:
     """
     service_name = state.get("resolved_service_name") or state.get("service_name", "unknown")
     mongo_summary = state.get("mongo_summary") or "Log MongoDB: Tidak ada data ringkasan."
+    # Fix #296: when pod logs are available and service has no DB config,
+    # replace misleading "no DB config" message with pod logs reference
+    if state.get("service_has_db_config") is False and state.get("pod_logs_available") is True:
+        mongo_summary = "Log pod diambil via Kubernetes API (service tanpa DB log config) — lihat pod_logs."
     metrics_summary = state.get("metrics_summary") or "Metrics Prometheus: Tidak tersedia."
     trace_summary = state.get("trace_summary") or "Trace Tempo: Tidak tersedia."
     span_summary_raw = state.get("span_summary") or ""

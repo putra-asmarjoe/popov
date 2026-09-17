@@ -120,7 +120,17 @@
     "trace_hint": "Lihat jejak agent",
     "trace_label": "agent terlacak",
     "trace_no_data": "Tidak ada data keluaran yang tercatat untuk agent ini.",
-    "trace_panel_title": "Jejak agent"
+    "trace_panel_title": "Jejak agent",
+    "llm_usage": "Penggunaan LLM",
+    "llm_usage_desc": "Apakah balasan ini diproses oleh model bahasa — model apa, berapa token yang dipakai, dan berapa lama.",
+    "llm_calls": "{{count}} panggilan LLM",
+    "tokens_in": "masuk",
+    "tokens_out": "keluar",
+    "llm_processed": "Balasan ini diproses oleh LLM.",
+    "no_llm_calls": "Tidak ada panggilan LLM yang tercatat untuk balasan ini — dilayani secara deterministik (cache atau fallback).",
+    "status_ok": "ok",
+    "status_error": "gagal",
+    "status_timeout": "timeout"
   },
   "warroom": {
     "warroom": "War Room",
@@ -217,6 +227,16 @@
     "label": "Mode tampilan project",
     "classic": "Classic",
     "warroom": "War Room"
+  },
+  "toasts": {
+    "ticket_updated": "Tiket diperbarui",
+    "ticket_update_failed": "Gagal memperbarui tiket",
+    "status_changed": "Status → {{status}}",
+    "status_change_failed": "Gagal mengubah status",
+    "ticket_reopened": "Tiket dibuka kembali",
+    "ticket_reopen_failed": "Gagal membuka ulang tiket",
+    "assign_failed": "Gagal meng-assign",
+    "progress_add_failed": "Gagal menambah catatan"
   },
   "service_picker": {
     "title": "Service Terkait",

@@ -314,9 +314,19 @@ async def triage_agent(state: AgentState) -> dict:
     except Exception as e:
         logger.warning(f"Triage service_type lookup failed (non-fatal): {e}")
 
+    # Set service_has_db_config flag for planner + correlation
+    service_has_db_config = True  # default aman (False-positive lebih murah dari False-negative)
+    try:
+        from services.db_loader import resolve_db_config
+        db_config, _src = await resolve_db_config(service, state.get("workspace_id"))
+        service_has_db_config = bool(db_config and db_config.get("uri") and db_config.get("db"))
+    except Exception as e:
+        logger.warning(f"Triage resolve_db_config failed (non-fatal, defaulting True): {e}")
+
     return {
         "triage_result": triage_result,
         "next_agent": "mongo_agent",
         "service_type": service_type,
+        "service_has_db_config": service_has_db_config,
         "agents_visited": agents_visited,
     }

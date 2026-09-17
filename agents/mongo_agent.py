@@ -116,6 +116,7 @@ async def mongo_agent(state: AgentState) -> dict:
                 f"Analisis mengandalkan observability (metrics/trace/alert)."
             ),
             "mongo_available": False,
+            "service_has_db_config": False,
             "next_agent": "response_agent",
             "agents_visited": agents_visited,
         }

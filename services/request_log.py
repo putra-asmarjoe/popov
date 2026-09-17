@@ -224,6 +224,17 @@ async def update_request_log(
     update["synthesis_used"] = (
         bool(state["synthesis_used"]) if state.get("synthesis_used") is not None else None
     )
+    # Fix #298 telemetry (whack-a-mole detector): promise-guard activation +
+    # data-first pre-fetch + rephrase signal — basis metrik fallback rate.
+    update["promise_without_call_fallback"] = (
+        bool(state["promise_without_call_fallback"])
+        if state.get("promise_without_call_fallback") is not None else None
+    )
+    update["prefetched_tools"] = state.get("prefetched_tools") or None
+    update["rephrased_after_no_data"] = (
+        bool(state["rephrased_after_no_data"])
+        if state.get("rephrased_after_no_data") is not None else None
+    )
 
     try:
         db = get_db()

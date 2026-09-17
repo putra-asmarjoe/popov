@@ -149,6 +149,15 @@ class AgentState(TypedDict):
     k8s_node: Optional[str]              # specific node name for node_pressure queries
     k8s_namespace: Optional[str]         # override namespace (default: from observ_config)
 
+    # Pod logs (Fix #296)
+    pod_logs: Optional[Dict[str, str]]          # {pod_name: log_text, "pod__previous_crash": ...}
+    pod_logs_available: Optional[bool]
+    pods_resolved: Optional[List[str]]
+    pod_logs_note: Optional[str]
+
+    # DB config presence flag (set by triage, consumed by planner + correlation)
+    service_has_db_config: Optional[bool]
+
     # Fix #40 — notifikasi multi-bot: channel asal pesan masuk (mention/callback/webhook).
     # Diisi listener/webhook; response_agent membalas via channel ini saja.
     origin_notif_id: Optional[str]
@@ -191,5 +200,8 @@ class AgentState(TypedDict):
     chat_agent_used: Optional[bool]    # P5.1 telemetry — True iff next_agent == chat_agent
     tools_used: Optional[List[str]]    # P5.1/R3 telemetry — nama tool yang dieksekusi per turn (chat_agent)
     synthesis_used: Optional[bool]     # P5.5/R4 telemetry — True iff synthesis pass composed the final reply (chat_agent)
+    promise_without_call_fallback: Optional[bool]  # Fix #297: True iff promise guard activated (LLM promised but no TOOL_CALL)
+    prefetched_tools: Optional[List[str]]  # Fix #298/A telemetry — tools deterministically pre-fetched before the Plan LLM (chat_agent)
+    rephrased_after_no_data: Optional[bool]  # Fix #298/C telemetry — similar intent re-sent after a no-data turn (whack-a-mole alarm)
 
 

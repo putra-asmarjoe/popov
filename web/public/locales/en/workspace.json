@@ -34,6 +34,15 @@
       "key_regex": "Letters/alphanumeric only, no spaces"
     }
   },
+  "toasts": {
+    "workspace_create_failed": "Failed to create workspace",
+    "project_create_failed": "Failed to create project",
+    "project_rename_failed": "Failed to rename project",
+    "member_invite_failed": "Failed to invite member",
+    "member_remove_failed": "Failed to remove member",
+    "project_delete_failed": "Failed to delete project",
+    "project_deleted": "Project deleted — {{services}} service(s) detached, {{targets}} notification target(s) updated"
+  },
   "rename_project": {
     "title": "Rename project",
     "description": "Only the name changes — key {{key}} and the project page link stay the same.",

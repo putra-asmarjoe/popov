@@ -1,7 +1,17 @@
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
-import { HardDrive, KeyRound, Loader2, Pencil, PlugZap, Plus, Zap } from "lucide-react"
+import { HardDrive, KeyRound, Loader2, Pencil, PlugZap, Plus, Trash2, Zap } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import {
   Dialog,
   DialogContent,
@@ -19,9 +29,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useQueryClient } from "@tanstack/react-query"
 import { cn } from "@/lib/utils"
 import { api, apiErrorMessage } from "@/lib/api"
-import { useLlmConfig, useUpdateLlm } from "@/hooks/useManagement"
+import { useLlmConfig, useUpdateLlm, useDeleteLlmProvider } from "@/hooks/useManagement"
 
 const PROVIDERS = [
   { id: "openai", label: "OpenAI" },
@@ -77,6 +88,9 @@ export function ApiKeyForm() {
   const { t } = useTranslation("management")
   const { data, isLoading } = useLlmConfig()
   const update = useUpdateLlm()
+  // Invalidate cache react-query setelah test — supaya badge toolCalling di baris
+  // langsung update (bukan cuma chip lokal yang hilang saat reload).
+  const qc = useQueryClient()
 
   const [testing, setTesting] = useState<"llm" | "embed" | null>(null)
   const [lastTest, setLastTest] = useState<"llm" | "embed" | null>(null)
@@ -84,6 +98,9 @@ export function ApiKeyForm() {
   // Test koneksi tersimpan langsung dari baris list — tanpa buka modal
   const [rowTesting, setRowTesting] = useState<string | null>(null)
   const [rowResult, setRowResult] = useState<{ id: string; text: string } | null>(null)
+  // Delete provider — hook WAJIB di atas sebelum early-return (Rules of Hooks)
+  const delMutation = useDeleteLlmProvider()
+  const [deleting, setDeleting] = useState<string | null>(null)
 
   const runSavedTest = async (
     id: string,
@@ -101,10 +118,29 @@ export function ApiKeyForm() {
         { provider: ep, model: mdl, baseUrl: "", apiKey: "" },
       )
       if (res.ok) {
-        setRowResult({
-          id,
-          text: `✅ OK · ${res.latency_ms}ms` + (res.dim ? ` · dim=${res.dim}` : ""),
-        })
+        let resultText = `✅ OK · ${res.latency_ms}ms` + (res.dim ? ` · dim=${res.dim}` : "")
+        // After connectivity test succeeds for LLM, also run tool-calling test
+        if (kind === "llm") {
+          try {
+            const { data: tcRes } = await api.post(
+              "/config/llm/test-tool-calling",
+              { provider: ep, model: mdl, baseUrl: "", apiKey: "" },
+            )
+            if (tcRes.ok) {
+              const tcIcon = tcRes.supports_tool_calling ? "✓" : "✗"
+              const tcLabel = tcRes.supports_tool_calling ? "Tool Calling" : "No Tool Calling"
+              resultText += ` · ${tcIcon} ${tcLabel}`
+              // Backend persist flag + invalidate cache server; refresh data
+              // di sini supaya badge baris langsung terlihat (bukan setelah reload).
+              qc.invalidateQueries({ queryKey: ["config", "llm"] })
+            }
+          } catch {
+            // Tool calling test failed — don't block connectivity result
+          }
+        }
+        setRowResult({ id, text: resultText })
+        // TC gagal pun tetap refresh — flag bisa berubah ke false.
+        qc.invalidateQueries({ queryKey: ["config", "llm"] })
       } else {
         setRowResult({ id, text: `❌ ${res.error ?? "failed"}` })
       }
@@ -119,9 +155,12 @@ export function ApiKeyForm() {
   const [llmModal, setLlmModal] = useState<{
     mode: "add" | "edit"
     provider: string
+    name: string
     baseUrl: string
     key: string
-    model: string // Fix #56: model per provider
+    model: string
+    // Custom provider fields (used when provider starts with 'custom-')
+    providerId?: string
   } | null>(null)
   // Modal Embedding (konfigurasi embedding provider)
   const [embModal, setEmbModal] = useState<{ provider: string; model: string; maxChars: number } | null>(null)
@@ -132,10 +171,29 @@ export function ApiKeyForm() {
 
   const bUrl = (p: string) => data.baseUrls[p] ?? ""
   const mModel = (p: string) => data.models?.[p] ?? data.model ?? ""
-  const isSet = (p: string) => data.keys[p] === "set"
+  const isSet = (p: string) => data.keys?.[p] === "set"
   const isActive = (p: string) => data.provider === p
-  const addedProviders = PROVIDERS.filter((p) => isSet(p.id))
   const availableProviders = PROVIDERS.filter((p) => !isSet(p.id))
+  // Custom provider ids — gabungkan dari models/base_urls/names (bisa ada di salah satunya)
+  const customIds = Array.from(
+    new Set([
+      ...Object.keys(data.models || {}),
+      ...Object.keys(data.baseUrls || {}),
+      ...Object.keys(data.names || {}),
+    ]),
+  ).filter((id) => id.startsWith("custom-"))
+  // SATU list unify: built-in yang sudah di-set + semua custom (bisa >1)
+  const providerRows = [
+    ...PROVIDERS.filter((p) => isSet(p.id)).map((p) => ({
+      id: p.id,
+      name: data.names?.[p.id] || p.label,
+      isCustom: false,
+    })),
+    ...customIds.map((id) => ({ id, name: data.names?.[id] || id, isCustom: true })),
+  ]
+  // Resolusi nama tampilan untuk konfirmasi hapus (builtin label / custom name / id)
+  const rowName = (id: string) =>
+    data.names?.[id] || PROVIDERS.find((p) => p.id === id)?.label || id
 
   const runTest = async (
     kind: "llm" | "embed",
@@ -154,10 +212,28 @@ export function ApiKeyForm() {
         { provider: ep, model: mdl, baseUrl: url, apiKey: key },
       )
       if (res.ok) {
-        setTestResult(
+        let resultText =
           `✅ ${kind === "llm" ? "LLM" : "Embedding"} OK · ${res.latency_ms}ms` +
-            (res.dim ? ` · dim=${res.dim}` : ""),
-        )
+            (res.dim ? ` · dim=${res.dim}` : "")
+        // After connectivity test succeeds for LLM, also run tool-calling test
+        if (kind === "llm") {
+          try {
+            const { data: tcRes } = await api.post(
+              "/config/llm/test-tool-calling",
+              { provider: ep, model: mdl, baseUrl: "", apiKey: "" },
+            )
+            if (tcRes.ok) {
+              const tcIcon = tcRes.supports_tool_calling ? "✓" : "✗"
+              const tcLabel = tcRes.supports_tool_calling ? "Tool Calling" : "No Tool Calling"
+              resultText += ` · ${tcIcon} ${tcLabel}`
+              qc.invalidateQueries({ queryKey: ["config", "llm"] })
+            }
+          } catch {
+            // Tool calling test failed — don't block connectivity result
+          }
+        }
+        setTestResult(resultText)
+        qc.invalidateQueries({ queryKey: ["config", "llm"] })
       } else {
         setTestResult(`❌ ${res.error ?? "gagal"}`)
       }
@@ -170,6 +246,14 @@ export function ApiKeyForm() {
 
   const activateProvider = (p: string) => update.mutate({ provider: p })
 
+  // Delete unify: custom → hapus total; built-in → clear credentials (bisa di-add ulang).
+  // Konfirmasi pakai AlertDialog (pola yang sama dgn delete di tempat lain), bukan confirm().
+  const handleDeleteProvider = (providerId: string) => {
+    delMutation.mutate(providerId, {
+      onSuccess: () => setDeleting(null),
+    })
+  }
+
   const closeLlmModal = () => {
     setLlmModal(null)
     setTestResult(null)
@@ -179,20 +263,30 @@ export function ApiKeyForm() {
   const openLlmAdd = () => {
     setTestResult(null)
     setLastTest(null)
-    const defaultProvider = availableProviders[0]?.id ?? PROVIDERS[0].id
+    const defaultProvider = availableProviders[0]?.id ?? "custom-openai"
     setLlmModal({
       mode: "add",
       provider: defaultProvider,
-      // Auto-fill base URL default untuk provider pilihan — user tetap bisa edit.
+      name: "",
       baseUrl: DEFAULT_BASE_URLS[defaultProvider] ?? "",
       key: "",
       model: "",
     })
   }
-  const openLlmEdit = (p: string) => {
+  // Edit unify: deteksi custom → set providerId supaya saveLlmModal menulis ke id benar.
+  // Builtin & custom sekarang satu jalur.
+  const openEdit = (providerId: string) => {
     setTestResult(null)
     setLastTest(null)
-    setLlmModal({ mode: "edit", provider: p, baseUrl: bUrl(p), key: "", model: mModel(p) })
+    setLlmModal({
+      mode: "edit",
+      provider: providerId,
+      providerId: providerId.startsWith("custom-") ? providerId : undefined,
+      name: data.names?.[providerId] ?? "",
+      baseUrl: bUrl(providerId),
+      key: "",
+      model: mModel(providerId),
+    })
   }
 
   const saveLlmModal = () => {
@@ -200,11 +294,30 @@ export function ApiKeyForm() {
     const patch: {
       baseUrls?: Record<string, string>
       apiKey?: Record<string, string>
-      models?: Record<string, string> // Fix #56
+      models?: Record<string, string>
+      names?: Record<string, string>
     } = {}
-    if (llmModal.baseUrl.trim()) patch.baseUrls = { [llmModal.provider]: llmModal.baseUrl.trim() }
-    if (llmModal.key.trim().length >= 20) patch.apiKey = { [llmModal.provider]: llmModal.key.trim() }
-    if (llmModal.model.trim()) patch.models = { [llmModal.provider]: llmModal.model.trim() }
+
+    if (llmModal.mode === "add" && llmModal.provider.startsWith("custom-")) {
+      // Generate unique ID using max-based approach
+      const typePrefix = llmModal.provider // "custom-openai" or "custom-anthropic"
+      const existingIds = Object.keys(data?.models || {}).filter(k => k.startsWith(typePrefix))
+      const maxN = existingIds.reduce((max, id) => {
+        const num = parseInt(id.split('-').pop() || '0', 10)
+        return num > max ? num : max
+      }, 0)
+      const providerId = `${typePrefix}-${maxN + 1}`
+      if (llmModal.baseUrl.trim()) patch.baseUrls = { [providerId]: llmModal.baseUrl.trim() }
+      if (llmModal.key.trim().length >= 20) patch.apiKey = { [providerId]: llmModal.key.trim() }
+      if (llmModal.model.trim()) patch.models = { [providerId]: llmModal.model.trim() }
+      if (llmModal.name.trim()) patch.names = { [providerId]: llmModal.name.trim() }
+    } else {
+      const targetId = llmModal.providerId || llmModal.provider
+      if (llmModal.baseUrl.trim()) patch.baseUrls = { [targetId]: llmModal.baseUrl.trim() }
+      if (llmModal.key.trim().length >= 20) patch.apiKey = { [targetId]: llmModal.key.trim() }
+      if (llmModal.model.trim()) patch.models = { [targetId]: llmModal.model.trim() }
+      if (llmModal.name.trim()) patch.names = { [targetId]: llmModal.name.trim() }
+    }
     update.mutate(patch, { onSuccess: () => closeLlmModal() })
   }
 
@@ -253,8 +366,22 @@ export function ApiKeyForm() {
     }
   }
 
+  // Warning banner when active provider doesn't support tool calling
+  const showToolCallingWarning = data?.provider && data?.toolCalling?.[data.provider] === false
+
   return (
     <div className="max-w-3xl space-y-7">
+      {/* Warning: active LLM doesn't support tool calling */}
+      {showToolCallingWarning && (
+        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
+          <p className="text-sm text-yellow-800 dark:text-yellow-200">
+            ⚠️ <strong>Tool calling not supported</strong> — Your active LLM (<code>{data.models?.[data.provider] ?? data.provider}</code>)
+            does not support tool calling. This may reduce response accuracy for real-time data queries
+            (metrics, logs, K8s). Consider switching to a model with tool-calling support.
+          </p>
+        </div>
+      )}
+
       {/* Header */}
       <div>
         <h2 className="text-lg font-semibold tracking-tight">{t("apikeys.title")}</h2>
@@ -274,34 +401,48 @@ export function ApiKeyForm() {
           <Button
             size="sm"
             className="gap-1.5"
-            disabled={availableProviders.length === 0 || update.isPending}
+            disabled={update.isPending}
             onClick={openLlmAdd}
           >
             <Plus className="size-4" /> {t("apikeys.add_provider")}
           </Button>
         </div>
 
-        {/* List kredensial provider */}
+        {/* List kredensial provider (built-in + custom) */}
         <div className="mt-3 overflow-hidden rounded-xl border bg-background">
-          {addedProviders.length === 0 ? (
+          {providerRows.length === 0 ? (
             <div className="flex items-center gap-2 px-4 py-6 text-xs text-muted-foreground">
               <KeyRound className="size-4 shrink-0" />
               {t("apikeys.empty_credentials")}
             </div>
           ) : (
             <ul className="divide-y">
-              {addedProviders.map((p) => (
-                <li key={p.id} className="flex items-center gap-3 px-3 py-2.5">
+              {providerRows.map((row) => (
+                <li key={row.id} className="flex items-center gap-3 px-3 py-2.5">
                   <KeyRound className="size-4 shrink-0 text-primary" />
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium">{p.label}</span>
-                      {isActive(p.id) && <ActiveBadge label={t("apikeys.active_llm_badge")} />}
+                      <span className="text-sm font-medium">{row.name}</span>
+                      {row.isCustom && (
+                        <span className="font-mono text-[10px] text-muted-foreground">{row.id}</span>
+                      )}
+                      {isActive(row.id) && <ActiveBadge label={t("apikeys.active_llm_badge")} />}
                     </div>
                     <span className="font-mono text-[11px] text-muted-foreground">
-                      {mModel(p.id) || "-"} · {data.keysMasked[p.id]}
+                      {mModel(row.id) || "-"} · {data.keysMasked[row.id]}
                     </span>
-                    {rowResult?.id === p.id && !rowTesting && (
+                    <span className="ml-2 inline-flex items-center gap-1 text-[11px]">
+                      {data.toolCalling?.[row.id] === true && (
+                        <span className="font-mono text-[11px] text-muted-foreground">✓ Tool Calling</span>
+                      )}
+                      {data.toolCalling?.[row.id] === false && (
+                        <span className="font-mono text-[11px] text-muted-foreground">✗ No Tool Calling</span>
+                      )}
+                      {data.toolCalling?.[row.id] === undefined && (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </span>
+                    {rowResult?.id === row.id && !rowTesting && (
                       <div className="mt-1.5">
                         <TestResultChip text={rowResult.text} />
                       </div>
@@ -312,20 +453,22 @@ export function ApiKeyForm() {
                       variant="ghost"
                       size="sm"
                       className="h-7 gap-1 text-xs"
-                      disabled={rowTesting !== null || testing !== null || !isSet(p.id)}
+                      // Semua provider harus bisa dites. Tanpa key, backend kasih error
+                      // "API key belum diisi" — lebih jelas dari tombol grayed-out.
+                      disabled={rowTesting !== null || testing !== null}
                       title={t("apikeys.test_saved_title")}
-                      onClick={() => runSavedTest(p.id, "llm", p.id, mModel(p.id))}
+                      onClick={() => runSavedTest(row.id, "llm", row.id, mModel(row.id))}
                     >
-                      <PlugZap className={cn("size-3 mr-0.5", rowTesting === p.id && "animate-pulse")} />
-                      {rowTesting === p.id ? "…" : "Test"}
+                      <PlugZap className={cn("size-3 mr-0.5", rowTesting === row.id && "animate-pulse")} />
+                      {rowTesting === row.id ? "…" : "Test"}
                     </Button>
-                    {!isActive(p.id) && (
+                    {!isActive(row.id) && (
                       <Button
                         variant="outline"
                         size="sm"
                         className="h-7 gap-1 text-xs"
                         disabled={update.isPending}
-                        onClick={() => activateProvider(p.id)}
+                        onClick={() => activateProvider(row.id)}
                       >
                         <Zap className="size-3" /> {t("apikeys.make_active")}
                       </Button>
@@ -334,9 +477,19 @@ export function ApiKeyForm() {
                       variant="ghost"
                       size="sm"
                       className="h-7 gap-1 text-xs"
-                      onClick={() => openLlmEdit(p.id)}
+                      onClick={() => openEdit(row.id)}
                     >
                       <Pencil className="size-3" /> Edit
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 gap-1 text-xs text-destructive hover:text-destructive"
+                      disabled={delMutation.isPending}
+                      aria-label={t("apikeys.delete_label", { name: row.name })}
+                      onClick={() => setDeleting(row.id)}
+                    >
+                      <Trash2 className="size-3" />
                     </Button>
                   </div>
                 </li>
@@ -344,7 +497,10 @@ export function ApiKeyForm() {
             </ul>
           )}
         </div>
+
       </div>
+
+
 
       {/* ── Embedding (Second Brain) ── */}
       <div className="rounded-xl border bg-background p-4">
@@ -475,7 +631,9 @@ export function ApiKeyForm() {
             <DialogTitle>
               {llmModal?.mode === "edit"
                 ? t("apikeys.llm_modal_edit_title", {
-                    provider: PROVIDERS.find((p) => p.id === llmModal.provider)?.label ?? "",
+                    provider: llmModal.providerId
+                      ? (llmModal.name || llmModal.provider)
+                      : (PROVIDERS.find((p) => p.id === llmModal.provider)?.label ?? ""),
                   })
                 : t("apikeys.llm_modal_add_title")}
             </DialogTitle>
@@ -496,9 +654,11 @@ export function ApiKeyForm() {
                       const prevDefault = DEFAULT_BASE_URLS[s.provider] ?? ""
                       const shouldAutofill =
                         !s.baseUrl.trim() || s.baseUrl.trim() === prevDefault
+                      const newLabel = PROVIDERS.find((p) => p.id === v)?.label ?? ""
                       return {
                         ...s,
                         provider: v,
+                        name: s.name.trim() ? s.name : newLabel,
                         baseUrl: shouldAutofill ? (DEFAULT_BASE_URLS[v] ?? "") : s.baseUrl,
                       }
                     })
@@ -510,17 +670,27 @@ export function ApiKeyForm() {
                     {(llmModal.mode === "add" ? availableProviders : PROVIDERS).map((p) => (
                       <SelectItem key={p.id} value={p.id}>{p.label}</SelectItem>
                     ))}
+                    {llmModal.mode === "add" && (
+                      <>
+                        <SelectItem value="custom-openai">OpenAI Compatible (Custom)</SelectItem>
+                        <SelectItem value="custom-anthropic">Anthropic Compatible (Custom)</SelectItem>
+                      </>
+                    )}
+                    {llmModal.mode === "edit" && llmModal.provider.startsWith("custom-") && (
+                      <SelectItem value={llmModal.provider}>
+                        {llmModal.name || data.names?.[llmModal.provider] || llmModal.provider}
+                      </SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="llm-modal-model">{t("apikeys.model_label")}</Label>
+                <Label htmlFor="llm-modal-name">Name</Label>
                 <Input
-                  id="llm-modal-model"
-                  value={llmModal.model}
-                  onChange={(e) => setLlmModal((s) => (s ? { ...s, model: e.target.value } : s))}
-                  placeholder={t("apikeys.model_placeholder")}
-                  className="font-mono text-xs"
+                  id="llm-modal-name"
+                  value={llmModal.name}
+                  onChange={(e) => setLlmModal((s) => (s ? { ...s, name: e.target.value } : s))}
+                  placeholder="Display name for this provider"
                 />
               </div>
               <div className="space-y-1.5">
@@ -543,6 +713,16 @@ export function ApiKeyForm() {
                   placeholder={t("apikeys.key_placeholder")}
                   className="font-mono text-xs"
                   autoComplete="off"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="llm-modal-model">{t("apikeys.model_label")}</Label>
+                <Input
+                  id="llm-modal-model"
+                  value={llmModal.model}
+                  onChange={(e) => setLlmModal((s) => (s ? { ...s, model: e.target.value } : s))}
+                  placeholder={t("apikeys.model_placeholder")}
+                  className="font-mono text-xs"
                 />
               </div>
               <div className="flex flex-col items-stretch gap-2">
@@ -665,6 +845,30 @@ export function ApiKeyForm() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Konfirmasi hapus provider — pola AlertDialog yg sama dgn delete lain */}
+      <AlertDialog open={!!deleting} onOpenChange={(open) => !open && setDeleting(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("apikeys.delete_confirm_title")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleting?.startsWith("custom-")
+                ? t("apikeys.delete_confirm_desc_custom", { name: rowName(deleting ?? "") })
+                : t("apikeys.delete_confirm_desc_builtin", { name: rowName(deleting ?? "") })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("action.cancel", { ns: "common" })}</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={delMutation.isPending}
+              onClick={() => deleting && handleDeleteProvider(deleting)}
+            >
+              {t("apikeys.delete_confirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

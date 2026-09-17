@@ -23,6 +23,8 @@ export interface LlmConfig {
   keys: Record<string, "set" | "unset">
   keysMasked: Record<string, string>
   embedding: { mode: "local" | "provider"; provider?: string | null; model?: string; maxChars?: number }
+  toolCalling?: Record<string, boolean>  // per-provider tool-calling support flag
+  names?: Record<string, string>  // display names per provider
   restart_required?: boolean
 }
 
@@ -95,6 +97,7 @@ export function useUpdateLlm() {
       models?: Record<string, string> // Fix #56
       baseUrls?: Record<string, string>
       apiKey?: Record<string, string>
+      names?: Record<string, string>  // display names per provider
       embedding?: { mode: string; provider?: string; model?: string; maxChars?: number }
     }) => (await api.put("/config/llm", input)).data as LlmConfig,
     onSuccess: (data) => {
@@ -102,6 +105,20 @@ export function useUpdateLlm() {
       qc.setQueryData(["config", "llm"], data)
     },
     onError: (e) => toast.error(apiErrorMessage(e, t("toasts.llm_save_failed"))),
+  })
+}
+
+export function useDeleteLlmProvider() {
+  const { t } = useTranslation("common")
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (providerId: string) =>
+      (await api.delete(`/config/llm/provider/${providerId}`)).data,
+    onSuccess: () => {
+      toast.success(t("toasts.llm_provider_deleted"))
+      qc.invalidateQueries({ queryKey: ["config", "llm"] })
+    },
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.llm_delete_failed"))),
   })
 }
 

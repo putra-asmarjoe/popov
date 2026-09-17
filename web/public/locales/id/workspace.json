@@ -34,6 +34,15 @@
       "key_regex": "Huruf/karakter alfanumerik, tanpa spasi"
     }
   },
+  "toasts": {
+    "workspace_create_failed": "Gagal membuat workspace",
+    "project_create_failed": "Gagal membuat project",
+    "project_rename_failed": "Gagal rename project",
+    "member_invite_failed": "Gagal mengundang member",
+    "member_remove_failed": "Gagal mengeluarkan member",
+    "project_delete_failed": "Gagal menghapus project",
+    "project_deleted": "Project dihapus — {{services}} service dilepas, {{targets}} target notif/stack diperbarui"
+  },
   "rename_project": {
     "title": "Rename project",
     "description": "Hanya nama yang berubah — key {{key}} dan link halaman project tetap sama.",

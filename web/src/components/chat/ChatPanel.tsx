@@ -149,9 +149,9 @@ export function ChatPanel({
         {isLoading && <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" />}
       </div>
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1">
         {/* Chat area */}
-        <div className="flex h-full min-h-0 flex-1 flex-col">
+        <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
           {ticketSession ? (
             <>
               <ChatMessages

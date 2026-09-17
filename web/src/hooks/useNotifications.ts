@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
+import { useTranslation } from "react-i18next"
 import { api, apiErrorMessage } from "@/lib/api"
 import type { NotificationsResponse } from "@/types/notification"
 
@@ -19,6 +20,7 @@ export function useNotifications(limit = 20, unreadOnly = false) {
 
 /** Tandai terbaca. ids kosong/undefined = semua. */
 export function useMarkRead() {
+  const { t } = useTranslation("settings")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (ids?: string[]) => {
@@ -28,6 +30,6 @@ export function useMarkRead() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["notifications"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal menandai notifikasi")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.notification_mark_failed"))),
   })
 }

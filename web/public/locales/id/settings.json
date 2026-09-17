@@ -222,5 +222,20 @@
     "no_bot": "Belum ada bot",
     "link_label": "Link notifikasi"
   },
+  "toasts": {
+    "channel_create_failed": "Gagal membuat channel (cek kredensial)",
+    "channel_updated": "Channel diperbarui",
+    "channel_delete_failed": "Gagal hapus channel",
+    "channel_link_failed": "Gagal mengubah link channel",
+    "service_save_failed": "Gagal menyimpan service",
+    "service_update_failed": "Gagal memperbarui service",
+    "service_delete_failed": "Gagal menghapus service",
+    "knowledge_add_failed": "Gagal menambahkan knowledge",
+    "knowledge_remove_failed": "Gagal melepas knowledge",
+    "service_link_failed": "Gagal menambahkan service",
+    "service_unlink_failed": "Gagal melepas service",
+    "service_unlink_owner_only": "Gagal melepas koneksi — hanya pemilik service",
+    "notification_mark_failed": "Gagal menandai notifikasi"
+  },
   "stack_selector_no_stack": "Belum ada stack"
 }

@@ -182,6 +182,7 @@ async def update_conversation_state(
     turn_count: Optional[int] = None,  # CHAT3 P3B (D-P3.2)
     session_tool_count: Optional[int] = None,  # CHAT3 P4 (C3)
     last_tool_used: Optional[str] = None,  # CHAT6 P6.3 (chip context)
+    previous_turn_had_data: Optional[bool] = None,  # Fix #298 (WC) rephrase signal
 ) -> bool:
     """CHAT3 §5.3 (P2, D-P2.11) — tulis sub-block `conversation_state` ($set).
 
@@ -244,6 +245,11 @@ async def update_conversation_state(
         _ltu = str(last_tool_used).strip()
         if _ltu:
             set_fields["conversation_state.last_tool_used"] = _ltu
+    if previous_turn_had_data is not None:
+        # Fix #298 (WC): apakah turn chat_agent sebelumnya menghasilkan data
+        # tool (pre-fetch ok / TOOL_CALL ok / promise guard fetch) — sinyal
+        # kedua untuk deteksi rephrase ("whack-a-mole") turn berikutnya.
+        set_fields["conversation_state.previous_turn_had_data"] = bool(previous_turn_had_data)
     try:
         await get_db()[SESSIONS_COLLECTION].update_one({"_id": oid}, {"$set": set_fields})
         return True

@@ -53,7 +53,9 @@
     "token_rotated": "New token created — the old token is no longer valid",
     "unlink_ok": "Stack–project link removed",
     "ticket_created": "Ticket created",
-    "ticket_create_failed": "Failed to create ticket"
+    "ticket_create_failed": "Failed to create ticket",
+    "llm_provider_deleted": "Provider deleted",
+    "llm_delete_failed": "Failed to delete provider"
   },
   "status": {
     "loading": "Loading...",

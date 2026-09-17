@@ -222,5 +222,20 @@
     "no_bot": "No bot yet",
     "link_label": "Link notifications"
   },
+  "toasts": {
+    "channel_create_failed": "Gagal membuat channel (cek kredensial)",
+    "channel_updated": "Channel updated",
+    "channel_delete_failed": "Failed to delete channel",
+    "channel_link_failed": "Failed to update channel link",
+    "service_save_failed": "Failed to save service",
+    "service_update_failed": "Failed to update service",
+    "service_delete_failed": "Failed to delete service",
+    "knowledge_add_failed": "Failed to add knowledge",
+    "knowledge_remove_failed": "Failed to remove knowledge",
+    "service_link_failed": "Failed to link service",
+    "service_unlink_failed": "Failed to unlink service",
+    "service_unlink_owner_only": "Failed to unlink connection — only service owner can do this",
+    "notification_mark_failed": "Failed to mark notification"
+  },
   "stack_selector_no_stack": "No stacks yet"
 }

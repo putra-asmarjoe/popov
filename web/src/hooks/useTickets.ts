@@ -92,6 +92,7 @@ export function useCreateTicket(projectId: string | null) {
 }
 
 export function useUpdateTicket() {
+  const { t } = useTranslation("project")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, ...input }: {
@@ -108,32 +109,34 @@ export function useUpdateTicket() {
       return data as Ticket
     },
     onSuccess: (ticket) => {
-      toast.success("Tiket diperbarui")
+      toast.success(t("toasts.ticket_updated"))
       qc.invalidateQueries({ queryKey: ["tickets"] })
       qc.invalidateQueries({ queryKey: ["ticket", ticket.id] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal memperbarui tiket")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.ticket_update_failed"))),
   })
 }
 
 export function useChangeStatus() {
+  const { t } = useTranslation("project")
   const optimistic = useOptimisticTicketUpdate()
   return useMutation({
     mutationFn: ({ id, status }: { id: string; status: TicketStatus }) =>
       optimistic(
         id,
-        (t) => ({ ...t, status }),
+        (ticket) => ({ ...ticket, status }),
         async () => {
           const { data } = await api.post(`/tickets/${id}/status`, { status })
           return data as Ticket
         },
       ),
-    onSuccess: (ticket) => toast.success(`Status → ${ticket.status}`),
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal mengubah status")),
+    onSuccess: (ticket) => toast.success(t("toasts.status_changed", { status: ticket.status })),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.status_change_failed"))),
   })
 }
 
 export function useReopenTicket() {
+  const { t } = useTranslation("project")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (id: string) => {
@@ -141,11 +144,11 @@ export function useReopenTicket() {
       return data as Ticket
     },
     onSuccess: (ticket) => {
-      toast.success("Tiket dibuka kembali")
+      toast.success(t("toasts.ticket_reopened"))
       qc.invalidateQueries({ queryKey: ["tickets"] })
       qc.invalidateQueries({ queryKey: ["ticket", ticket.id] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal membuka ulang tiket")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.ticket_reopen_failed"))),
   })
 }
 
@@ -164,22 +167,24 @@ export function useOpenTicket() {
 }
 
 export function useAssignTicket() {
+  const { t } = useTranslation("project")
   const optimistic = useOptimisticTicketUpdate()
   return useMutation({
     mutationFn: ({ id, userIds }: { id: string; userIds: string[] }) =>
       optimistic(
         id,
-        (t) => ({ ...t, assignees: userIds }),
+        (ticket) => ({ ...ticket, assignees: userIds }),
         async () => {
           const { data } = await api.post(`/tickets/${id}/assign`, { userIds })
           return data as Ticket
         },
       ),
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal meng-assign")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.assign_failed"))),
   })
 }
 
 export function useAddProgress() {
+  const { t } = useTranslation("project")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, note }: { id: string; note: string }) => {
@@ -190,6 +195,6 @@ export function useAddProgress() {
       qc.invalidateQueries({ queryKey: ["tickets"] })
       qc.invalidateQueries({ queryKey: ["ticket", ticket.id] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal menambah catatan")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.progress_add_failed"))),
   })
 }

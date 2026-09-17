@@ -45,6 +45,7 @@ from services.chat_stream import (
     is_active,
 )
 from services.request_log import generate_request_id, create_request_log, update_request_log
+from services.llm_usage import set_request_id
 from services.conversation import build_conversation_history
 from services.user_store import decode_token, get_user
 
@@ -420,44 +421,61 @@ async def _run_pipeline(
 
         publish(session_id, {"type": "status", "data": "Pipeline dimulai"})
         deadline = asyncio.get_event_loop().time() + PIPELINE_TIMEOUT_S
-        stream = langgraph_app.astream(initial_state, stream_mode="updates")
-        # Per-Agent Tracing (Fase 1): kumpulkan {agent, order, duration_ms, summary}
-        agent_traces: list = []
-        _trace_start = None
-        _trace_order = 0
-        while True:
-            remaining = deadline - asyncio.get_event_loop().time()
-            if remaining <= 0:
-                raise asyncio.TimeoutError()
+        # LLM_USAGE_TRACE P1: contextvar request_id aktif HANYA selama graph
+        # berjalan. Graph di-await di task ini → nilai terlihat di setiap
+        # node/TrackingLLM. finally reset ke None (non-fatal) agar TIDAK bocor
+        # ke turn lain yang diproses ulang oleh task worker yang sama.
+        try:
+            # set & reset di pasangan try/finally yang SAMA — bila kode sebelum
+            # graph (create_request_log/ticket-load) raises, var tidak pernah
+            # diset sehingga tidak bisa bocor keluar scope graph.
+            set_request_id(request_id)
+            stream = langgraph_app.astream(initial_state, stream_mode="updates")
+            # Per-Agent Tracing (Fase 1): kumpulkan {agent, order, duration_ms, summary}
+            agent_traces: list = []
+            _trace_start = None
+            _trace_order = 0
+            while True:
+                remaining = deadline - asyncio.get_event_loop().time()
+                if remaining <= 0:
+                    raise asyncio.TimeoutError()
+                try:
+                    update = await asyncio.wait_for(stream.__anext__(), timeout=remaining)
+                except StopAsyncIteration:
+                    break
+                for node_name, delta in (update or {}).items():
+                    if not isinstance(delta, dict):
+                        continue
+                    merged.update(delta)
+                    # Catat durasi node SEBELUMNYA (selesai saat node baru mulai)
+                    now = time.perf_counter()
+                    if _trace_start is not None and agent_traces:
+                        agent_traces[-1]["duration_ms"] = round((now - _trace_start) * 1000, 1)
+                    _trace_start = now
+                    if node_name and node_name != "__end__":
+                        publish(session_id, {"type": "agent", "data": str(node_name)})
+                        _trace_order += 1
+                        agent_traces.append({
+                            "agent": node_name,
+                            "order": _trace_order,
+                            "duration_ms": None,
+                            "summary": _summarize_node_output(node_name, delta),
+                        })
+                    # CHATFLOW V2.1 (Tahap 4C): SSE status saat autonomous loop akan berjalan
+                    # (confidence rendah + gap + loop belum melebihi batas).
+                    if node_name == "correlation_agent" and delta.get("gap_nodes"):
+                        _publish_loop_status(session_id, merged, locale)
+            # Tutup durasi node terakhir
+            if agent_traces and _trace_start is not None:
+                agent_traces[-1]["duration_ms"] = round((time.perf_counter() - _trace_start) * 1000, 1)
+        finally:
+            # LLM_USAGE_TRACE P1: lepas request_id setelah graph selesai (termasuk
+            # saat timeout/error) — scope reset ada di finally DALAM ini, sebelum
+            # handler except luar membaca request_id untuk update_request_log.
             try:
-                update = await asyncio.wait_for(stream.__anext__(), timeout=remaining)
-            except StopAsyncIteration:
-                break
-            for node_name, delta in (update or {}).items():
-                if not isinstance(delta, dict):
-                    continue
-                merged.update(delta)
-                # Catat durasi node SEBELUMNYA (selesai saat node baru mulai)
-                now = time.perf_counter()
-                if _trace_start is not None and agent_traces:
-                    agent_traces[-1]["duration_ms"] = round((now - _trace_start) * 1000, 1)
-                _trace_start = now
-                if node_name and node_name != "__end__":
-                    publish(session_id, {"type": "agent", "data": str(node_name)})
-                    _trace_order += 1
-                    agent_traces.append({
-                        "agent": node_name,
-                        "order": _trace_order,
-                        "duration_ms": None,
-                        "summary": _summarize_node_output(node_name, delta),
-                    })
-                # CHATFLOW V2.1 (Tahap 4C): SSE status saat autonomous loop akan berjalan
-                # (confidence rendah + gap + loop belum melebihi batas).
-                if node_name == "correlation_agent" and delta.get("gap_nodes"):
-                    _publish_loop_status(session_id, merged, locale)
-        # Tutup durasi node terakhir
-        if agent_traces and _trace_start is not None:
-            agent_traces[-1]["duration_ms"] = round((time.perf_counter() - _trace_start) * 1000, 1)
+                set_request_id(None)
+            except Exception as e:
+                logger.warning(f"[LLMUsage] reset request_id gagal (non-fatal): {e}")
 
         # Guard: coerce dict → locale-aware string before use (Fix #262 P0)
         answer = _resolve_chat_answer(merged, locale)

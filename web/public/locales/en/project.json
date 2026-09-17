@@ -120,7 +120,17 @@
     "trace_hint": "View agent trace",
     "trace_label": "agents traced",
     "trace_no_data": "No output data recorded for this agent.",
-    "trace_panel_title": "Agent trace"
+    "trace_panel_title": "Agent trace",
+    "llm_usage": "LLM usage",
+    "llm_usage_desc": "Whether this reply was processed by a language model — which model, how many tokens, and how long it took.",
+    "llm_calls": "{{count}} LLM calls",
+    "tokens_in": "in",
+    "tokens_out": "out",
+    "llm_processed": "This reply was LLM-processed.",
+    "no_llm_calls": "No LLM calls recorded for this reply — it was served deterministically (cache or fallback).",
+    "status_ok": "ok",
+    "status_error": "failed",
+    "status_timeout": "timed out"
   },
   "warroom": {
     "warroom": "War Room",
@@ -217,6 +227,16 @@
     "label": "Project view mode",
     "classic": "Classic",
     "warroom": "War Room"
+  },
+  "toasts": {
+    "ticket_updated": "Ticket updated",
+    "ticket_update_failed": "Failed to update ticket",
+    "status_changed": "Status → {{status}}",
+    "status_change_failed": "Failed to change status",
+    "ticket_reopened": "Ticket reopened",
+    "ticket_reopen_failed": "Failed to reopen ticket",
+    "assign_failed": "Failed to assign",
+    "progress_add_failed": "Failed to add progress note"
   },
   "service_picker": {
     "title": "Linked Services",

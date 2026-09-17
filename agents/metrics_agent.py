@@ -44,6 +44,11 @@ _METRICS_L = {
         "cont_group": "({n} containers)",
         "no_labels": "(no labels)",
         "unhandled_type": "Unhandled result type: {t}",
+        # Fix #299: Empty-result diagnosis (bilingual)
+        "diagnosis_target_down": "No data because scrape target **{target}** is DOWN (state={state}). This is consistent with open TargetDown alerts for this service.",
+        "diagnosis_metric_not_exposed": "Scrape target is UP but the metric `{metric}` is not exposed. Possible causes: exporter not installed, app version mismatch, or metric name changed.",
+        "diagnosis_no_targets": "No scrape targets found for service `{svc}`. The Prometheus stack may not be configured to scrape this service.",
+        "diagnosis_crossref_alert": "Note: there is an open **{alert_name}** ticket ({ticket_id}) that may be related.",
     },
     "id": {
         "no_stack": "Pod health tidak tersedia: stack Prometheus belum dikonfigurasi. Tambahkan di Workspace Settings → Stacks.",
@@ -78,6 +83,11 @@ _METRICS_L = {
         "cont_group": "({n} container)",
         "no_labels": "(tanpa label)",
         "unhandled_type": "Tipe hasil belum ditangani: {t}",
+        # Fix #299: Empty-result diagnosis (bilingual)
+        "diagnosis_target_down": "Data tidak tersedia karena target scrape **{target}** DOWN (state={state}). Ini konsisten dengan alert TargetDown yang masih open untuk service ini.",
+        "diagnosis_metric_not_exposed": "Target scrape UP tetapi metric `{metric}` tidak diekspos. Kemungkinan: exporter belum terinstall, versi app berbeda, atau nama metric berubah.",
+        "diagnosis_no_targets": "Tidak ditemukan target scrape untuk service `{svc}`. Stack Prometheus mungkin belum dikonfigurasi untuk meng-scrape service ini.",
+        "diagnosis_crossref_alert": "Catatan: ada tiket **{alert_name}** ({ticket_id}) yang masih open — mungkin terkait.",
     },
 }
 
@@ -466,6 +476,108 @@ async def _handle_pod_health(state: AgentState, agents_visited: list, service_na
         }
 
 
+async def _diagnose_empty_result(
+    svc: str,
+    promql: str,
+    prom_override: str,
+    state: dict,
+    locale: str = "en",
+) -> str:
+    """Fix #299: Diagnose WHY a PromQL range query returned empty data.
+
+    Probes `up{job=~".*{svc}.*"}` (instant query, non-fatal) and classifies into:
+      (a) target_down      — scrape target is DOWN
+      (b) metric_not_exposed — target UP but metric not found
+      (c) no_targets        — no scrape config for this service
+
+    Optionally cross-refs open TargetDown tickets for the project.
+    Returns enriched metrics_summary string; on any probe failure returns None
+    so caller falls back to bare no_range_data.
+    """
+    from services.prometheus_client import query_prometheus
+    t = _METRICS_L.get(locale, _METRICS_L["en"])
+
+    # ── Probe: up{job=~".*{svc}.*"} (non-fatal) ──────────────────────────────
+    up_data = None
+    try:
+        probe_query = 'up{{job=~".*{0}.*"}}'.format(svc)
+        up_data = await query_prometheus(probe_query, base_url_override=prom_override)
+    except Exception as e:
+        logger.debug(f"Diagnosis up{{}} probe failed for '{svc}': {e}")
+        return None
+
+    if up_data is None:
+        # Prometheus unreachable or probe returned None — cannot diagnose
+        return None
+
+    up_results = (up_data or {}).get("result", []) or []
+
+    # ── Classify ──────────────────────────────────────────────────────────────
+    base_msg = t["no_range_data"].format(promql=promql)
+
+    if not up_results:
+        # (c) no_targets: up{} returned empty → no scrape config
+        diagnosis = t["diagnosis_no_targets"].format(svc=svc)
+        return "{0}\n{1}" .format(base_msg, diagnosis)
+
+    # Check if any target is down (value == "0")
+    has_down = False
+    has_up = False
+    down_target = ""
+    for entry in up_results:
+        val_str = (entry.get("value", [None, "1"]) or [None, "1"])[1]
+        labels = entry.get("metric", {}) or {}
+        target_name = labels.get("instance") or labels.get("job") or svc
+        if val_str == "0":
+            has_down = True
+            down_target = down_target or target_name
+        else:
+            has_up = True
+
+    if has_down:
+        # (a) target_down
+        diagnosis = t["diagnosis_target_down"].format(target=down_target, state="0")
+        # ── Cross-ref: open TargetDown tickets (non-fatal) ────────────────
+        crossref = ""
+        try:
+            project_id = state.get("project_id")
+            if project_id:
+                from services.ticket_alert_store import count_alerts_by_name_for_project
+                counts = await count_alerts_by_name_for_project(project_id, days=7)
+                for entry_c in counts:
+                    if (entry_c.get("alert_name") or "").lower() == "targetdown":
+                        # Find a representative ticket ID
+                        # count_alerts_by_name_for_project doesn't return IDs;
+                        # use ticket_context if available for ticket number
+                        tc = state.get("ticket_context") or {}
+                        ticket_id = tc.get("ticketNumber", "")
+                        if ticket_id:
+                            crossref = t["diagnosis_crossref_alert"].format(
+                                alert_name="TargetDown", ticket_id=ticket_id,
+                            )
+                        else:
+                            crossref = t["diagnosis_crossref_alert"].format(
+                                alert_name="TargetDown",
+                                ticket_id=str(entry_c.get("ticket_count", "?")) + " ticket(s)",
+                            )
+                        break
+        except Exception as e:
+            logger.debug(f"Diagnosis cross-ref query failed: {e}")
+
+        parts = [base_msg, diagnosis]
+        if crossref:
+            parts.append(crossref)
+        return "\n".join(parts)
+
+    if has_up:
+        # (b) metric_not_exposed: target UP but range query empty
+        diagnosis = t["diagnosis_metric_not_exposed"].format(metric=promql)
+        return "{0}\n{1}" .format(base_msg, diagnosis)
+
+    # Fallback: shouldn't reach here, but return None to use old behavior
+    return None
+
+
 async def _handle_promql_range(state: AgentState, agents_visited: list, locale: str = "en") -> dict:
     """STACK2 F1-T3 + Fix #259: Handle promql_range mode — execute translated PromQL (bilingual)."""
     from services.observability_store import get_observ_config_for_state
@@ -504,9 +616,16 @@ async def _handle_promql_range(state: AgentState, agents_visited: list, locale: 
                 "metrics_available": True,
                 "agents_visited": agents_visited,
             }
+        # Fix #299: diagnosis instead of bare "no data"
+        svc = state.get("service_name", "")
+        diag_summary = None
+        if svc and prom_override:
+            diag_summary = await _diagnose_empty_result(
+                svc, promql, prom_override, state, locale,
+            )
         return {
             "metrics_data": None,
-            "metrics_summary": t["no_range_data"].format(promql=promql),
+            "metrics_summary": diag_summary or t["no_range_data"].format(promql=promql),
             "metrics_available": False,
             "agents_visited": agents_visited,
         }

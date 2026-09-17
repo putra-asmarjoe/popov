@@ -5,6 +5,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query"
 import { toast } from "sonner"
+import { useTranslation } from "react-i18next"
 import { api, apiErrorMessage } from "@/lib/api"
 import type { Project, Workspace, WorkspaceDetail } from "@/types/workspace"
 import type { WorkspaceRole } from "@/types/workspace"
@@ -46,6 +47,7 @@ export function useProjects(workspaceId: string | null) {
 // ── Mutations ─────────────────────────────────────────────────────────────────
 
 export function useCreateWorkspace() {
+  const { t } = useTranslation("workspace")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (name: string) => {
@@ -56,11 +58,12 @@ export function useCreateWorkspace() {
       toast.success(`Workspace "${ws.name}" dibuat`)
       qc.invalidateQueries({ queryKey: ["workspaces"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal membuat workspace")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.workspace_create_failed"))),
   })
 }
 
 export function useCreateProject(workspaceId: string | null) {
+  const { t } = useTranslation("workspace")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (input: { name: string; key: string }) => {
@@ -71,11 +74,12 @@ export function useCreateProject(workspaceId: string | null) {
       toast.success(`Project ${project.key} dibuat`)
       qc.invalidateQueries({ queryKey: ["projects", workspaceId] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal membuat project")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.project_create_failed"))),
   })
 }
 
 export function useRenameProject(workspaceId: string | null) {
+  const { t } = useTranslation("workspace")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (input: { projectId: string; name: string }) => {
@@ -88,11 +92,12 @@ export function useRenameProject(workspaceId: string | null) {
       toast.success(`Project di-rename menjadi "${project.name}"`)
       qc.invalidateQueries({ queryKey: ["projects", workspaceId] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal rename project")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.project_rename_failed"))),
   })
 }
 
 export function useInviteMember(workspaceId: string | null) {
+  const { t } = useTranslation("workspace")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (input: { email: string; role: WorkspaceRole }) => {
@@ -103,11 +108,12 @@ export function useInviteMember(workspaceId: string | null) {
       toast.success(`${member.name} ditambahkan ke workspace`)
       qc.invalidateQueries({ queryKey: ["workspace", workspaceId] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal mengundang member")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.member_invite_failed"))),
   })
 }
 
 export function useRemoveMember(workspaceId: string | null) {
+  const { t } = useTranslation("workspace")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (userId: string) => {
@@ -117,7 +123,7 @@ export function useRemoveMember(workspaceId: string | null) {
       toast.success("Member dikeluarkan")
       qc.invalidateQueries({ queryKey: ["workspace", workspaceId] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal mengeluarkan member")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.member_remove_failed"))),
   })
 }
 
@@ -135,6 +141,7 @@ export function useDeleteProject(): UseMutationResult<
   unknown,
   { wsId: string; projectId: string }
 > {
+  const { t } = useTranslation("workspace")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ wsId, projectId }) => {
@@ -143,11 +150,10 @@ export function useDeleteProject(): UseMutationResult<
     },
     onSuccess: (data) => {
       toast.success(
-        `Project dihapus — ${data.servicesDetached} service dilepas, ` +
-        `${data.targetsUpdated} target notif/stack diperbarui`,
+        t("toasts.project_deleted", { services: data.servicesDetached, targets: data.targetsUpdated })
       )
       qc.invalidateQueries({ queryKey: ["services"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal menghapus project")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.project_delete_failed"))),
   })
 }

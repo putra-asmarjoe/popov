@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { toast } from "sonner"
+import { useTranslation } from "react-i18next"
 import { api, apiErrorMessage } from "@/lib/api"
 
 // ── Notification Channels (Fix #40 — menggantikan hook global useManagement) ──
@@ -111,6 +112,7 @@ export function useWorkspaceChannels(wsId: string | null) {
 
 export function useChannelMutations(wsId: string | null) {
   const qc = useQueryClient()
+  const { t } = useTranslation("settings")
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["workspaces", wsId, "notification-channels"] })
     qc.invalidateQueries({ queryKey: ["project-notification-channels"] })
@@ -126,14 +128,14 @@ export function useChannelMutations(wsId: string | null) {
       toast.success("Channel dibuat & kredensial tervalidasi")
       invalidate()
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal membuat channel (cek kredensial)")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.channel_create_failed"))),
   })
 
   const update = useMutation({
     mutationFn: async ({ notif_id, ...input }: { notif_id: string } & ChannelUpdateInput) =>
       (await api.patch(`/notification-channels/${notif_id}`, input)).data,
     onSuccess: () => {
-      toast.success("Channel diperbarui")
+      toast.success(t("toasts.channel_updated"))
       invalidate()
     },
     onError,
@@ -158,7 +160,7 @@ export function useChannelMutations(wsId: string | null) {
       invalidate()
     },
     onError: (e) => {
-      if (!(e instanceof ChannelLinkedError)) toast.error(apiErrorMessage(e, "Gagal hapus channel"))
+      if (!(e instanceof ChannelLinkedError)) toast.error(apiErrorMessage(e, t("toasts.channel_delete_failed")))
     },
   })
 
@@ -224,11 +226,12 @@ export function useProjectChannels(projectId: string | null) {
 
 export function useLinkChannelMutations(projectId: string | null) {
   const qc = useQueryClient()
+  const { t } = useTranslation("settings")
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["project-notification-channels"] })
     qc.invalidateQueries({ queryKey: ["workspaces"] })
   }
-  const onError = (e: unknown) => toast.error(apiErrorMessage(e, "Gagal mengubah link channel"))
+  const onError = (e: unknown) => toast.error(apiErrorMessage(e, t("toasts.channel_link_failed")))
 
   const link = useMutation({
     mutationFn: async (notif_id: string) =>

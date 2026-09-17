@@ -5,6 +5,7 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query"
 import { toast } from "sonner"
+import { useTranslation } from "react-i18next"
 import { api, apiErrorMessage } from "@/lib/api"
 import type {
   ProjectServiceRef,
@@ -56,6 +57,7 @@ export interface ServiceInput {
 }
 
 export function useCreateService() {
+  const { t } = useTranslation("settings")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (input: Required<Pick<ServiceInput, "service_id">> & ServiceInput) =>
@@ -64,20 +66,21 @@ export function useCreateService() {
       toast.success(`Service "${item.serviceId}" tersimpan di library`)
       qc.invalidateQueries({ queryKey: ["services"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal menyimpan service")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.service_save_failed"))),
   })
 }
 
 export function useUpdateService() {
+  const { t } = useTranslation("settings")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, ...input }: ServiceInput & { id: string }) =>
       (await api.patch(`/services/library/${id}`, input)).data as ServiceLibraryItem,
     onSuccess: () => {
-      toast.success("Service diperbarui")
+      toast.success(t("toasts.service_updated"))
       qc.invalidateQueries({ queryKey: ["services"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal memperbarui service")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.service_update_failed"))),
   })
 }
 
@@ -92,6 +95,7 @@ export function useDeleteService(): UseMutationResult<
   unknown,
   { id: string; confirm?: boolean }
 > {
+  const { t } = useTranslation("settings")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, confirm = false }) => {
@@ -108,7 +112,7 @@ export function useDeleteService(): UseMutationResult<
       )
       qc.invalidateQueries({ queryKey: ["services"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal menghapus service")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.service_delete_failed"))),
   })
 }
 
@@ -131,6 +135,7 @@ export function useServiceKnowledge(serviceId: string | null) {
 }
 
 export function useLinkServiceKnowledge(serviceId: string | null) {
+  const { t } = useTranslation("settings")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (knowledgeLibraryId: string) => {
@@ -143,11 +148,12 @@ export function useLinkServiceKnowledge(serviceId: string | null) {
       toast.success(`"${link.name}" ter-link ke service`)
       qc.invalidateQueries({ queryKey: ["services"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal menambahkan knowledge")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.knowledge_add_failed"))),
   })
 }
 
 export function useUnlinkServiceKnowledge(serviceId: string | null) {
+  const { t } = useTranslation("settings")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (refId: string) =>
@@ -156,7 +162,7 @@ export function useUnlinkServiceKnowledge(serviceId: string | null) {
       toast.success("Knowledge dilepas dari service")
       qc.invalidateQueries({ queryKey: ["services"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal melepas knowledge")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.knowledge_remove_failed"))),
   })
 }
 
@@ -174,6 +180,7 @@ export function useProjectServices(projectId: string | null) {
 }
 
 export function useLinkServiceToProject(projectId: string | null) {
+  const { t } = useTranslation("settings")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (libraryServiceId: string) => {
@@ -184,11 +191,12 @@ export function useLinkServiceToProject(projectId: string | null) {
       toast.success(`Service "${ref.serviceId}" ditambahkan ke project`)
       qc.invalidateQueries({ queryKey: ["services"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal menambahkan service")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.service_link_failed"))),
   })
 }
 
 export function useUnlinkServiceFromProject(projectId: string | null) {
+  const { t } = useTranslation("settings")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (refId: string) =>
@@ -197,7 +205,7 @@ export function useUnlinkServiceFromProject(projectId: string | null) {
       toast.success("Service dilepas dari project (library tetap utuh)")
       qc.invalidateQueries({ queryKey: ["services"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal melepas service")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.service_unlink_failed"))),
   })
 }
 
@@ -216,6 +224,7 @@ export function useWorkspaceServiceGroups(wsId: string | null) {
 
 /** Link service ke project — projectId bagian dari variabel (untuk settings). */
 export function useLinkServiceFlexible() {
+  const { t } = useTranslation("settings")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ projectId, libraryServiceId }: { projectId: string; libraryServiceId: string }) => {
@@ -226,12 +235,13 @@ export function useLinkServiceFlexible() {
       toast.success(`Service "${ref.serviceId}" ditambahkan ke project`)
       qc.invalidateQueries({ queryKey: ["services"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal menambahkan service")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.service_link_failed"))),
   })
 }
 
 /** Lepas service dari project — projectId bagian dari variabel. */
 export function useUnlinkServiceFlexible() {
+  const { t } = useTranslation("settings")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ projectId, refId }: { projectId: string; refId: string }) =>
@@ -240,12 +250,13 @@ export function useUnlinkServiceFlexible() {
       toast.success("Service dilepas dari project (library tetap utuh)")
       qc.invalidateQueries({ queryKey: ["services"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal melepas service")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.service_unlink_failed"))),
   })
 }
 
 /** FE-8.2: hapus koneksi knowledge → service (owner service). */
 export function useUnlinkKnowledgeFromService() {
+  const { t } = useTranslation("settings")
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async ({ serviceLibraryId, refId }: { serviceLibraryId: string; refId: string }) =>
@@ -254,6 +265,6 @@ export function useUnlinkKnowledgeFromService() {
       toast.success("Koneksi knowledge dilepas dari service (dokumen tetap di library)")
       qc.invalidateQueries({ queryKey: ["services"] })
     },
-    onError: (e) => toast.error(apiErrorMessage(e, "Gagal melepas koneksi — hanya pemilik service")),
+    onError: (e) => toast.error(apiErrorMessage(e, t("toasts.service_unlink_owner_only"))),
   })
 }

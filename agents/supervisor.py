@@ -434,6 +434,57 @@ POD_RESTART_SIGNALS = (
     "oom", "oomkilled", "matinya", "sering mati",
 )
 
+# Fix #296: pod-log keywords — MUST NOT overlap with _LOG_VIEW_KEYWORDS.
+# Shared with investigation_planner (import pattern same as POD_RESTART_SIGNALS).
+# "cek log" and "lihat log" removed (overlap with _LOG_VIEW_KEYWORDS Fix #196).
+_POD_LOG_KW = [
+    "pod log", "container log", "logs for", "log pod",
+    "log dari", "log service",
+]
+
+# Fix #297: Hoisted from supervisor_agent() Gate B to module level so that
+# _is_metrics_data_intent() can use them in CHAT5/P5.2 exemption checks.
+# Gate B logic unchanged — just uses module-level constants now.
+_METRICS_FREEFORM_KW = (
+    "metrik", "metrics", "metric",
+    "error rate", "error count", "request rate", "throughput",
+    "cpu usage", "cpu utilization",
+    "memory usage", "memory pada", "ram pada",
+    "latency pada", "response time pada", "p99 pada",
+    "query prometheus", "promql",
+    # Fix #299: Bahasa Indonesia metric keywords — propagate to Gate B,
+    # _is_metrics_data_intent() (CHAT5/P5.2 exemption), and future consumers.
+    "pemakaian memori", "penggunaan memori", "penggunaan cpu",
+    "tingkat error", "tingkat permintaan", "latensi",
+)
+
+# O2 guard: insiden keywords → triage, not freeform.
+# Logic: metrics gate checked first. Then causal keywords checked OUTSIDE
+# metric phrases. This prevents "kenapa error rate payment naik" → freeform
+# while allowing "error rate payment 6h" → freeform.
+_INCIDENT_CASUAL_KW = (
+    "kenapa", "mengapa", "why", "what is causing", "what caused",
+    "naik", "tinggi", "meningkat", "increasing", "rising",
+    "root cause", "investigat", "selidik",
+    "error", "gagal", "down", "5xx", "500", "insiden", "incident",
+    "crash", "fatal", "critical",
+)
+
+
+def _is_metrics_data_intent(intent: str) -> bool:
+    """
+    Fix #297: True jika intent adalah permintaan DATA metrik (bukan tanya kausal).
+    Mirror Gate B O2: causal keywords dicek DI LUAR frasa metrik (di-strip dulu)
+    agar "kenapa memory usage naik?" → False (tetap investigasi),
+    "check memory usage X last 6h" → True (lolos ke Gate A/B).
+    """
+    if not any(kw in intent for kw in _METRICS_FREEFORM_KW):
+        return False
+    _intent_no_metrics = intent
+    for _mkw in _METRICS_FREEFORM_KW:
+        _intent_no_metrics = _intent_no_metrics.replace(_mkw, "")
+    return not any(kw in _intent_no_metrics for kw in _INCIDENT_CASUAL_KW)
+
 def is_data_request(intent: str) -> bool:
     """Deteksi intent pengambilan data mentah (bukan analisis error).
 
@@ -1421,6 +1472,7 @@ async def supervisor_agent(state: AgentState) -> dict:
         and chat_depth in ("medium", "thinking")
         and not _is_chip_triggered(state)
         and not is_data_request(intent)
+        and not _is_metrics_data_intent(intent)   # ← Fix #297
         and not is_ticket_intent(intent, state)
         and not any(kw in intent for kw in _INVESTIGATION_KW)
     ):
@@ -1605,6 +1657,25 @@ async def supervisor_agent(state: AgentState) -> dict:
             "error": None,
         }, "similar_incidents_chip", "hard_command")
 
+    # ── Pod Logs gate (Fix #296) ─────────────────────────────────────────
+    # MUST be BEFORE _POD_HEALTH_GUARD to avoid "pod log" being swallowed.
+    if matched_service and any(kw in intent for kw in _POD_LOG_KW):
+        _ns_m = K8S_NS_RE.search(intent)
+        k8s_namespace = ((_ns_m.group(1) if _ns_m else None)
+                          or state.get("k8s_namespace") or "default")
+        logger.info(
+            f"[Supervisor] pod_logs gate: '{intent[:60]}' → k8s_agent (svc={matched_service}, ns={k8s_namespace})")
+        return _t({
+            "service_name": matched_service,
+            "k8s_intent": "pod_logs",
+            "k8s_namespace": k8s_namespace,
+            "next_agent": "k8s_agent",
+            "agents_visited": agents_visited + ["supervisor"],
+            "routing_strategy": routing_strategy or "pod_logs",
+            "routing_flag": "pod_logs",
+            "error": None,
+        }, "pod_logs", "hard_command")
+
     # ─── K8s Events gate ──────────────────────────────
     # STACK2 Fase 2: k8s-specific keywords → k8s_agent.
     _K8S_EVENT_KW = [
@@ -1686,6 +1757,7 @@ async def supervisor_agent(state: AgentState) -> dict:
         state.get("ticket_context")
         and chat_depth in ("medium", "thinking")
         and not is_data_request(intent)
+        and not _is_metrics_data_intent(intent)   # ← Fix #297
         and (not is_investigation_kw or is_question_framed)
     ):
         logger.info(f"[Supervisor] conversational question guard: '{intent[:60]}'")
@@ -1729,25 +1801,8 @@ async def supervisor_agent(state: AgentState) -> dict:
     # Gate B: metrics-related keywords + matched_service → translate + set mode=promql_range.
     # O1: translator dipanggil supervisor (spec K9), metrics_agent = pure executor.
     # O2: guard — intent dengan kata kausal/tanya insiden → jangan freeform, biarkan triage.
-    _METRICS_FREEFORM_KW = (
-        "metrik", "metrics", "metric",
-        "error rate", "error count", "request rate", "throughput",
-        "cpu usage", "cpu utilization",
-        "memory usage", "memory pada", "ram pada",
-        "latency pada", "response time pada", "p99 pada",
-        "query prometheus", "promql",
-    )
-    # O2: guard — insiden keywords → triage, not freeform.
-    # Logic: metrics gate checked first. Then causal keywords checked OUTSIDE
-    # metric phrases. This prevents "kenapa error rate payment naik" → freeform
-    # while allowing "error rate payment 6h" → freeform.
-    _INCIDENT_CASUAL_KW = (
-        "kenapa", "mengapa", "why", "what is causing", "what caused",
-        "naik", "tinggi", "meningkat", "increasing", "rising",
-        "root cause", "investigat", "selidik",
-        "error", "gagal", "down", "5xx", "500", "insiden", "incident",
-        "crash", "fatal", "critical",
-    )
+    # Fix #297: _METRICS_FREEFORM_KW + _INCIDENT_CASUAL_KW hoisted to module level;
+    # Gate B logic unchanged — just uses module-level constants now.
     _has_metrics_kw = matched_service and any(kw in intent for kw in _METRICS_FREEFORM_KW)
     # Check causal keywords OUTSIDE metric phrases to avoid false negatives
     _intent_no_metrics = intent
@@ -1781,7 +1836,7 @@ async def supervisor_agent(state: AgentState) -> dict:
         confidence = translation.get("confidence", 0)
         # O5: reject low confidence (no query without PromQL)
         if not promql or confidence < 0.5:
-            logger.info(f"[Supervisor] promql-freeform rejected (conf={confidence:.2f}, promql={bool(promql)})")
+            logger.info(f"[Supervisor] promql-freeform rejected (conf={confidence:.2f}, promql={bool(promql)}) → default_triage")
         else:
             logger.info(f"[Supervisor] promql-freeform gate → metrics_agent: '{intent[:60]}' (conf={confidence:.2f}, window={freeform_window})")
             return _t({

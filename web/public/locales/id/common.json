@@ -53,7 +53,9 @@
     "token_rotated": "Token baru dibuat — token lama tidak berlaku",
     "unlink_ok": "Link stack-project dilepas",
     "ticket_created": "Tiket dibuat",
-    "ticket_create_failed": "Gagal membuat tiket"
+    "ticket_create_failed": "Gagal membuat tiket",
+    "llm_provider_deleted": "Provider dihapus",
+    "llm_delete_failed": "Gagal menghapus provider"
   },
   "status": {
     "loading": "Memuat...",

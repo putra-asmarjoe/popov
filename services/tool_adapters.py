@@ -71,6 +71,47 @@ async def _mongo_logs(params: dict, ctx: AdapterCtx) -> Tuple[bool, str]:
     return True, "\n".join(lines)[:1200]
 
 
+_PROM_NOISY_LABELS = frozenset({
+    "id", "image", "name", "metrics_path", "endpoint", "instance",
+})
+"""Labels dropped from PromQL selectors — `id` is the cAdvisor pod path
+(with a 64-char UID hash), `image` a full docker pull spec with SHA, `name`
+the container UID hash, and `metrics_path`/`endpoint`/`instance` are scrape
+plumbing. None help the end user."""
+
+_BYTE_UNITS = ("B", "KiB", "MiB", "GiB", "TiB")
+
+def _fmt_prom_metric(metric: dict) -> str:
+    """Render a series' label dict as a compact PromQL-style selector,
+    dropping noisy cAdvisor/scrape labels (see _PROM_NOISY_LABELS)."""
+    name = (metric.get("__name__") or metric.get("name") or "metric")
+    labels = [f'{k}="{metric[k]}"' for k in sorted(metric)
+              if k != "__name__" and k not in _PROM_NOISY_LABELS]
+    if labels:
+        return f"{name}{{{', '.join(labels)}}}"
+    return f"{name}"
+
+def _humanize_bytes(value_str: str, metric_name: str) -> str:
+    """Render byte values as human-readable binary units (2 decimals).
+    Applied ONLY to memory/byte metrics; ANY parse failure (or NaN/inf)
+    returns the original string unchanged — never raises."""
+    name = metric_name or ""
+    if "_bytes" not in name and "memory" not in name:
+        return value_str
+    try:
+        size = float(value_str)
+    except (TypeError, ValueError, AttributeError):
+        return value_str
+    if size != size or size in (float("inf"), float("-inf")):
+        return value_str
+    sign = "-" if size < 0 else ""
+    size = abs(size)
+    unit_idx = 0
+    while size >= 1024.0 and unit_idx < len(_BYTE_UNITS) - 1:
+        size /= 1024.0
+        unit_idx += 1
+    return f"{sign}{size:.2f} {_BYTE_UNITS[unit_idx]}"
+
 async def _prom_instant(params: dict, ctx: AdapterCtx) -> Tuple[bool, str]:
     from services.prometheus_client import query_prometheus
 
@@ -86,11 +127,15 @@ async def _prom_instant(params: dict, ctx: AdapterCtx) -> Tuple[bool, str]:
         return False, f"prom_instant failed: {e}"
     if not res or not res.get("result"):
         return True, f"prom_instant: no data for `{promql[:120]}`"
+    series_list = res.get("result") or []
     out = []
-    for series in (res.get("result") or [])[:5]:
+    for series in series_list[:5]:
         metric = series.get("metric", {}) or {}
         val = (series.get("value") or [None, "?"])[1]
-        out.append(f"- {metric} = {val}")
+        mname = (metric.get("__name__") or metric.get("name") or "metric")
+        out.append(f"- {_fmt_prom_metric(metric)} = {_humanize_bytes(val, mname)}")
+    if len(series_list) > 5:
+        out.append(f"- … and {len(series_list) - 5} more series")
     return True, f"prom_instant `{promql[:120]}`:\n" + "\n".join(out)[:1200]
 
 
