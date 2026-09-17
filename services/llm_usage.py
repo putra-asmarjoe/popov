@@ -13,12 +13,35 @@ import inspect
 import logging
 import time
 import asyncio
+from contextvars import ContextVar, Token
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 COLLECTION = "llm_usage"
+
+# ── LLM_USAGE_TRACE P1: correlation channel request_id ↔ llm_usage ───────────
+# request_id hidup hanya di dalam _run_chat_task (api/chat.py), sedangkan
+# TrackingLLM.ainvoke ada jauh di bawah call stack. ContextVar menyebarkan nilai
+# ke seluruh await chain + child task tanpa mengubah signature agent manapun.
+# Default None ⇒ usage di luar chat turn (CLI/background/test) tetap tertulis
+# dengan null (backward compatible, pembaca lama tak terdampak).
+_request_id_ctx: ContextVar[Optional[str]] = ContextVar("llm_request_id", default=None)
+
+
+def set_request_id(rid: Optional[str]) -> Token:
+    """Set request_id chat turn aktif untuk scope context ini.
+
+    Kembalikan Token agar pemanggil bisa reset di `finally` — nilai TIDAK boleh
+    bocor ke turn lain yang diproses ulang oleh task worker yang sama.
+    """
+    return _request_id_ctx.set(rid)
+
+
+def get_request_id() -> Optional[str]:
+    """request_id turn saat ini, atau None bila di luar chat turn."""
+    return _request_id_ctx.get()
 
 
 def _extract_usage(resp: Any) -> Dict[str, Any]:
@@ -107,6 +130,8 @@ async def record_usage(
         "total_tokens": usage.get("total_tokens"),
         "latency_ms": latency_ms,
         "timestamp": datetime.now(timezone.utc),
+        # LLM_USAGE_TRACE P1: kunci join ke chat turn (nullable — lihat set_request_id).
+        "request_id": get_request_id(),
     }
     try:
         from services.mongodb_client import get_db
@@ -131,6 +156,10 @@ async def ensure_llm_usage_indexes() -> None:
         await coll.create_index([("timestamp", -1)])
         await coll.create_index([("agent", 1), ("timestamp", -1)])
         await coll.create_index([("model", 1), ("timestamp", -1)])
+        # LLM_USAGE_TRACE P1: index request_id SPARSE — dokumen history (~1732)
+        # dan record di luar turn memiliki null/absent request_id; sparse
+        # menjaga index tetap kecil & hanya menampung turn yang punya request_id.
+        await coll.create_index([("request_id", 1)], sparse=True)
     except Exception as e:
         logger.warning(f"[LLMUsage] ensure indexes failed: {e}")
 
