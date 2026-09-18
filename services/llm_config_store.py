@@ -342,8 +342,10 @@ async def _saved_provider_ctx(provider: str) -> dict:
 
 
 async def test_llm_connection(provider: str, model: str, base_url: str, api_key: str) -> Dict[str, Any]:
-    """Probe LLM completion minimal ('pong'). Return {ok, latency_ms, error}.
-    Fix #54: api_key/base_url kosong → pakai key/base_url tersimpan utk provider tsb."""
+    """Probe LLM generative latency with a representative chat prompt (bukan
+    'pong' 1-kata — ping harus mencerminkan latensi chat nyata). Return
+    {ok, latency_ms, error}. Fix #54: api_key/base_url kosong → pakai key/
+    base_url tersimpan utk provider tsb."""
     import time
     from langchain_core.messages import SystemMessage, HumanMessage
     from langchain_openai import ChatOpenAI
@@ -358,10 +360,10 @@ async def test_llm_connection(provider: str, model: str, base_url: str, api_key:
             api_key=key,
             base_url=base,
             temperature=0.0,
-            max_tokens=50,
+            max_tokens=500,
         )
         t0 = time.monotonic()
-        resp = await llm.ainvoke([SystemMessage(content="Jawab satu kata: pong"), HumanMessage(content="ping")])
+        resp = await llm.ainvoke([SystemMessage(content="You are a helpful assistant."), HumanMessage(content="Explain in 3 sentences what an incident response system does.")])
         return {"ok": True, "latency_ms": int((time.monotonic() - t0) * 1000), "error": None,
                 "reply": str(resp.content or "")[:60]}
     except Exception as e:

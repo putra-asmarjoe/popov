@@ -66,7 +66,14 @@ from services.conversation import resolve_state_locale
 
 logger = logging.getLogger(__name__)
 
-LANE_TIMEOUT_S = 8.0  # §5.4: same timeout class as other LLM points
+# Depth-scaled LLM timeout. Provider ini butuh 14s+ untuk generasi nyata
+# (max_tokens=3000); lane lain (response/correlation) tidak punya cap 8s dan
+# sehat di 30-80s. Skala mengikuti ekspektasi tiap depth.
+_LANE_TIMEOUT_S = {
+    "low": 20.0,      # quick answer, token budget kecil
+    "medium": 45.0,   # sejajar response_agent rata-rata
+    "thinking": 90.0, # deep, sejajar correlation_agent maks (pipeline 120s)
+}
 
 # ── CHAT3 P4 (D-P4.1): agentic tool lane — §5.2 amended ─────────────────────
 # Turn 1 = plan LLM (≤8s). Tools run non-LLM afterwards; turn 2 reuses the
@@ -714,7 +721,11 @@ async def chat_agent(state: AgentState) -> dict:
         prefetched_block=prefetched_block,
     )
 
-    # ── Single LLM call (§5.4: satu panggilan, ≤8s, tanpa fan-out) ────────────
+    # ── Single LLM call (§5.4: satu panggilan, tanpa fan-out) ────────────────
+    # Depth-scaled lane timeout (lihat _LANE_TIMEOUT_S): nilainya dibaca SEKALI
+    # di sini dan dipakai ulang oleh synthesis (:884) & summary (:1012) call
+    # site — semua masih dalam body fungsi chat_agent() yang sama.
+    _depth = state.get("chat_depth") or "low"
     reply_text = ""
     try:
         llm = get_chat_llm(temperature=0.3)
@@ -725,7 +736,7 @@ async def chat_agent(state: AgentState) -> dict:
                     HumanMessage(content=user_prompt),
                 ]
             ),
-            timeout=LANE_TIMEOUT_S,
+            timeout=_LANE_TIMEOUT_S.get(_depth, 45.0),
         )
         reply_text = (getattr(response, "content", "") or "").strip()
     except Exception as e:
@@ -881,7 +892,7 @@ async def chat_agent(state: AgentState) -> dict:
                             )),
                             HumanMessage(content=_synthesis_prompt),
                         ]),
-                        timeout=LANE_TIMEOUT_S,
+                        timeout=_LANE_TIMEOUT_S.get(_depth, 45.0),
                     )
                     _syn_text = (getattr(_syn_resp, "content", "") or "").strip()
                     if _syn_text:
@@ -1009,7 +1020,7 @@ async def chat_agent(state: AgentState) -> dict:
                         _summary_llm.ainvoke(
                             _summary_history_messages(_history_block)
                         ),
-                        timeout=LANE_TIMEOUT_S,
+                        timeout=_LANE_TIMEOUT_S.get(_depth, 45.0),
                     )
                     _summary = cap_summary(getattr(_summary_resp, "content", "") or "")
                     if _summary:
